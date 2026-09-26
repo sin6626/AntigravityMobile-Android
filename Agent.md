@@ -6,7 +6,7 @@
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
 ## 2. 技术栈架构 (Android 端)
-- **开发语言**：Kotlin 1.9+
+- **开发语言**：Kotlin 2.2.10
 - **UI 框架**：Jetpack Compose + Material 3
 - **异步与流式处理**：Kotlin Coroutines + StateFlow + OkHttp (WebSocket / HTTP)
 - **数据持久化与安全**：`EncryptedSharedPreferences` + Local Cache
@@ -19,12 +19,7 @@ android/app/src/main/java/com/antigravity/mobile/
 ├── data/
 │   ├── model/         # 数据模型 (Conversation, Interaction, CockpitQuota 等)
 │   └── service/       # 服务与网络层 (ApiClient, StreamWebSocketClient, CacheManager 等)
-├── ui/
-│   ├── components/    # 通用组件 (MessageBubble, QuotaStatusBar, SettingsSheet 等)
-│   ├── screen/        # 页面 (PairingScreen, ConversationListScreen, ChatScreen)
-│   ├── theme/         # 样式与主题 (Color, Theme, Type)
-│   ├── util/          # 工具类 (HapticUtils 等)
-│   └── viewmodel/     # ViewModel (ChatViewModel, ConversationListViewModel 等)
+└── ui/demo/            # 当前静态演示：页面状态、顶部栏、输入栏、抽屉、消息内容
 ```
 
 ## 4. 当前 Android 二改工作记录（2026-09-26）
@@ -34,7 +29,9 @@ android/app/src/main/java/com/antigravity/mobile/
 - 已确认：Android 使用 Jetpack Compose，主要入口为配对页、会话列表页、聊天页；现有界面大量采用 iOS 色板及布局。
 - 构建环境：Android Studio 已成功导入项目，本机有 Android SDK、Java 和 adb。
 - 设计基准：用户提供三张 ChatGPT Android 手机截图，分别为空白聊天页、左侧抽屉和已有对话页；详见 `android/design/android-ui-reference.md`。旧版卡片式设计稿已被用户否定，不再作为实现依据。
-- 待完成：确认「聊天 / 工作」功能映射和语音按钮需求，取得需要逐像素还原的图标切图，再进行 Android UI 实现与界面验证。
+- 已实现：Kotlin + Compose 静态演示三状态；抽屉、示例对话、新建聊天可本地切换。图标用 Material Symbols 精简字体；Compose BOM `2026.09.00`。
+- 已验证：Gradle `:app:assembleDebug` 成功，APK 已安装到 `emulator-5554` 并逐屏截图检查。截图留在 `android/design/.verification/`，由 Git 忽略。
+- 待后续确认：`工作`、配对、语音及真实消息的接口和交互范围；静态演示不调用 Go 网关。
 
 ## 5. 开发与规范准则
 1. **严格遵守用户规范**：

@@ -7,7 +7,7 @@ plugins {
 
 android {
     namespace = "com.antigravity.mobile"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.antigravity.mobile"
@@ -55,7 +55,7 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2024.04.01")
+    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     androidTestImplementation(composeBom)
 
@@ -70,8 +70,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3:1.2.1")
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material3:material3")
 
     // Navigation Compose
     implementation("androidx.navigation:navigation-compose:2.7.7")
