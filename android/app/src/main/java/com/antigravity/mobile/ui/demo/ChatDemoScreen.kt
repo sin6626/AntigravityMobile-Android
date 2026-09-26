@@ -48,6 +48,7 @@ import kotlinx.coroutines.launch
 fun ChatDemoScreen(viewModel: ChatViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    var projectsSelected by rememberSaveable { mutableStateOf(false) }
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -73,9 +74,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
     }
     BackHandler(drawerOpen) { drawerOpen = false }
     BackHandler(!drawerOpen && state.selectedConversationId != null) { viewModel.newConversation() }
+    BackHandler(!drawerOpen && state.selectedConversationId == null && projectsSelected) {
+        projectsSelected = false
+    }
 
     val openDrawer = {
         viewModel.refreshConversations()
+        viewModel.refreshProjects()
         drawerOpen = true
     }
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
@@ -83,7 +88,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             if (state.selectedConversationId != null) {
                 ConversationTopBar(
                     onMenu = openDrawer,
-                    onNewChat = viewModel::newConversation,
+                    onNewChat = {
+                        projectsSelected = false
+                        viewModel.newConversation()
+                    },
                     onMore = { showDeleteConfirm = true },
                 )
                 key(state.selectedConversationId) {
@@ -98,26 +106,45 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     )
                 }
             } else {
-                EmptyTopBar(onMenu = openDrawer, onUnsupported = unsupported)
-                Spacer(Modifier.weight(1f))
-                Column(modifier = Modifier.padding(horizontal = 28.dp)) {
-                    val recent = state.conversations.take(2)
-                    if (recent.isEmpty() && state.isLoadingConversations) {
-                        Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)
+                EmptyTopBar(
+                    onMenu = openDrawer,
+                    projectsSelected = projectsSelected,
+                    onChat = { projectsSelected = false },
+                    onProjects = {
+                        projectsSelected = true
+                        viewModel.refreshProjects()
+                    },
+                    onUnsupported = unsupported,
+                )
+                if (projectsSelected) {
+                    ProjectOverview(
+                        projects = state.projects,
+                        conversations = state.conversations,
+                        isLoading = state.isLoadingProjects,
+                        onOpenConversation = viewModel::openConversation,
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    Spacer(Modifier.weight(1f))
+                    Column(modifier = Modifier.padding(horizontal = 28.dp)) {
+                        val recent = state.conversations.filter { it.isPureChat && !it.isSubagent }.take(2)
+                        if (recent.isEmpty() && state.isLoadingConversations) {
+                            Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)
+                        }
+                        recent.forEach { conversation ->
+                            Text(
+                                conversation.displayTitle,
+                                modifier = Modifier.fillMaxWidth()
+                                    .clickable { viewModel.openConversation(conversation.id) }
+                                    .padding(vertical = 12.dp),
+                                color = SecondaryInk,
+                                fontSize = 16.sp,
+                                maxLines = 1,
+                            )
+                        }
                     }
-                    recent.forEach { conversation ->
-                        Text(
-                            conversation.displayTitle,
-                            modifier = Modifier.fillMaxWidth()
-                                .clickable { viewModel.openConversation(conversation.id) }
-                                .padding(vertical = 12.dp),
-                            color = SecondaryInk,
-                            fontSize = 16.sp,
-                            maxLines = 1,
-                        )
-                    }
+                    Spacer(Modifier.height(30.dp))
                 }
-                Spacer(Modifier.height(30.dp))
             }
             if (state.selectedConversationId != null && state.isRunning) {
                 Text("正在回复…", modifier = Modifier.padding(start = 28.dp, bottom = 12.dp),
@@ -130,7 +157,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     onChoose = viewModel::respondToInteraction,
                 )
             }
-            Composer(
+            if (!projectsSelected || state.selectedConversationId != null) Composer(
                 activeConversation = state.selectedConversationId != null,
                 draft = state.draft,
                 attachments = state.attachments,
@@ -159,16 +186,18 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 modifier = Modifier.fillMaxWidth(0.80f).fillMaxHeight()
                     .statusBarsPadding().navigationBarsPadding(),
                 conversations = state.conversations,
+                projects = state.projects,
                 isLoading = state.isLoadingConversations,
+                isLoadingProjects = state.isLoadingProjects,
                 onOpenConversation = { id ->
                     viewModel.openConversation(id)
                     drawerOpen = false
                 },
                 onNewChat = {
                     viewModel.newConversation()
+                    projectsSelected = false
                     drawerOpen = false
                 },
-                onUnsupported = unsupported,
             )
         }
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))

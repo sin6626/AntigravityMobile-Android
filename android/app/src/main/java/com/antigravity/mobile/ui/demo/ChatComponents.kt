@@ -106,7 +106,13 @@ internal fun RoundIconButton(
 }
 
 @Composable
-internal fun EmptyTopBar(onMenu: () -> Unit, onUnsupported: () -> Unit) {
+internal fun EmptyTopBar(
+    onMenu: () -> Unit,
+    projectsSelected: Boolean,
+    onChat: () -> Unit,
+    onProjects: () -> Unit,
+    onUnsupported: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -119,11 +125,14 @@ internal fun EmptyTopBar(onMenu: () -> Unit, onUnsupported: () -> Unit) {
         ) {
             Box(
                 modifier = Modifier.width(88.dp).height(44.dp)
-                    .background(Color.White, RoundedCornerShape(28.dp)),
+                    .background(if (projectsSelected) Color.Transparent else Color.White, RoundedCornerShape(28.dp))
+                    .clickable(onClick = onChat),
                 contentAlignment = Alignment.Center,
             ) { Text("聊天", fontSize = 18.sp, color = Ink) }
-            Box(modifier = Modifier.width(88.dp).height(44.dp), contentAlignment = Alignment.Center) {
-                Text("工作", fontSize = 18.sp, color = Ink)
+            Box(modifier = Modifier.width(88.dp).height(44.dp)
+                .background(if (projectsSelected) Color.White else Color.Transparent, RoundedCornerShape(28.dp))
+                .clickable(onClick = onProjects), contentAlignment = Alignment.Center) {
+                Text("项目", fontSize = 18.sp, color = Ink)
             }
         }
         RoundIconButton("chat_bubble", "语音聊天", onUnsupported, size = 52.dp)

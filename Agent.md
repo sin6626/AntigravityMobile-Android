@@ -33,7 +33,8 @@ android/app/src/main/java/com/antigravity/mobile/
 - 已实现：Kotlin + Compose 三状态 UI，接入 `mgy` 配对、真实会话列表与搜索、新建会话、文字及图片发送、历史图片显示与放大、消息发送与历史分页、WebSocket 实时更新、单选交互确认、会话删除。发送按钮在无内容时置灰禁用；进入长会话直接定位最新消息。接口日志在 `API_TRACE` 中输出结构化 JSON，并隐藏令牌、配对码与图片正文。图标用 Material Symbols 精简字体；Compose BOM `2026.09.00`。
 - 已验证：Gradle `:app:assembleDebug` 成功，APK 已安装到 `emulator-5554`；真实网关配对、会话列表、历史消息、新建测试会话、连续两轮文字发送与 AI 回复、删除测试会话，以及纯图片发送、服务端图片识别与 Android 历史图片展示均已走通。截图留在 `android/design/.verification/`，由 Git 忽略，其中可能包含私人会话内容，不得对外展示。
 - 新会话必须指定模型；Android 默认传入 Go 网关明确支持的 `gemini-3.8-flash-high`。之前省略模型时网关返回 `plan model not specified`；补齐后已实测两轮 AI 正常回复。
-- 本轮范围之外：`工作`、语音、远程控制。Go 的交互接口对多选问题仅提供单个 `optionId`，Android 上提示使用桌面端处理。图片协议已通过阅读仓库内 Go 网关源码确认，Go 代码未改动。
+- 本轮范围之外：语音和新的电脑控制交互。Go 的交互接口对多选问题仅提供单个 `optionId`，Android 上提示使用桌面端处理。图片协议已通过阅读仓库内 Go 网关源码确认，Go 代码未改动。
+- 项目导航：顶部“工作”已改为“项目”，点击进入可展开的项目列表；抽屉也可逐级展开项目与对应对话，删除了“远程控制”入口。“最近”与聊天首页推荐仅显示普通聊天。项目由现有 `/gateway/projects` 获取，归属优先匹配会话 `projectId`，其次工作区 URI；缺少这两项时只对唯一同名项目回退匹配。未修改 Go 网关。
 
 ## 5. 开发与规范准则
 1. **严格遵守用户规范**：

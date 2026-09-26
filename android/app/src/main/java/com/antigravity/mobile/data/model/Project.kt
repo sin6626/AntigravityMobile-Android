@@ -17,7 +17,7 @@ data class ProjectItem(
         get() = rawId?.takeIf { it.isNotBlank() } ?: uri
 
     val isPureChat: Boolean
-        get() = rawId == "outside-of-project" || name == "Chat" || (uri.isEmpty() && path.contains("不关联任何工作区"))
+        get() = rawId == "outside-of-project" || (uri.isEmpty() && path.contains("不关联任何工作区"))
 
     companion object {
         val PURE_CHAT = ProjectItem(

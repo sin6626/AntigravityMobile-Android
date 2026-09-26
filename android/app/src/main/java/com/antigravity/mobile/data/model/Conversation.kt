@@ -79,6 +79,8 @@ data class ConversationItem(
     val status: ConversationStatus = ConversationStatus.UNKNOWN,
     val stepCount: Int = 0,
     val workspaceName: String = "Chat",
+    val workspaceUri: String = "",
+    val projectId: String? = null,
     val lastModifiedTime: String? = null,
     val isSubagent: Boolean = false,
     val isUnread: Boolean = false,
@@ -106,7 +108,8 @@ data class ConversationItem(
         }
 
     val isPureChat: Boolean
-        get() = workspaceName == "Chat" || workspaceName.isEmpty() || draftProject?.isPureChat == true
+        get() = draftProject?.isPureChat == true || projectId == "outside-of-project" ||
+            (workspaceUri.isBlank() && projectId.isNullOrBlank() && (workspaceName == "Chat" || workspaceName.isEmpty()))
 
     val isDraft: Boolean
         get() = id.startsWith("local_draft_") || id.startsWith("draft_") || draftProject != null
@@ -173,6 +176,8 @@ data class ConversationItem(
                 status = status,
                 stepCount = stepCount,
                 workspaceName = workspaceName,
+                workspaceUri = wsUri,
+                projectId = summary.trajectoryMetadata?.projectId,
                 lastModifiedTime = resolvedTime,
                 isSubagent = summary.isSubagent,
                 isUnread = unread
@@ -235,6 +240,8 @@ data class LocalDraftSession(
             status = ConversationStatus.IDLE,
             stepCount = 0,
             workspaceName = if (isPure) "Chat" else project.name,
+            workspaceUri = project.uri,
+            projectId = project.id,
             lastModifiedTime = nowIso,
             isSubagent = false,
             isUnread = false,

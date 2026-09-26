@@ -29,6 +29,7 @@ data class ChatUiState(
     val isPaired: Boolean = false,
     val isPairing: Boolean = false,
     val isLoadingConversations: Boolean = false,
+    val isLoadingProjects: Boolean = false,
     val isLoadingMessages: Boolean = false,
     val isLoadingOlder: Boolean = false,
     val hasMoreMessages: Boolean = false,
@@ -38,6 +39,7 @@ data class ChatUiState(
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
     val conversations: List<ConversationItem> = emptyList(),
+    val projects: List<ProjectItem> = emptyList(),
     val selectedConversationId: String? = null,
     val messages: List<GatewayMessageItem> = emptyList(),
     val draft: String = "",
@@ -62,6 +64,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (prefs.isPaired()) {
             connectionManager.startMonitoring(prefs, viewModelScope)
             refreshConversations()
+            refreshProjects()
         }
         viewModelScope.launch {
             stream.streamUpdates.collect { update ->
@@ -140,6 +143,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _state.value = _state.value.copy(isPaired = true, isPairing = false)
                     connectionManager.startMonitoring(prefs, viewModelScope)
                     refreshConversations()
+                    refreshProjects()
                 },
                 onFailure = {
                     _state.value = _state.value.copy(isPairing = false, error = it.message ?: "配对失败")
@@ -164,6 +168,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _state.value = _state.value.copy(
                         isLoadingConversations = false,
                         error = error.message ?: "获取会话列表失败",
+                    )
+                },
+            )
+        }
+    }
+
+    fun refreshProjects() {
+        if (!_state.value.isPaired || _state.value.isLoadingProjects) return
+        _state.value = _state.value.copy(isLoadingProjects = true)
+        viewModelScope.launch {
+            api.fetchProjects().fold(
+                onSuccess = { projects ->
+                    _state.value = _state.value.copy(
+                        projects = projects.filterNot { it.isPureChat },
+                        isLoadingProjects = false,
+                    )
+                },
+                onFailure = { error ->
+                    _state.value = _state.value.copy(
+                        isLoadingProjects = false,
+                        error = error.message ?: "获取项目失败",
                     )
                 },
             )
