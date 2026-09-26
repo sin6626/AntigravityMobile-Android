@@ -34,6 +34,9 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -101,7 +104,8 @@ internal fun RoundIconButton(
     ) {
         Box(contentAlignment = Alignment.Center) {
             if (icon == "arrow_back") {
-                Text("←", color = Ink, fontSize = iconSize.sp, lineHeight = iconSize.sp)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null,
+                    modifier = Modifier.size(iconSize.dp))
             } else {
                 Symbol(icon, size = iconSize)
             }
