@@ -1,0 +1,42 @@
+# ====================================================================
+# Antigravity Mobile - Git Ignore 配置
+# 仅追踪 Android 端代码，完全忽略其他后端与非 Android 模块
+# ====================================================================
+
+# 1. 忽略根目录除 Android、.gitignore、Agent.md 外的所有文件和文件夹
+/*
+!/.gitignore
+!/Agent.md
+!/android/
+
+# 2. Android 编译中间件与构建产物
+.gradle/
+android/.gradle/
+android/**/build/
+android/**/.cxx/
+android/local.properties
+*.apk
+*.aab
+*.hprof
+android/*.zip
+
+# 3. Android Studio / IntelliJ IDEA 配置
+.idea/
+android/.idea/
+*.iml
+android/**/*.iml
+android/.navigation/
+android/captures/
+
+# 4. Gradle Wrapper 临时属性
+android/gradle/gradle-daemon-jvm.properties
+
+# 5. 系统与编辑器临时文件
+.DS_Store
+Thumbs.db
+ehthumbs.db
+tmp/
+temp/
+*.tmp
+*.swp
+*.bak
