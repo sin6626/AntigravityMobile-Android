@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Antigravity Mobile Android Network Security Configuration (H-1)
-     SEC-AUDIT 2026-09-22 M-1: Allow cleartext HTTP for private LAN IP / loopback.
+     SEC-AUDIT 2026-09-22 M-1: Allow cleartext HTTP for private LAN IP / loopback / Tailscale.
      Note: Android NSC <domain> element does NOT support numeric IP addresses or CIDR notation.
      Therefore base-config permits cleartext so local RFC1918 gateway connections (192.168.x.x, 10.x.x.x)
      can succeed, while external public cloud domains are explicitly forbidden cleartext here

@@ -1,7 +1,6 @@
 package com.antigravity.mobile.ui.demo
 
 import android.util.Base64
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,7 +52,7 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
                     contentScale = ContentScale.Crop,
                     onError = { if (!useFull && fullRequest != null) useFull = true },
                     modifier = Modifier.size(84.dp).clip(RoundedCornerShape(10.dp))
-                        .clickable { expanded = true },
+                        .quietClickable(RoundedCornerShape(10.dp)) { expanded = true },
                 )
                 if (expanded) {
                     Dialog(onDismissRequest = { expanded = false }) {
@@ -63,7 +62,7 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
                             contentDescription = "聊天图片，点击关闭",
                             contentScale = ContentScale.Fit,
                             modifier = Modifier.fillMaxWidth().heightIn(max = 650.dp)
-                                .clickable { expanded = false },
+                                .quietClickable { expanded = false },
                         )
                     }
                 }

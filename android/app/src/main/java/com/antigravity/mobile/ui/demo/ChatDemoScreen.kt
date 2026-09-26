@@ -4,11 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -25,6 +21,9 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
@@ -48,7 +47,9 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatDemoScreen(viewModel: ChatViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var drawerOpen by rememberSaveable { mutableStateOf(false) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    var pairingSettingsOpen by rememberSaveable { mutableStateOf(false) }
+    var pairSuccessAtOpen by rememberSaveable { mutableStateOf(0) }
     var projectsSelected by rememberSaveable { mutableStateOf(false) }
     var openedFromProject by rememberSaveable { mutableStateOf(false) }
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
@@ -63,9 +64,22 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
         scope.launch { snackbar.showSnackbar("当前版本先支持文字聊天") }
     }
 
-    if (!state.isPaired) {
+    LaunchedEffect(state.pairSuccessCount) {
+        if (pairingSettingsOpen && state.pairSuccessCount > pairSuccessAtOpen) {
+            pairingSettingsOpen = false
+        }
+    }
+
+    if (!state.isPaired || pairingSettingsOpen) {
+        BackHandler(pairingSettingsOpen && state.isPaired) { pairingSettingsOpen = false }
         Box(Modifier.fillMaxSize().background(Color.White).statusBarsPadding().navigationBarsPadding()) {
-            PairingScreen(state.isPairing, state.error, viewModel::pair)
+            PairingScreen(
+                isPairing = state.isPairing,
+                error = state.error,
+                currentGatewayUrl = viewModel.gatewayUrl,
+                onBack = if (state.isPaired) ({ pairingSettingsOpen = false }) else null,
+                onPair = viewModel::pair,
+            )
         }
         return
     }
@@ -76,22 +90,62 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             viewModel.clearError()
         }
     }
-    BackHandler(drawerOpen) { drawerOpen = false }
-    val returnFromConversation = {
+    BackHandler(drawerState.isOpen) { scope.launch { drawerState.close() } }
+    val returnFromConversation: () -> Unit = {
         viewModel.newConversation()
         projectsSelected = openedFromProject
         openedFromProject = false
     }
-    BackHandler(!drawerOpen && state.selectedConversationId != null) { returnFromConversation() }
-    BackHandler(!drawerOpen && state.selectedConversationId == null && projectsSelected) {
+    BackHandler(!drawerState.isOpen && state.selectedConversationId != null) { returnFromConversation() }
+    BackHandler(!drawerState.isOpen && state.selectedConversationId == null && projectsSelected) {
         projectsSelected = false
     }
 
-    val openDrawer = {
+    val openDrawer: () -> Unit = {
         viewModel.refreshConversations()
         viewModel.refreshProjects()
-        drawerOpen = true
+        scope.launch { drawerState.open() }
+        Unit
     }
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        gesturesEnabled = !openedFromProject,
+        drawerContent = {
+            DemoDrawer(
+                modifier = Modifier.fillMaxWidth(0.80f).fillMaxHeight()
+                    .statusBarsPadding().navigationBarsPadding(),
+                conversations = state.conversations,
+                projects = state.projects,
+                isLoading = state.isLoadingConversations,
+                isLoadingProjects = state.isLoadingProjects,
+                onOpenConversation = { id ->
+                    openedFromProject = false
+                    projectsSelected = false
+                    viewModel.openConversation(id)
+                    scope.launch { drawerState.close() }
+                },
+                onOpenProjectConversation = { id ->
+                    openedFromProject = true
+                    projectsSelected = true
+                    viewModel.openConversation(id)
+                    scope.launch { drawerState.close() }
+                },
+                onNewChat = {
+                    viewModel.newConversation()
+                    projectsSelected = false
+                    openedFromProject = false
+                    scope.launch { drawerState.close() }
+                },
+                onPairing = {
+                    scope.launch {
+                        drawerState.close()
+                        pairSuccessAtOpen = state.pairSuccessCount
+                        pairingSettingsOpen = true
+                    }
+                },
+            )
+        },
+    ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             if (state.selectedConversationId != null) {
@@ -156,7 +210,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             Text(
                                 conversation.displayTitle,
                                 modifier = Modifier.fillMaxWidth()
-                                    .clickable {
+                                    .quietClickable {
                                         openedFromProject = false
                                         viewModel.openConversation(conversation.id)
                                     }
@@ -197,42 +251,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             Spacer(Modifier.height(23.dp))
         }
 
-        if (drawerOpen) {
-            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f))
-                .clickable { drawerOpen = false })
-        }
-        AnimatedVisibility(
-            visible = drawerOpen,
-            enter = slideInHorizontally(initialOffsetX = { -it }),
-            exit = slideOutHorizontally(targetOffsetX = { -it }),
-        ) {
-            DemoDrawer(
-                modifier = Modifier.fillMaxWidth(0.80f).fillMaxHeight()
-                    .statusBarsPadding().navigationBarsPadding(),
-                conversations = state.conversations,
-                projects = state.projects,
-                isLoading = state.isLoadingConversations,
-                isLoadingProjects = state.isLoadingProjects,
-                onOpenConversation = { id ->
-                    openedFromProject = false
-                    projectsSelected = false
-                    viewModel.openConversation(id)
-                    drawerOpen = false
-                },
-                onOpenProjectConversation = { id ->
-                    openedFromProject = true
-                    projectsSelected = true
-                    viewModel.openConversation(id)
-                    drawerOpen = false
-                },
-                onNewChat = {
-                    viewModel.newConversation()
-                    projectsSelected = false
-                    openedFromProject = false
-                    drawerOpen = false
-                },
-            )
-        }
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
         if (showDeleteConfirm) {
             AlertDialog(
@@ -250,5 +268,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 },
             )
         }
+    }
     }
 }

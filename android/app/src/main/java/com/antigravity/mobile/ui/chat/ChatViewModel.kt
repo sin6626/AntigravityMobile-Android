@@ -13,6 +13,7 @@ import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.service.ApiClient
+import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
 import com.antigravity.mobile.data.service.PreferencesManager
 import com.antigravity.mobile.data.service.StreamWebSocketClient
@@ -24,10 +25,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.UUID
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 data class ChatUiState(
     val isPaired: Boolean = false,
     val isPairing: Boolean = false,
+    val pairSuccessCount: Int = 0,
     val isLoadingConversations: Boolean = false,
     val isLoadingProjects: Boolean = false,
     val isLoadingMessages: Boolean = false,
@@ -59,6 +62,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
     fun mediaImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw)
+    val gatewayUrl: String? get() = prefs.gatewayBaseUrl
 
     init {
         if (prefs.isPaired()) {
@@ -129,18 +133,51 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(error = null)
     }
 
-    fun pair(uri: String) {
+    private fun expirePairing() {
+        if (!_state.value.isPaired) return
+        prefs.deviceToken = null
+        prefs.deviceId = null
+        stream.disconnect()
+        connectionManager.stopMonitoring()
+        _state.value = _state.value.copy(
+            isPaired = false, isLoadingConversations = false, isLoadingProjects = false,
+            selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
+            messages = emptyList(), error = "设备授权已失效，请重新配对",
+        )
+    }
+
+    fun pair(uri: String, customUrl: String = "") {
         if (_state.value.isPairing) return
         val info = try { PairingInfo.parseFromUri(uri) } catch (_: Exception) { null }
         if (info == null) {
             _state.value = _state.value.copy(error = "请粘贴 mgy pair 显示的完整配对链接或扫描二维码")
             return
         }
+        val override = customUrl.trim().trimEnd('/').takeIf { it.isNotBlank() }
+        if (override != null) {
+            val parsed = override.toHttpUrlOrNull()
+            if (parsed == null || parsed.encodedPath != "/" || parsed.query != null ||
+                parsed.fragment != null || parsed.username.isNotEmpty() || parsed.password.isNotEmpty()
+            ) {
+                _state.value = _state.value.copy(error = "自定义地址须为完整的 http(s)://主机:端口，不含路径或账号")
+                return
+            }
+            if (parsed.scheme == "http" && !ConnectionManager.isLanHost(parsed.host) &&
+                !ConnectionManager.isTailscaleHost(parsed.host)
+            ) {
+                _state.value = _state.value.copy(error = "公网地址请使用 HTTPS；局域网和 Tailscale 地址可使用 HTTP")
+                return
+            }
+        }
         _state.value = _state.value.copy(isPairing = true, error = null)
         viewModelScope.launch {
-            api.pair(info).fold(
+            api.pair(info, override).fold(
                 onSuccess = {
-                    _state.value = _state.value.copy(isPaired = true, isPairing = false)
+                    _state.value = _state.value.copy(
+                        isPaired = true, isPairing = false,
+                        pairSuccessCount = _state.value.pairSuccessCount + 1,
+                        conversations = emptyList(), projects = emptyList(), error = null,
+                    )
                     connectionManager.startMonitoring(prefs, viewModelScope)
                     refreshConversations()
                     refreshProjects()
@@ -165,6 +202,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
                 onFailure = { error ->
+                    if (error is GatewayAuthorizationException) {
+                        expirePairing()
+                        return@fold
+                    }
+                    if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         isLoadingConversations = false,
                         error = error.message ?: "获取会话列表失败",
@@ -186,6 +228,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
                 onFailure = { error ->
+                    if (error is GatewayAuthorizationException) {
+                        expirePairing()
+                        return@fold
+                    }
+                    if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         isLoadingProjects = false,
                         error = error.message ?: "获取项目失败",

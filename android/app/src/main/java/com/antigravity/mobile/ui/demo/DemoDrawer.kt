@@ -1,7 +1,6 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +43,7 @@ internal fun DemoDrawer(
     onOpenConversation: (String) -> Unit,
     onOpenProjectConversation: (String) -> Unit,
     onNewChat: () -> Unit,
+    onPairing: () -> Unit,
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
@@ -134,15 +134,17 @@ internal fun DemoDrawer(
         ) {
             Row(
                 modifier = Modifier.background(AccentBlue, RoundedCornerShape(28.dp))
-                    .clickable(onClick = onNewChat).padding(horizontal = 18.dp, vertical = 11.dp),
+                    .quietClickable(RoundedCornerShape(28.dp), onClick = onPairing)
+                    .padding(horizontal = 18.dp, vertical = 11.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Symbol("edit_square", size = 24, color = Color.White)
+                Symbol("computer", size = 24, color = Color.White)
                 Spacer(Modifier.width(10.dp))
-                Text("聊天", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                Text("配对", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
             }
             Box(
-                modifier = Modifier.size(42.dp).background(Color(0xFFE8E8E8), CircleShape),
+                modifier = Modifier.size(42.dp).background(Color(0xFFE8E8E8), CircleShape)
+                    .quietClickable(CircleShape, onClick = onPairing),
                 contentAlignment = Alignment.Center,
             ) { Symbol("person", size = 26, color = SecondaryInk) }
         }
@@ -152,7 +154,7 @@ internal fun DemoDrawer(
 @Composable
 private fun DrawerMenuItem(icon: String, title: String, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(58.dp).clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().height(58.dp).quietClickable(onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Symbol(icon, size = 28)
@@ -170,7 +172,7 @@ private fun DrawerSection(title: String) {
 @Composable
 private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(51.dp).clickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().height(51.dp).quietClickable(onClick = onClick)
             .padding(start = 28.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -186,7 +188,7 @@ private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit)
 private fun DrawerConversation(title: String, indent: androidx.compose.ui.unit.Dp = 0.dp, onClick: () -> Unit) {
     Text(
         title,
-        modifier = Modifier.fillMaxWidth().height(52.dp).clickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().height(52.dp).quietClickable(onClick = onClick)
             .padding(start = indent, top = 12.dp),
         color = Ink,
         fontSize = 17.sp,

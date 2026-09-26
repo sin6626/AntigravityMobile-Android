@@ -4,7 +4,6 @@ import android.net.Uri
 import coil.compose.AsyncImage
 import com.antigravity.mobile.ui.chat.PendingImage
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -134,12 +133,12 @@ internal fun EmptyTopBar(
             Box(
                 modifier = Modifier.width(88.dp).height(44.dp)
                     .background(if (projectsSelected) Color.Transparent else Color.White, RoundedCornerShape(28.dp))
-                    .clickable(onClick = onChat),
+                    .quietClickable(RoundedCornerShape(28.dp), onClick = onChat),
                 contentAlignment = Alignment.Center,
             ) { Text("聊天", fontSize = 18.sp, color = Ink) }
             Box(modifier = Modifier.width(88.dp).height(44.dp)
                 .background(if (projectsSelected) Color.White else Color.Transparent, RoundedCornerShape(28.dp))
-                .clickable(onClick = onProjects), contentAlignment = Alignment.Center) {
+                .quietClickable(RoundedCornerShape(28.dp), onClick = onProjects), contentAlignment = Alignment.Center) {
                 Text("项目", fontSize = 18.sp, color = Ink)
             }
         }
@@ -206,11 +205,11 @@ internal fun Composer(
                 modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Symbol("add", modifier = Modifier.clickable(onClick = onAddImage), size = 32)
+                Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
                 Spacer(Modifier.width(12.dp))
                 ComposerTextField(draft, onDraftChange, onSend, canSend,
                     "询问 Multigravity", Modifier.weight(1f))
-                Symbol("mic", modifier = Modifier.clickable(onClick = onUnsupported), size = 26)
+                Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 26)
                 Spacer(Modifier.width(15.dp))
                 SendAction(canSend, onSend)
             }
@@ -221,9 +220,9 @@ internal fun Composer(
 @Composable
 private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Symbol("add", modifier = Modifier.clickable(onClick = onAddImage), size = 32)
+        Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
         Spacer(Modifier.weight(1f))
-        Symbol("mic", modifier = Modifier.clickable(onClick = onUnsupported), size = 27)
+        Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 27)
         Spacer(Modifier.width(22.dp))
         SendAction(canSend, onSend)
     }
@@ -242,7 +241,7 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
                 )
                 Text("×", modifier = Modifier.align(Alignment.TopEnd)
                     .background(Color.White, CircleShape)
-                    .clickable { onRemove(image.uri) }.padding(horizontal = 4.dp),
+                    .quietClickable(CircleShape) { onRemove(image.uri) }.padding(horizontal = 4.dp),
                     color = Ink, fontSize = 18.sp)
             }
         }
@@ -255,7 +254,7 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit) {
     Box(
         modifier = Modifier.size(43.dp)
             .background(if (canSend) AccentBlue else Color(0xFFD2D3D5), CircleShape)
-            .clickable(enabled = canSend, onClick = onSend)
+            .quietClickable(CircleShape, enabled = canSend, onClick = onSend)
             .semantics { contentDescription = "发送消息" },
         contentAlignment = Alignment.Center,
     ) { Symbol("arrow_upward", size = 26, color = Color.White) }

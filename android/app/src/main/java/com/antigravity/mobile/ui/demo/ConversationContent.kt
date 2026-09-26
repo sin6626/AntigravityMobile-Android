@@ -1,7 +1,6 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -64,7 +63,7 @@ internal fun ConversationContent(
             item {
                 Text(
                     if (isLoadingOlder) "正在加载…" else "加载更早消息",
-                    modifier = Modifier.fillMaxWidth().clickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
+                    modifier = Modifier.fillMaxWidth().quietClickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
                         .padding(vertical = 10.dp),
                     color = AccentBlue,
                     fontSize = 15.sp,

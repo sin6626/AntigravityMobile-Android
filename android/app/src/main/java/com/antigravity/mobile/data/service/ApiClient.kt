@@ -50,6 +50,8 @@ private suspend fun Call.await(): Response = suspendCancellableCoroutine { conti
     })
 }
 
+class GatewayAuthorizationException : IOException("设备授权已失效，请重新配对")
+
 class ApiClient(
     private val context: Context,
     private val prefs: PreferencesManager,
@@ -97,8 +99,8 @@ class ApiClient(
     /**
      * Attempts pairing with candidates from PairingInfo.
      */
-    suspend fun pair(info: PairingInfo): Result<PairResponse> = withContext(Dispatchers.IO) {
-        val candidates = info.candidateBaseUrls()
+    suspend fun pair(info: PairingInfo, customUrl: String? = null): Result<PairResponse> = withContext(Dispatchers.IO) {
+        val candidates = customUrl?.let { listOf(it.trimEnd('/')) } ?: info.candidateBaseUrls()
         if (candidates.isEmpty()) {
             return@withContext Result.failure(IllegalArgumentException("无可用候选网关地址"))
         }
@@ -181,14 +183,17 @@ class ApiClient(
                         }
                     }
 
-                    prefs.updateEndpoints(
-                        lan = lanUrl,
-                        ipv6 = ipv6Url,
-                        relay = relayUrl,
-                        custom = null, // Strictly null: custom is left for manual user configuration only
-                        active = candidate,
-                        primaryCloud = cloudUrl
-                    )
+                    if (customUrl != null) {
+                        prefs.updateEndpoints(custom = candidate, active = candidate)
+                    } else {
+                        prefs.updateEndpoints(
+                            lan = lanUrl,
+                            ipv6 = ipv6Url,
+                            relay = relayUrl,
+                            active = candidate,
+                            primaryCloud = cloudUrl
+                        )
+                    }
                     prefs.deviceToken = pairResp.deviceToken
                     prefs.deviceId = pairResp.deviceId
                     val plat = pairResp.platform ?: pairResp.os ?: info.platform ?: info.os
@@ -220,6 +225,9 @@ class ApiClient(
                 .build()
 
             client.newCall(req).await().use { response ->
+                if (response.code == 401) {
+                    return@withContext Result.failure(GatewayAuthorizationException())
+                }
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(RuntimeException("获取会话列表失败 (${response.code})"))
                 }
@@ -255,6 +263,9 @@ class ApiClient(
         try {
             val req = buildAuthorizedRequest(url).get().build()
             client.newCall(req).await().use { response ->
+                if (response.code == 401) {
+                    return@withContext Result.failure(GatewayAuthorizationException())
+                }
                 if (!response.isSuccessful) {
                     return@withContext Result.failure(RuntimeException("获取配额失败 (${response.code})"))
                 }
@@ -324,6 +335,9 @@ class ApiClient(
         try {
             val req = buildAuthorizedRequest(url).get().build()
             client.newCall(req).await().use { response ->
+                if (response.code == 401) {
+                    return@withContext Result.failure(GatewayAuthorizationException())
+                }
                 if (!response.isSuccessful) {
                     val errMsg = response.body?.string()?.take(200) ?: ""
                     Log.e("ApiClient", "fetchProjects failed (${response.code}): $errMsg")

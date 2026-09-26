@@ -43,7 +43,7 @@ class LanCleartextSecurityInterceptor : okhttp3.Interceptor {
         val url = request.url
         if (!url.isHttps) {
             val host = url.host
-            if (!ConnectionManager.isLanHost(host)) {
+            if (!ConnectionManager.isLanHost(host) && !ConnectionManager.isTailscaleHost(host)) {
                 throw java.io.IOException("Cleartext HTTP traffic to public host '$host' is rejected by security policy.")
             }
         }
@@ -458,7 +458,11 @@ class ConnectionManager(private val context: Context) {
 
         fun isTailscaleHost(host: String): Boolean {
             val clean = host.trim().trim('[', ']').lowercase()
-            return clean.startsWith("100.") || clean.contains("ts.net")
+            if (clean.endsWith(".ts.net")) return true
+            val parts = clean.split('.')
+            return parts.size == 4 && parts[0] == "100" &&
+                (parts[1].toIntOrNull()?.let { it in 64..127 } == true) &&
+                parts.drop(2).all { part -> part.toIntOrNull()?.let { it in 0..255 } == true }
         }
 
         fun isTrustedEndpoint(urlString: String, info: PairingInfo, usedBase: String): Boolean {

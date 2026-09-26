@@ -1,7 +1,6 @@
 package com.antigravity.mobile.ui.chat
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +26,7 @@ import com.antigravity.mobile.data.model.InteractionOption
 import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.ui.demo.Ink
 import com.antigravity.mobile.ui.demo.SecondaryInk
+import com.antigravity.mobile.ui.demo.quietClickable
 
 @Composable
 fun InteractionPanel(
@@ -61,7 +61,7 @@ fun InteractionPanel(
             Text(
                 option.text,
                 modifier = Modifier.fillMaxWidth()
-                    .clickable(enabled = !isSubmitting) { onChoose(option, writeIn) }
+                    .quietClickable(enabled = !isSubmitting) { onChoose(option, writeIn) }
                     .padding(vertical = 10.dp),
                 color = if (option.isDeny) Color(0xFFB3261E) else Ink,
                 fontSize = 15.sp,
@@ -85,7 +85,7 @@ fun InteractionPanel(
                 },
             )
             if (interaction.type == "ask_question" && writeIn.isNotBlank()) {
-                Text("发送自定义回复", modifier = Modifier.clickable(enabled = !isSubmitting) {
+                Text("发送自定义回复", modifier = Modifier.quietClickable(enabled = !isSubmitting) {
                     onChoose(null, writeIn)
                 }.padding(vertical = 12.dp), color = Color(0xFF0A84FF), fontSize = 15.sp)
             }

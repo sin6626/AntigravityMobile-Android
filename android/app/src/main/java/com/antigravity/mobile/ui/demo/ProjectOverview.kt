@@ -1,6 +1,5 @@
 package com.antigravity.mobile.ui.demo
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -54,7 +53,7 @@ internal fun ProjectOverview(
             val projectChats = conversations.filter { !it.isSubagent && it.belongsTo(project, projects) }
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    modifier = Modifier.fillMaxWidth().clickable {
+                    modifier = Modifier.fillMaxWidth().quietClickable {
                         onToggleProject(projectKey)
                     }.padding(horizontal = 28.dp, vertical = 17.dp),
                     verticalAlignment = Alignment.CenterVertically,
@@ -73,7 +72,7 @@ internal fun ProjectOverview(
                     }
                     projectChats.forEach { chat ->
                         Text(chat.displayTitle, modifier = Modifier.fillMaxWidth()
-                            .clickable { onOpenConversation(chat.id) }
+                            .quietClickable { onOpenConversation(chat.id) }
                             .padding(start = 68.dp, end = 28.dp, top = 12.dp, bottom = 12.dp),
                             color = Ink, fontSize = 16.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis)

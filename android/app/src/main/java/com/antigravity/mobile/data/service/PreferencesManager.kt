@@ -234,6 +234,8 @@ class PreferencesManager(context: Context) {
         primaryCloud: String? = null
     ) {
         val editor = prefs.edit()
+        listOf(KEY_LAN_URL, KEY_IPV6_URL, KEY_RELAY_URL, KEY_CUSTOM_URL,
+            KEY_PRIMARY_CLOUD_URL, KEY_GATEWAY_URL).forEach(editor::remove)
         if (!lan.isNullOrBlank()) {
             editor.putString(KEY_LAN_URL, lan.trimEnd('/'))
         }
@@ -249,8 +251,8 @@ class PreferencesManager(context: Context) {
         }
         if (!custom.isNullOrBlank()) {
             val cleanCustom = custom.trimEnd('/')
-            val cleanLan = lan?.trimEnd('/') ?: prefs.getString(KEY_LAN_URL, null)?.trimEnd('/')
-            val cleanCloud = primaryCloud?.trimEnd('/') ?: prefs.getString(KEY_PRIMARY_CLOUD_URL, null)?.trimEnd('/')
+            val cleanLan = lan?.trimEnd('/')
+            val cleanCloud = primaryCloud?.trimEnd('/')
             if (!cleanCustom.equals(cleanLan, ignoreCase = true) && !cleanCustom.equals(cleanCloud, ignoreCase = true)) {
                 editor.putString(KEY_CUSTOM_URL, cleanCustom)
             }
