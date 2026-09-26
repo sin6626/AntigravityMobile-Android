@@ -64,6 +64,7 @@ class ApiClient(
         .cache(Cache(File(context.cacheDir, "http_cache"), 10L * 1024L * 1024L))
         .addInterceptor(RouteFailoverInterceptor(prefs, connectionManager))
         .addInterceptor(LanCleartextSecurityInterceptor())
+        .addInterceptor(ApiTraceInterceptor())
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -630,22 +631,23 @@ class ApiClient(
      */
     suspend fun submitInteraction(
         cascadeId: String,
-        stepIndex: Int,
-        responseType: String,
-        selectedOptionId: String? = null,
-        confirmed: Boolean? = null,
-        customText: String? = null
+        interaction: PendingInteraction,
+        option: InteractionOption?,
+        writeInResponse: String = "",
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
         val url = "$baseUrl/gateway/cascade/interaction"
 
         val reqObj = InteractionRespondRequest(
             cascadeId = cascadeId,
-            stepIndex = stepIndex,
-            responseType = responseType,
-            selectedOptionId = selectedOptionId,
-            confirmed = confirmed,
-            customText = customText
+            trajectoryId = interaction.trajectoryId,
+            stepIndex = interaction.stepIndex,
+            type = interaction.type,
+            optionId = option?.id ?: if (writeInResponse.isNotBlank()) "__write_in__" else "",
+            scope = option?.scope ?: 1,
+            allow = option?.isDeny != true && (option != null || writeInResponse.isNotBlank()),
+            writeInResponse = writeInResponse,
+            target = interaction.target,
         )
         val bodyStr = json.encodeToString(reqObj)
 

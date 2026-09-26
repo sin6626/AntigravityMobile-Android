@@ -62,7 +62,8 @@ data class PairingInfo(
 
         fun parseFromUri(uriString: String): PairingInfo? {
             val trimmed = uriString.trim()
-            if (!trimmed.startsWith("agy://pair", ignoreCase = true)) return null
+            if (!trimmed.startsWith("agy://pair", ignoreCase = true) &&
+                !trimmed.startsWith("multigravity://pair", ignoreCase = true)) return null
 
             val queryPart = trimmed.substringAfter('?', "")
             if (queryPart.isEmpty()) return null

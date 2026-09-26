@@ -18,7 +18,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -26,13 +31,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.antigravity.mobile.data.model.ConversationItem
 
 @Composable
 internal fun DemoDrawer(
     modifier: Modifier,
-    onOpenConversation: () -> Unit,
+    conversations: List<ConversationItem>,
+    isLoading: Boolean,
+    onOpenConversation: (String) -> Unit,
     onNewChat: () -> Unit,
+    onUnsupported: () -> Unit,
 ) {
+    var searchOpen by remember { mutableStateOf(false) }
+    var searchText by remember { mutableStateOf("") }
     Column(modifier = modifier.background(Color.White).padding(start = 28.dp, end = 22.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(top = 33.dp, bottom = 22.dp),
@@ -40,19 +51,39 @@ internal fun DemoDrawer(
         ) {
             Text("Multigravity", modifier = Modifier.weight(1f), color = Ink, fontSize = 27.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            RoundIconButton("search", "搜索", {}, size = 50.dp)
+            RoundIconButton("search", "搜索", { searchOpen = !searchOpen }, size = 50.dp)
+        }
+        if (searchOpen) {
+            BasicTextField(
+                value = searchText,
+                onValueChange = { searchText = it },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                    .background(Color(0xFFF3F3F3), RoundedCornerShape(20.dp))
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                singleLine = true,
+                decorationBox = { inner ->
+                    Box {
+                        if (searchText.isBlank()) Text("搜索会话", color = SecondaryInk, fontSize = 16.sp)
+                        inner()
+                    }
+                },
+            )
         }
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             DrawerMenuItem("chat_bubble", "聊天", onNewChat)
-            DrawerMenuItem("folder", "项目", {})
-            DrawerMenuItem("computer", "远程控制", {})
+            DrawerMenuItem("folder", "项目", onUnsupported)
+            DrawerMenuItem("computer", "远程控制", onUnsupported)
             Spacer(Modifier.height(27.dp))
-            DrawerSection("置顶")
-            DrawerConversation("Android 界面设计", onOpenConversation)
-            DrawerConversation("网关连接说明", onOpenConversation)
-            Spacer(Modifier.height(29.dp))
             DrawerSection("最近")
-            DrawerConversation("示例对话", onOpenConversation)
+            val filtered = conversations.filter { it.displayTitle.contains(searchText, ignoreCase = true) }
+            if (isLoading && filtered.isEmpty()) {
+                Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)
+            } else if (filtered.isEmpty()) {
+                Text("暂无会话", color = SecondaryInk, fontSize = 16.sp)
+            }
+            filtered.forEach { item ->
+                DrawerConversation(item.displayTitle) { onOpenConversation(item.id) }
+            }
         }
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 25.dp, top = 8.dp),

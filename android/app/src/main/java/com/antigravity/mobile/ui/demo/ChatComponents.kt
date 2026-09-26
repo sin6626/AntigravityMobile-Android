@@ -16,6 +16,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.foundation.text.KeyboardOptions
 import com.antigravity.mobile.R
 
 internal val Ink = Color(0xFF111111)
@@ -51,6 +55,7 @@ private val symbolCodepoints = mapOf(
     "person" to "\uE7FD",
     "search" to "\uE8B6",
     "thumb_up" to "\uE817",
+    "arrow_upward" to "\uE5D8",
 )
 
 @Composable
@@ -97,7 +102,7 @@ internal fun RoundIconButton(
 }
 
 @Composable
-internal fun EmptyTopBar(onMenu: () -> Unit) {
+internal fun EmptyTopBar(onMenu: () -> Unit, onUnsupported: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -117,12 +122,12 @@ internal fun EmptyTopBar(onMenu: () -> Unit) {
                 Text("工作", fontSize = 18.sp, color = Ink)
             }
         }
-        RoundIconButton("chat_bubble", "快捷入口", {}, size = 52.dp)
+        RoundIconButton("chat_bubble", "语音聊天", onUnsupported, size = 52.dp)
     }
 }
 
 @Composable
-internal fun ConversationTopBar(onMenu: () -> Unit, onNewChat: () -> Unit) {
+internal fun ConversationTopBar(onMenu: () -> Unit, onNewChat: () -> Unit, onMore: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -134,13 +139,20 @@ internal fun ConversationTopBar(onMenu: () -> Unit, onNewChat: () -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RoundIconButton("edit_square", "新建聊天", onNewChat)
-            RoundIconButton("more_vert", "更多选项", {})
+            RoundIconButton("more_vert", "更多选项", onMore)
         }
     }
 }
 
 @Composable
-internal fun Composer(activeConversation: Boolean) {
+internal fun Composer(
+    activeConversation: Boolean,
+    draft: String,
+    onDraftChange: (String) -> Unit,
+    onSend: () -> Unit,
+    isSending: Boolean,
+    onUnsupported: () -> Unit,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = if (activeConversation) 14.dp else 34.dp),
         shape = RoundedCornerShape(if (activeConversation) 30.dp else 36.dp),
@@ -149,42 +161,68 @@ internal fun Composer(activeConversation: Boolean) {
     ) {
         if (activeConversation) {
             Column(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 15.dp, bottom = 8.dp)) {
-                Text("回复 Multigravity", color = Color(0xFF929292), fontSize = 17.sp)
+                ComposerTextField(draft, onDraftChange, onSend, "回复 Multigravity", Modifier.fillMaxWidth())
                 Spacer(Modifier.height(18.dp))
-                ComposerActions()
+                ComposerActions(draft.isNotBlank() && !isSending, onSend, onUnsupported)
             }
         } else {
             Row(
                 modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Symbol("add", size = 32)
+                Symbol("add", modifier = Modifier.clickable(onClick = onUnsupported), size = 32)
                 Spacer(Modifier.width(12.dp))
-                Text("询问 Multigravity", modifier = Modifier.weight(1f), maxLines = 1,
-                    overflow = TextOverflow.Ellipsis, color = Color(0xFF929292), fontSize = 17.sp)
-                Symbol("mic", size = 26)
+                ComposerTextField(draft, onDraftChange, onSend, "询问 Multigravity", Modifier.weight(1f))
+                Symbol("mic", modifier = Modifier.clickable(onClick = onUnsupported), size = 26)
                 Spacer(Modifier.width(15.dp))
-                BlueAction()
+                BlueAction(draft.isNotBlank() && !isSending, onSend, onUnsupported)
             }
         }
     }
 }
 
 @Composable
-private fun ComposerActions() {
+private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onUnsupported: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Symbol("add", size = 32)
+        Symbol("add", modifier = Modifier.clickable(onClick = onUnsupported), size = 32)
         Spacer(Modifier.weight(1f))
-        Symbol("mic", size = 27)
+        Symbol("mic", modifier = Modifier.clickable(onClick = onUnsupported), size = 27)
         Spacer(Modifier.width(22.dp))
-        BlueAction()
+        BlueAction(canSend, onSend, onUnsupported)
     }
 }
 
 @Composable
-private fun BlueAction() {
+private fun BlueAction(canSend: Boolean, onSend: () -> Unit, onUnsupported: () -> Unit) {
     Box(
-        modifier = Modifier.size(43.dp).background(AccentBlue, CircleShape),
+        modifier = Modifier.size(43.dp).background(AccentBlue, CircleShape)
+            .clickable(onClick = if (canSend) onSend else onUnsupported),
         contentAlignment = Alignment.Center,
-    ) { Symbol("call", size = 26, color = Color.White) }
+    ) { Symbol(if (canSend) "arrow_upward" else "call", size = 26, color = Color.White) }
+}
+
+@Composable
+private fun ComposerTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSend: () -> Unit,
+    placeholder: String,
+    modifier: Modifier,
+) {
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        textStyle = TextStyle(color = Ink, fontSize = 17.sp, lineHeight = 23.sp),
+        maxLines = 4,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { if (value.isNotBlank()) onSend() }),
+        decorationBox = { inner ->
+            Box {
+                if (value.isEmpty()) Text(placeholder, color = Color(0xFF929292), fontSize = 17.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                inner()
+            }
+        },
+    )
 }

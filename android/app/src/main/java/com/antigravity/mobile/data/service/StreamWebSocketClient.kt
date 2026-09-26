@@ -27,6 +27,7 @@ class StreamWebSocketClient(
         .pingInterval(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS) // infinite for websockets
         .addInterceptor(LanCleartextSecurityInterceptor())
+        .addInterceptor(ApiTraceInterceptor())
         .build()
 
     private var webSocket: WebSocket? = null

@@ -1,95 +1,145 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.antigravity.mobile.R
+import com.antigravity.mobile.data.model.GatewayMessageItem
 
 @Composable
-internal fun ConversationContent(modifier: Modifier = Modifier) {
+internal fun ConversationContent(
+    messages: List<GatewayMessageItem>,
+    isLoading: Boolean,
+    hasMore: Boolean,
+    isLoadingOlder: Boolean,
+    onLoadOlder: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val listState = rememberLazyListState()
+    LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.effectiveText?.length) {
+        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex + if (hasMore) 1 else 0)
+    }
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 18.dp, end = 18.dp, top = 18.dp, bottom = 24.dp,
-        ),
-        verticalArrangement = Arrangement.spacedBy(28.dp),
+        state = listState,
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(25.dp),
     ) {
-        item {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Column(horizontalAlignment = Alignment.End) {
-                    Box(
-                        modifier = Modifier.width(270.dp).height(194.dp)
-                            .clip(RoundedCornerShape(25.dp))
-                            .background(Color(0xFF23272C)),
-                    ) {
-                        Image(
-                            painter = painterResource(R.drawable.demo_attachment),
-                            contentDescription = "示例插件设置截图",
-                            modifier = Modifier.matchParentSize(),
-                            contentScale = ContentScale.Crop,
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "下载完成后怎么使用？",
-                        modifier = Modifier.background(Color(0xFFE5F2FF), RoundedCornerShape(23.dp))
-                            .padding(horizontal = 17.dp, vertical = 13.dp),
-                        color = Color(0xFF163E63),
-                        fontSize = 17.sp,
-                    )
-                }
+        if (hasMore) {
+            item {
+                Text(
+                    if (isLoadingOlder) "正在加载…" else "加载更早消息",
+                    modifier = Modifier.fillMaxWidth().clickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
+                        .padding(vertical = 10.dp),
+                    color = AccentBlue,
+                    fontSize = 15.sp,
+                )
             }
         }
-        item {
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 1.dp)) {
-                Text(
-                    "安装完成后，通常需要重启 Android Studio 才会生效。",
-                    color = Ink,
-                    fontSize = 18.sp,
-                    lineHeight = 29.sp,
-                )
-                Spacer(Modifier.height(22.dp))
-                Text("你可以按这个顺序操作：", color = Ink, fontSize = 18.sp, lineHeight = 29.sp)
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    "1. 安装完成后，检查右下角是否出现 Restart IDE。\n" +
-                        "2. 点击重启。\n" +
-                        "3. 如果界面仍是英文，再打开设置确认语言。",
-                    color = Ink,
-                    fontSize = 18.sp,
-                    lineHeight = 31.sp,
-                )
-                Spacer(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Symbol("content_copy", size = 20, color = Color(0xFFAAAAAA))
-                    Spacer(Modifier.width(19.dp))
-                    Symbol("thumb_up", size = 20, color = Color(0xFFAAAAAA))
-                    Spacer(Modifier.width(19.dp))
-                    Symbol("more_horiz", size = 20, color = Color(0xFFAAAAAA))
-                }
-            }
+        if (isLoading && messages.isEmpty()) {
+            item { CircularProgressIndicator(color = AccentBlue) }
+        }
+        itemsIndexed(messages, key = { index, message -> message.id.ifBlank { "${message.type}-$index" } }) { _, message ->
+            MessageRow(message)
         }
     }
+}
+
+@Composable
+private fun MessageRow(message: GatewayMessageItem) {
+    val text = message.effectiveText.trim()
+    if (message.isUser) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Text(
+                text = text.ifBlank { if (!message.imageUrls.isNullOrEmpty()) "[图片]" else "" },
+                modifier = Modifier.background(Color(0xFFE5F2FF), RoundedCornerShape(23.dp))
+                    .padding(horizontal = 17.dp, vertical = 13.dp),
+                color = Color(0xFF163E63),
+                fontSize = 17.sp,
+                lineHeight = 26.sp,
+            )
+        }
+    } else if (message.isTools) {
+        Text(
+            text = message.toolNames?.joinToString(" · ") ?: "工具执行中",
+            color = SecondaryInk,
+            fontSize = 14.sp,
+        )
+    } else if (message.isError) {
+        Text(text.ifBlank { "请求失败" }, color = Color(0xFFB3261E), fontSize = 16.sp)
+    } else if (text.isNotBlank()) {
+        MarkdownBody(text)
+    }
+}
+
+@Composable
+private fun MarkdownBody(source: String) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        source.split(Regex("\\n\\s*\\n")).forEachIndexed { index, rawBlock ->
+            if (index > 0) Spacer(Modifier.height(13.dp))
+            val block = rawBlock.trim()
+            val headingLevel = block.takeWhile { it == '#' }.length
+            val isHeading = headingLevel in 1..4 && block.getOrNull(headingLevel) == ' '
+            val isCode = block.startsWith("```")
+            val visible = when {
+                isHeading -> block.drop(headingLevel).trimStart()
+                isCode -> block.removePrefix("```").substringAfter('\n', "").removeSuffix("```").trimEnd()
+                else -> block.replace(Regex("(?m)^\\s*[-*]\\s+"), "• ")
+            }
+            Text(
+                text = styledText(visible),
+                modifier = Modifier.fillMaxWidth().then(
+                    if (isCode) Modifier.background(Color(0xFFF3F3F3), RoundedCornerShape(12.dp))
+                        .padding(12.dp) else Modifier
+                ),
+                color = Ink,
+                fontSize = if (isHeading) (24 - headingLevel).sp else if (isCode) 15.sp else 18.sp,
+                lineHeight = if (isHeading) 30.sp else 29.sp,
+                fontWeight = if (isHeading) FontWeight.SemiBold else FontWeight.Normal,
+                fontFamily = if (isCode) FontFamily.Monospace else FontFamily.Default,
+            )
+        }
+    }
+}
+
+private fun styledText(source: String) = buildAnnotatedString {
+    val marker = Regex("\\*\\*([^*]+)\\*\\*|`([^`]+)`")
+    var cursor = 0
+    marker.findAll(source).forEach { match ->
+        append(source.substring(cursor, match.range.first))
+        val bold = match.groups[1]?.value
+        val code = match.groups[2]?.value
+        if (bold != null) {
+            withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(bold) }
+        } else if (code != null) {
+            withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFFF2F2F2))) {
+                append(code)
+            }
+        }
+        cursor = match.range.last + 1
+    }
+    append(source.substring(cursor))
 }

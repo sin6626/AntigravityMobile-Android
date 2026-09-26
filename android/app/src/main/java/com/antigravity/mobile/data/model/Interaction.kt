@@ -1,32 +1,43 @@
 package com.antigravity.mobile.data.model
 
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+/** 与 Go 网关的 PendingInteraction / InteractionSubmitRequest 字段保持一致。 */
 @Serializable
 data class InteractionOption(
-    val id: String,
-    val text: String,
-    @SerialName("is_default") val isDefault: Boolean = false
+    val id: String = "",
+    val text: String = "",
+    val scope: Int = 0,
+    val isDeny: Boolean = false,
 )
 
 @Serializable
 data class PendingInteraction(
-    val type: String, // "command_execution_approval", "confirm_action", "multiple_choice", etc.
-    @SerialName("step_index") val stepIndex: Int,
-    @SerialName("default_option_id") val defaultOptionId: String? = null,
-    val prompt: String? = null,
-    val command: String? = null,
-    val reason: String? = null,
-    val options: List<InteractionOption>? = null
+    val type: String = "",
+    val trajectoryId: String = "",
+    val stepIndex: Int = 0,
+    val title: String = "",
+    val target: String = "",
+    val action: String = "",
+    val description: String = "",
+    val options: List<InteractionOption> = emptyList(),
+    val isMultiSelect: Boolean = false,
+    val defaultOptionId: String = "",
+    val hasWriteIn: Boolean = false,
+    val writeInLabel: String = "",
+    val writeInPlaceholder: String = "",
 )
 
 @Serializable
 data class InteractionRespondRequest(
-    @SerialName("cascade_id") val cascadeId: String,
-    @SerialName("step_index") val stepIndex: Int,
-    @SerialName("response_type") val responseType: String,
-    @SerialName("selected_option_id") val selectedOptionId: String? = null,
-    @SerialName("confirmed") val confirmed: Boolean? = null,
-    @SerialName("custom_text") val customText: String? = null
+    val cascadeId: String,
+    val trajectoryId: String,
+    val stepIndex: Int,
+    val type: String,
+    val optionId: String,
+    val scope: Int,
+    val allow: Boolean,
+    val writeInResponse: String,
+    val skipped: Boolean = false,
+    val target: String = "",
 )
