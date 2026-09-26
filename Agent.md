@@ -29,11 +29,12 @@ android/app/src/main/java/com/antigravity/mobile/
 
 ## 4. 当前 Android 二改工作记录（2026-09-26）
 
-- 工作分支：`codex/android-ui-redesign`，从初始提交 `78b6a16` 创建。
+- 工作分支：`main`。用户明确要求取消 `codex/` 前缀分支；当前项目从提交 `348652c` 起只追踪 Android 端文件。
 - 范围：只改 `android/`；保留 Go 网关、iOS、Web 的现有行为。
 - 已确认：Android 使用 Jetpack Compose，主要入口为配对页、会话列表页、聊天页；现有界面大量采用 iOS 色板及布局。
-- 构建环境：本机有 Android SDK、Java 和 adb；仓库未包含 Gradle Wrapper 启动脚本及 jar，当前没有可用 AVD。
-- 待完成：确定目标视觉方向后统一设计系统，改造主页面与弹层，补齐构建与界面验证。
+- 构建环境：Android Studio 已成功导入项目，本机有 Android SDK、Java 和 adb。
+- 设计基准：用户提供三张 ChatGPT Android 手机截图，分别为空白聊天页、左侧抽屉和已有对话页；详见 `android/design/android-ui-reference.md`。旧版卡片式设计稿已被用户否定，不再作为实现依据。
+- 待完成：确认「聊天 / 工作」功能映射和语音按钮需求，取得需要逐像素还原的图标切图，再进行 Android UI 实现与界面验证。
 
 ## 5. 开发与规范准则
 1. **严格遵守用户规范**：
