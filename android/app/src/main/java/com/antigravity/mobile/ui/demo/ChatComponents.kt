@@ -100,7 +100,11 @@ internal fun RoundIconButton(
         shadowElevation = 2.dp,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Symbol(icon, size = iconSize)
+            if (icon == "arrow_back") {
+                Text("←", color = Ink, fontSize = iconSize.sp, lineHeight = iconSize.sp)
+            } else {
+                Symbol(icon, size = iconSize)
+            }
         }
     }
 }
@@ -140,13 +144,22 @@ internal fun EmptyTopBar(
 }
 
 @Composable
-internal fun ConversationTopBar(onMenu: () -> Unit, onNewChat: () -> Unit, onMore: () -> Unit) {
+internal fun ConversationTopBar(
+    returnToProjects: Boolean,
+    onLeading: () -> Unit,
+    onNewChat: () -> Unit,
+    onMore: () -> Unit,
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        RoundIconButton("menu", "打开菜单", onMenu)
+        RoundIconButton(
+            if (returnToProjects) "arrow_back" else "menu",
+            if (returnToProjects) "返回项目列表" else "打开菜单",
+            onLeading,
+        )
         Row(
             modifier = Modifier.background(Color.White, RoundedCornerShape(32.dp)),
             verticalAlignment = Alignment.CenterVertically,

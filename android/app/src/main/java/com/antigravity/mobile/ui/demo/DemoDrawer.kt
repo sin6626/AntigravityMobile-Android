@@ -42,6 +42,7 @@ internal fun DemoDrawer(
     isLoading: Boolean,
     isLoadingProjects: Boolean,
     onOpenConversation: (String) -> Unit,
+    onOpenProjectConversation: (String) -> Unit,
     onNewChat: () -> Unit,
 ) {
     var searchOpen by remember { mutableStateOf(false) }
@@ -106,7 +107,9 @@ internal fun DemoDrawer(
                                 color = SecondaryInk, fontSize = 14.sp)
                         }
                         visibleChats.forEach { item ->
-                            DrawerConversation(item.displayTitle, indent = 45.dp) { onOpenConversation(item.id) }
+                            DrawerConversation(item.displayTitle, indent = 45.dp) {
+                                onOpenProjectConversation(item.id)
+                            }
                         }
                     }
                 }

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.AlertDialog
@@ -49,6 +50,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var drawerOpen by rememberSaveable { mutableStateOf(false) }
     var projectsSelected by rememberSaveable { mutableStateOf(false) }
+    var openedFromProject by rememberSaveable { mutableStateOf(false) }
+    var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    val projectListState = rememberLazyListState()
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -73,7 +77,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
         }
     }
     BackHandler(drawerOpen) { drawerOpen = false }
-    BackHandler(!drawerOpen && state.selectedConversationId != null) { viewModel.newConversation() }
+    val returnFromConversation = {
+        viewModel.newConversation()
+        projectsSelected = openedFromProject
+        openedFromProject = false
+    }
+    BackHandler(!drawerOpen && state.selectedConversationId != null) { returnFromConversation() }
     BackHandler(!drawerOpen && state.selectedConversationId == null && projectsSelected) {
         projectsSelected = false
     }
@@ -87,9 +96,11 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             if (state.selectedConversationId != null) {
                 ConversationTopBar(
-                    onMenu = openDrawer,
+                    returnToProjects = openedFromProject,
+                    onLeading = if (openedFromProject) returnFromConversation else openDrawer,
                     onNewChat = {
                         projectsSelected = false
+                        openedFromProject = false
                         viewModel.newConversation()
                     },
                     onMore = { showDeleteConfirm = true },
@@ -121,7 +132,17 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                         projects = state.projects,
                         conversations = state.conversations,
                         isLoading = state.isLoadingProjects,
-                        onOpenConversation = viewModel::openConversation,
+                        onOpenConversation = { id ->
+                            openedFromProject = true
+                            viewModel.openConversation(id)
+                        },
+                        expandedProjects = expandedProjectKeys.toSet(),
+                        onToggleProject = { key ->
+                            expandedProjectKeys = ArrayList(expandedProjectKeys).apply {
+                                if (key in this) remove(key) else add(key)
+                            }
+                        },
+                        listState = projectListState,
                         modifier = Modifier.weight(1f),
                     )
                 } else {
@@ -135,7 +156,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             Text(
                                 conversation.displayTitle,
                                 modifier = Modifier.fillMaxWidth()
-                                    .clickable { viewModel.openConversation(conversation.id) }
+                                    .clickable {
+                                        openedFromProject = false
+                                        viewModel.openConversation(conversation.id)
+                                    }
                                     .padding(vertical = 12.dp),
                                 color = SecondaryInk,
                                 fontSize = 16.sp,
@@ -190,12 +214,21 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 isLoading = state.isLoadingConversations,
                 isLoadingProjects = state.isLoadingProjects,
                 onOpenConversation = { id ->
+                    openedFromProject = false
+                    projectsSelected = false
+                    viewModel.openConversation(id)
+                    drawerOpen = false
+                },
+                onOpenProjectConversation = { id ->
+                    openedFromProject = true
+                    projectsSelected = true
                     viewModel.openConversation(id)
                     drawerOpen = false
                 },
                 onNewChat = {
                     viewModel.newConversation()
                     projectsSelected = false
+                    openedFromProject = false
                     drawerOpen = false
                 },
             )

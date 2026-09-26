@@ -10,12 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -31,11 +28,14 @@ internal fun ProjectOverview(
     conversations: List<ConversationItem>,
     isLoading: Boolean,
     onOpenConversation: (String) -> Unit,
+    expandedProjects: Set<String>,
+    onToggleProject: (String) -> Unit,
+    listState: LazyListState,
     modifier: Modifier = Modifier,
 ) {
-    var expandedProjects by remember { mutableStateOf(setOf<String>()) }
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
+        state = listState,
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         item {
@@ -55,8 +55,7 @@ internal fun ProjectOverview(
             Column(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     modifier = Modifier.fillMaxWidth().clickable {
-                        expandedProjects = if (projectKey in expandedProjects)
-                            expandedProjects - projectKey else expandedProjects + projectKey
+                        onToggleProject(projectKey)
                     }.padding(horizontal = 28.dp, vertical = 17.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
