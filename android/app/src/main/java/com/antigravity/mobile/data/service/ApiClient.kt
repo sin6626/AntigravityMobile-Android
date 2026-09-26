@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.util.Base64
 import android.util.Log
+import coil.ImageLoader
+import coil.request.ImageRequest
 import com.antigravity.mobile.data.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -18,6 +20,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
 import java.io.IOException
 import java.net.URLDecoder
@@ -71,6 +74,25 @@ class ApiClient(
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+
+    val mediaImageLoader: ImageLoader by lazy {
+        ImageLoader.Builder(context.applicationContext)
+            .okHttpClient(OkHttpClient.Builder().addInterceptor(ApiTraceInterceptor()).build())
+            .build()
+    }
+
+    fun mediaImageRequest(raw: String): ImageRequest {
+        val url = resolveMediaURL(raw)
+        val builder = ImageRequest.Builder(context.applicationContext).data(url)
+        val gateway = currentBaseUrl?.toHttpUrlOrNull()
+        val media = url.toHttpUrlOrNull()
+        if (gateway != null && media != null && gateway.scheme == media.scheme &&
+            gateway.host == media.host && gateway.port == media.port
+        ) {
+            prefs.deviceToken?.takeIf { it.isNotBlank() }?.let { builder.addHeader("Authorization", "Bearer $it") }
+        }
+        return builder.build()
+    }
 
     /**
      * Attempts pairing with candidates from PairingInfo.

@@ -17,10 +17,13 @@ class ApiTraceInterceptor : Interceptor {
             params.put(name, if (isSecret(name)) "[已隐藏]" else request.url.queryParameterValues(name).joinToString(","))
         }
         val body = Buffer()
-        request.body?.writeTo(body)
-        if (body.size > 0L && body.size <= 128 * 1024L) {
+        val bodyLength = request.body?.contentLength() ?: 0L
+        if (bodyLength in 1..128 * 1024L) request.body?.writeTo(body)
+        if (body.size > 0L) {
             val raw = body.readUtf8()
             params.put("body", sanitize(parseJson(raw)))
+        } else if (bodyLength > 128 * 1024L) {
+            params.put("bodyBytes", bodyLength)
         }
         val headers = JSONObject()
         request.headers.names().forEach { name ->
@@ -32,8 +35,16 @@ class ApiTraceInterceptor : Interceptor {
             try {
                 val responseData = if (response.code == 101) {
                     JSONObject().put("websocket", "connected")
+                } else if (response.header("Content-Type")?.startsWith("image/") == true) {
+                    JSONObject().put("contentType", response.header("Content-Type"))
+                        .put("bytes", response.body?.contentLength() ?: -1)
                 } else {
-                    sanitize(parseJson(response.peekBody(128 * 1024L).string()))
+                    val preview = response.peekBody(128 * 1024L)
+                    if (preview.contentLength() >= 128 * 1024L) {
+                        JSONObject().put("bodyBytes", response.body?.contentLength() ?: -1)
+                    } else {
+                        sanitize(parseJson(preview.string()))
+                    }
                 }
                 val result = JSONObject()
                     .put("statusCode", response.code)
@@ -69,7 +80,12 @@ class ApiTraceInterceptor : Interceptor {
     private fun sanitize(value: Any?): Any? = when (value) {
         is JSONObject -> JSONObject().also { target ->
             value.keys().forEach { key ->
-                target.put(key, if (isSecret(key)) "[已隐藏]" else sanitize(value.opt(key)))
+                target.put(key, when {
+                    isSecret(key) -> "[已隐藏]"
+                    key.equals("media", ignoreCase = true) && value.opt(key) is JSONArray ->
+                        JSONObject().put("imageCount", (value.opt(key) as JSONArray).length())
+                    else -> sanitize(value.opt(key))
+                })
             }
         }
         is JSONArray -> JSONArray().also { target ->

@@ -1,6 +1,9 @@
 package com.antigravity.mobile.ui.chat
 
 import android.app.Application
+import android.net.Uri
+import coil.ImageLoader
+import coil.request.ImageRequest
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.antigravity.mobile.data.model.ConversationItem
@@ -16,7 +19,10 @@ import com.antigravity.mobile.data.service.StreamWebSocketClient
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.util.UUID
 
 data class ChatUiState(
@@ -35,8 +41,11 @@ data class ChatUiState(
     val selectedConversationId: String? = null,
     val messages: List<GatewayMessageItem> = emptyList(),
     val draft: String = "",
+    val attachments: List<PendingImage> = emptyList(),
     val error: String? = null,
 )
+
+data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String)
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = PreferencesManager(application)
@@ -46,6 +55,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired()))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
+    val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
+    fun mediaImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw)
 
     init {
         if (prefs.isPaired()) {
@@ -68,6 +79,47 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDraft(value: String) {
         _state.value = _state.value.copy(draft = value)
+    }
+
+    fun addImages(uris: List<Uri>) {
+        viewModelScope.launch {
+            for (uri in uris.take(4)) {
+                if (_state.value.attachments.size >= 4) break
+                if (_state.value.attachments.any { it.uri == uri }) continue
+                try {
+                    val image = withContext(Dispatchers.IO) { readImage(uri) }
+                    _state.value = _state.value.copy(attachments = _state.value.attachments + image)
+                } catch (error: Exception) {
+                    _state.value = _state.value.copy(error = error.message ?: "读取图片失败")
+                }
+            }
+        }
+    }
+
+    fun removeImage(uri: Uri) {
+        _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.uri == uri })
+    }
+
+    private fun readImage(uri: Uri): PendingImage {
+        val resolver = getApplication<Application>().contentResolver
+        val mime = resolver.getType(uri) ?: throw IllegalArgumentException("无法识别图片格式")
+        if (mime !in setOf("image/jpeg", "image/png", "image/webp", "image/gif")) {
+            throw IllegalArgumentException("暂不支持 $mime，请选择 JPG、PNG、WebP 或 GIF 图片")
+        }
+        val input = resolver.openInputStream(uri) ?: throw IllegalArgumentException("无法读取所选图片")
+        val output = ByteArrayOutputStream()
+        input.use { source ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = source.read(buffer)
+                if (count < 0) break
+                if (output.size() + count > 8 * 1024 * 1024) {
+                    throw IllegalArgumentException("单张图片不能超过 8 MB")
+                }
+                output.write(buffer, 0, count)
+            }
+        }
+        return PendingImage(uri, output.toByteArray(), mime)
     }
 
     fun clearError() {
@@ -141,6 +193,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             selectedConversationId = null,
             messages = emptyList(),
             draft = "",
+            attachments = emptyList(),
             isLoadingMessages = false,
             isRunning = false,
             pendingInteraction = null,
@@ -152,24 +205,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun send() {
         val text = _state.value.draft.trim()
-        if (text.isEmpty() || _state.value.isSending) return
+        val images = _state.value.attachments
+        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending) return
         val id = _state.value.selectedConversationId
         _state.value = _state.value.copy(isSending = true, isRunning = true, error = null)
         viewModelScope.launch {
-            val result = if (id == null) {
+            val result = if (id == null && images.isEmpty()) {
                 api.createCascade(
                     workspaceUri = "",
                     prompt = text,
                     model = DEFAULT_CHAT_MODEL,
                     projectId = ProjectItem.PURE_CHAT.id,
                 )
+            } else if (id == null) {
+                api.createCascade("", "", model = DEFAULT_CHAT_MODEL, projectId = ProjectItem.PURE_CHAT.id)
+                    .fold(
+                        onSuccess = { createdId ->
+                            openConversation(createdId)
+                            api.sendMessage(
+                                createdId, text, model = DEFAULT_CHAT_MODEL,
+                                images = images.map { it.bytes to it.mimeType },
+                                clientMessageId = UUID.randomUUID().toString(),
+                            ).map { createdId }
+                        },
+                        onFailure = { Result.failure(it) },
+                    )
             } else {
-                api.sendMessage(id, text, clientMessageId = UUID.randomUUID().toString()).map { id }
+                api.sendMessage(
+                    id, text, images = images.map { it.bytes to it.mimeType },
+                    clientMessageId = UUID.randomUUID().toString(),
+                ).map { id }
             }
             result.fold(
                 onSuccess = { conversationId ->
-                    _state.value = _state.value.copy(draft = "", isSending = false)
-                    if (id == null) {
+                    _state.value = _state.value.copy(draft = "", attachments = emptyList(), isSending = false)
+                    if (id == null && images.isEmpty()) {
                         openConversation(conversationId)
                     } else {
                         loadMessages(conversationId)

@@ -1,6 +1,9 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -23,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -47,6 +51,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(4),
+    ) { uris -> viewModel.addImages(uris) }
     val unsupported: () -> Unit = {
         scope.launch { snackbar.showSnackbar("当前版本先支持文字聊天") }
     }
@@ -79,14 +86,17 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     onNewChat = viewModel::newConversation,
                     onMore = { showDeleteConfirm = true },
                 )
-                ConversationContent(
-                    messages = state.messages,
-                    isLoading = state.isLoadingMessages,
-                    hasMore = state.hasMoreMessages,
-                    isLoadingOlder = state.isLoadingOlder,
-                    onLoadOlder = viewModel::loadOlderMessages,
-                    modifier = Modifier.weight(1f),
-                )
+                key(state.selectedConversationId) {
+                    ConversationContent(
+                        viewModel = viewModel,
+                        messages = state.messages,
+                        isLoading = state.isLoadingMessages,
+                        hasMore = state.hasMoreMessages,
+                        isLoadingOlder = state.isLoadingOlder,
+                        onLoadOlder = viewModel::loadOlderMessages,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             } else {
                 EmptyTopBar(onMenu = openDrawer, onUnsupported = unsupported)
                 Spacer(Modifier.weight(1f))
@@ -123,7 +133,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             Composer(
                 activeConversation = state.selectedConversationId != null,
                 draft = state.draft,
+                attachments = state.attachments,
                 onDraftChange = viewModel::setDraft,
+                onAddImage = {
+                    imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                },
+                onRemoveImage = viewModel::removeImage,
                 onSend = viewModel::send,
                 isSending = state.isSending,
                 onUnsupported = unsupported,

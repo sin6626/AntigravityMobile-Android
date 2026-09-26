@@ -1,5 +1,8 @@
 package com.antigravity.mobile.ui.demo
 
+import android.net.Uri
+import coil.compose.AsyncImage
+import com.antigravity.mobile.ui.chat.PendingImage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -11,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -46,7 +51,6 @@ private val symbolCodepoints = mapOf(
     "edit_square" to "\uF88D",
     "add" to "\uE145",
     "computer" to "\uE30A",
-    "call" to "\uE0B0",
     "folder" to "\uE2C7",
     "more_horiz" to "\uE5D3",
     "more_vert" to "\uE5D4",
@@ -148,57 +152,87 @@ internal fun ConversationTopBar(onMenu: () -> Unit, onNewChat: () -> Unit, onMor
 internal fun Composer(
     activeConversation: Boolean,
     draft: String,
+    attachments: List<PendingImage>,
     onDraftChange: (String) -> Unit,
+    onAddImage: () -> Unit,
+    onRemoveImage: (Uri) -> Unit,
     onSend: () -> Unit,
     isSending: Boolean,
     onUnsupported: () -> Unit,
 ) {
+    val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending
     Surface(
         modifier = Modifier.fillMaxWidth().padding(horizontal = if (activeConversation) 14.dp else 34.dp),
         shape = RoundedCornerShape(if (activeConversation) 30.dp else 36.dp),
         color = Color.White,
         shadowElevation = 8.dp,
     ) {
-        if (activeConversation) {
+        if (activeConversation || attachments.isNotEmpty()) {
             Column(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 15.dp, bottom = 8.dp)) {
-                ComposerTextField(draft, onDraftChange, onSend, "回复 Multigravity", Modifier.fillMaxWidth())
+                if (attachments.isNotEmpty()) AttachmentTray(attachments, onRemoveImage)
+                ComposerTextField(draft, onDraftChange, onSend, canSend,
+                    if (activeConversation) "回复 Multigravity" else "询问 Multigravity", Modifier.fillMaxWidth())
                 Spacer(Modifier.height(18.dp))
-                ComposerActions(draft.isNotBlank() && !isSending, onSend, onUnsupported)
+                ComposerActions(canSend, onSend, onAddImage, onUnsupported)
             }
         } else {
             Row(
                 modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Symbol("add", modifier = Modifier.clickable(onClick = onUnsupported), size = 32)
+                Symbol("add", modifier = Modifier.clickable(onClick = onAddImage), size = 32)
                 Spacer(Modifier.width(12.dp))
-                ComposerTextField(draft, onDraftChange, onSend, "询问 Multigravity", Modifier.weight(1f))
+                ComposerTextField(draft, onDraftChange, onSend, canSend,
+                    "询问 Multigravity", Modifier.weight(1f))
                 Symbol("mic", modifier = Modifier.clickable(onClick = onUnsupported), size = 26)
                 Spacer(Modifier.width(15.dp))
-                BlueAction(draft.isNotBlank() && !isSending, onSend, onUnsupported)
+                SendAction(canSend, onSend)
             }
         }
     }
 }
 
 @Composable
-private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onUnsupported: () -> Unit) {
+private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Symbol("add", modifier = Modifier.clickable(onClick = onUnsupported), size = 32)
+        Symbol("add", modifier = Modifier.clickable(onClick = onAddImage), size = 32)
         Spacer(Modifier.weight(1f))
         Symbol("mic", modifier = Modifier.clickable(onClick = onUnsupported), size = 27)
         Spacer(Modifier.width(22.dp))
-        BlueAction(canSend, onSend, onUnsupported)
+        SendAction(canSend, onSend)
     }
 }
 
 @Composable
-private fun BlueAction(canSend: Boolean, onSend: () -> Unit, onUnsupported: () -> Unit) {
+private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        images.forEach { image ->
+            Box {
+                AsyncImage(
+                    model = image.uri,
+                    contentDescription = "待发送图片",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(58.dp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)),
+                )
+                Text("×", modifier = Modifier.align(Alignment.TopEnd)
+                    .background(Color.White, CircleShape)
+                    .clickable { onRemove(image.uri) }.padding(horizontal = 4.dp),
+                    color = Ink, fontSize = 18.sp)
+            }
+        }
+    }
+    Spacer(Modifier.height(10.dp))
+}
+
+@Composable
+private fun SendAction(canSend: Boolean, onSend: () -> Unit) {
     Box(
-        modifier = Modifier.size(43.dp).background(AccentBlue, CircleShape)
-            .clickable(onClick = if (canSend) onSend else onUnsupported),
+        modifier = Modifier.size(43.dp)
+            .background(if (canSend) AccentBlue else Color(0xFFD2D3D5), CircleShape)
+            .clickable(enabled = canSend, onClick = onSend)
+            .semantics { contentDescription = "发送消息" },
         contentAlignment = Alignment.Center,
-    ) { Symbol(if (canSend) "arrow_upward" else "call", size = 26, color = Color.White) }
+    ) { Symbol("arrow_upward", size = 26, color = Color.White) }
 }
 
 @Composable
@@ -206,6 +240,7 @@ private fun ComposerTextField(
     value: String,
     onValueChange: (String) -> Unit,
     onSend: () -> Unit,
+    canSend: Boolean,
     placeholder: String,
     modifier: Modifier,
 ) {
@@ -216,7 +251,7 @@ private fun ComposerTextField(
         textStyle = TextStyle(color = Ink, fontSize = 17.sp, lineHeight = 23.sp),
         maxLines = 4,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-        keyboardActions = KeyboardActions(onSend = { if (value.isNotBlank()) onSend() }),
+        keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
         decorationBox = { inner ->
             Box {
                 if (value.isEmpty()) Text(placeholder, color = Color(0xFF929292), fontSize = 17.sp,

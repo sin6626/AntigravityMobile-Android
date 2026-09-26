@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -28,9 +29,11 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.ui.chat.ChatViewModel
 
 @Composable
 internal fun ConversationContent(
+    viewModel: ChatViewModel,
     messages: List<GatewayMessageItem>,
     isLoading: Boolean,
     hasMore: Boolean,
@@ -40,14 +43,23 @@ internal fun ConversationContent(
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.effectiveText?.length) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex + if (hasMore) 1 else 0)
+        if (messages.isNotEmpty() && listState.firstVisibleItemIndex == 0 &&
+            listState.firstVisibleItemScrollOffset < 80
+        ) listState.scrollToItem(0)
     }
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         state = listState,
+        reverseLayout = true,
         contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(25.dp),
     ) {
+        if (isLoading && messages.isEmpty()) {
+            item { CircularProgressIndicator(color = AccentBlue) }
+        }
+        itemsIndexed(messages.asReversed(), key = { index, message -> message.id.ifBlank { "${message.type}-$index" } }) { _, message ->
+            MessageRow(message, viewModel)
+        }
         if (hasMore) {
             item {
                 Text(
@@ -59,28 +71,24 @@ internal fun ConversationContent(
                 )
             }
         }
-        if (isLoading && messages.isEmpty()) {
-            item { CircularProgressIndicator(color = AccentBlue) }
-        }
-        itemsIndexed(messages, key = { index, message -> message.id.ifBlank { "${message.type}-$index" } }) { _, message ->
-            MessageRow(message)
-        }
     }
 }
 
 @Composable
-private fun MessageRow(message: GatewayMessageItem) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel) {
     val text = message.effectiveText.trim()
     if (message.isUser) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Text(
-                text = text.ifBlank { if (!message.imageUrls.isNullOrEmpty()) "[图片]" else "" },
+            Column(
                 modifier = Modifier.background(Color(0xFFE5F2FF), RoundedCornerShape(23.dp))
                     .padding(horizontal = 17.dp, vertical = 13.dp),
-                color = Color(0xFF163E63),
-                fontSize = 17.sp,
-                lineHeight = 26.sp,
-            )
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MessageImages(message, viewModel)
+                if (text.isNotBlank()) Text(text, color = Color(0xFF163E63),
+                    fontSize = 17.sp, lineHeight = 26.sp)
+            }
         }
     } else if (message.isTools) {
         Text(
@@ -90,8 +98,11 @@ private fun MessageRow(message: GatewayMessageItem) {
         )
     } else if (message.isError) {
         Text(text.ifBlank { "请求失败" }, color = Color(0xFFB3261E), fontSize = 16.sp)
-    } else if (text.isNotBlank()) {
-        MarkdownBody(text)
+    } else {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MessageImages(message, viewModel)
+            if (text.isNotBlank()) MarkdownBody(text)
+        }
     }
 }
 
