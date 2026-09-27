@@ -1,5 +1,10 @@
 package com.antigravity.mobile.ui.demo
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -65,7 +70,9 @@ internal fun ProjectOverview(
                     Text(if (projectKey in expandedProjects) "−" else "+", color = SecondaryInk,
                         fontSize = 23.sp)
                 }
-                if (projectKey in expandedProjects) {
+                AnimatedVisibility(projectKey in expandedProjects,
+                    enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                    Column {
                     if (projectChats.isEmpty()) {
                         Text("暂无对话", modifier = Modifier.padding(start = 68.dp, bottom = 13.dp),
                             color = SecondaryInk, fontSize = 15.sp)
@@ -76,6 +83,7 @@ internal fun ProjectOverview(
                             .padding(start = 68.dp, end = 28.dp, top = 12.dp, bottom = 12.dp),
                             color = Ink, fontSize = 16.sp, maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
+                    }
                     }
                 }
             }

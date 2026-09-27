@@ -5,6 +5,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -35,6 +40,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -43,14 +52,18 @@ import com.antigravity.mobile.ui.chat.ChatViewModel
 import com.antigravity.mobile.ui.chat.PairingScreen
 import com.antigravity.mobile.ui.chat.InteractionPanel
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatDemoScreen(viewModel: ChatViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val focusManager = LocalFocusManager.current
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var pairingSettingsOpen by rememberSaveable { mutableStateOf(false) }
     var pairSuccessAtOpen by rememberSaveable { mutableStateOf(0) }
     var projectsSelected by rememberSaveable { mutableStateOf(false) }
+    val pagerState = rememberPagerState(initialPage = if (projectsSelected) 1 else 0, pageCount = { 2 })
     var openedFromProject by rememberSaveable { mutableStateOf(false) }
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val projectListState = rememberLazyListState()
@@ -67,6 +80,15 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
     LaunchedEffect(state.pairSuccessCount) {
         if (pairingSettingsOpen && state.pairSuccessCount > pairSuccessAtOpen) {
             pairingSettingsOpen = false
+        }
+    }
+    LaunchedEffect(pagerState.currentPage) {
+        projectsSelected = pagerState.currentPage == 1
+        if (projectsSelected) viewModel.refreshProjects()
+    }
+    LaunchedEffect(projectsSelected, state.selectedConversationId) {
+        if (state.selectedConversationId == null && pagerState.currentPage != (if (projectsSelected) 1 else 0)) {
+            pagerState.animateScrollToPage(if (projectsSelected) 1 else 0)
         }
     }
 
@@ -167,21 +189,36 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                         hasMore = state.hasMoreMessages,
                         isLoadingOlder = state.isLoadingOlder,
                         onLoadOlder = viewModel::loadOlderMessages,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                var travel = 0f
+                                do {
+                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                    event.changes.forEach { change ->
+                                        travel += abs(change.positionChange().x) + abs(change.positionChange().y)
+                                    }
+                                } while (event.changes.any { it.pressed })
+                                if (travel < viewConfiguration.touchSlop) focusManager.clearFocus()
+                            }
+                        },
                     )
                 }
             } else {
                 EmptyTopBar(
                     onMenu = openDrawer,
-                    projectsSelected = projectsSelected,
-                    onChat = { projectsSelected = false },
+                    tabPosition = (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f),
+                    onChat = { scope.launch { pagerState.animateScrollToPage(0) } },
                     onProjects = {
-                        projectsSelected = true
                         viewModel.refreshProjects()
+                        scope.launch { pagerState.animateScrollToPage(1) }
                     },
                     onUnsupported = unsupported,
                 )
-                if (projectsSelected) {
+                HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
+                    userScrollEnabled = pagerState.currentPage == 1,
+                    beyondViewportPageCount = 1) { page ->
+                if (page == 1) {
                     ProjectOverview(
                         projects = state.projects,
                         conversations = state.conversations,
@@ -197,9 +234,26 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             }
                         },
                         listState = projectListState,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.fillMaxSize(),
                     )
                 } else {
+                    Column(Modifier.fillMaxSize().pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            var horizontal = 0f
+                            var vertical = 0f
+                            do {
+                                val event = awaitPointerEvent(PointerEventPass.Initial)
+                                event.changes.forEach { change ->
+                                    horizontal += change.positionChange().x
+                                    vertical += change.positionChange().y
+                                }
+                            } while (event.changes.any { it.pressed })
+                            if (horizontal < -80.dp.toPx() && abs(horizontal) > abs(vertical) * 1.4f) {
+                                scope.launch { pagerState.animateScrollToPage(1) }
+                            }
+                        }
+                    }) {
                     Spacer(Modifier.weight(1f))
                     Column(modifier = Modifier.padding(horizontal = 28.dp)) {
                         val recent = state.conversations.filter { it.isPureChat && !it.isSubagent }.take(2)
@@ -222,6 +276,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                         }
                     }
                     Spacer(Modifier.height(30.dp))
+                    }
+                }
                 }
             }
             if (state.selectedConversationId != null && state.isRunning) {

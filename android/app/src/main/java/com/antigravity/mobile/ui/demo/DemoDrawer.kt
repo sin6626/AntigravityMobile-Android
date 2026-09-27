@@ -1,5 +1,10 @@
 package com.antigravity.mobile.ui.demo
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -97,9 +102,10 @@ internal fun DemoDrawer(
                         expandedProjects = if (projectKey in expandedProjects)
                             expandedProjects - projectKey else expandedProjects + projectKey
                     }
-                    if (projectKey in expandedProjects || searchText.isNotBlank() &&
-                        projectChats.any { it.displayTitle.contains(searchText, ignoreCase = true) }
-                    ) {
+                    AnimatedVisibility(projectKey in expandedProjects || searchText.isNotBlank() &&
+                        projectChats.any { it.displayTitle.contains(searchText, ignoreCase = true) },
+                        enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                        Column {
                         val visibleChats = if (searchText.isBlank() || project.name.contains(searchText, ignoreCase = true))
                             projectChats else projectChats.filter { it.displayTitle.contains(searchText, ignoreCase = true) }
                         if (visibleChats.isEmpty()) {
@@ -110,6 +116,7 @@ internal fun DemoDrawer(
                             DrawerConversation(item.displayTitle, indent = 45.dp) {
                                 onOpenProjectConversation(item.id)
                             }
+                        }
                         }
                     }
                 }

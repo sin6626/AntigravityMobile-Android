@@ -4,6 +4,16 @@ import android.net.Uri
 import coil.compose.AsyncImage
 import com.antigravity.mobile.ui.chat.PendingImage
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +32,16 @@ import androidx.compose.material3.Text
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.ContentScale
@@ -115,7 +132,7 @@ internal fun RoundIconButton(
 @Composable
 internal fun EmptyTopBar(
     onMenu: () -> Unit,
-    projectsSelected: Boolean,
+    tabPosition: Float,
     onChat: () -> Unit,
     onProjects: () -> Unit,
     onUnsupported: () -> Unit,
@@ -126,20 +143,16 @@ internal fun EmptyTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         RoundIconButton("menu", "打开菜单", onMenu, size = 52.dp)
-        Row(
-            modifier = Modifier.background(Color(0xFFF4F4F4), RoundedCornerShape(32.dp)).padding(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier.width(88.dp).height(44.dp)
-                    .background(if (projectsSelected) Color.Transparent else Color.White, RoundedCornerShape(28.dp))
-                    .quietClickable(RoundedCornerShape(28.dp), onClick = onChat),
-                contentAlignment = Alignment.Center,
-            ) { Text("聊天", fontSize = 18.sp, color = Ink) }
-            Box(modifier = Modifier.width(88.dp).height(44.dp)
-                .background(if (projectsSelected) Color.White else Color.Transparent, RoundedCornerShape(28.dp))
-                .quietClickable(RoundedCornerShape(28.dp), onClick = onProjects), contentAlignment = Alignment.Center) {
-                Text("项目", fontSize = 18.sp, color = Ink)
+        val density = LocalDensity.current
+        Box(Modifier.width(184.dp).height(52.dp).background(Color(0xFFF4F4F4), RoundedCornerShape(32.dp))) {
+            Box(Modifier.padding(4.dp).width(88.dp).height(44.dp)
+                .graphicsLayer { translationX = with(density) { (88.dp * tabPosition.coerceIn(0f, 1f)).toPx() } }
+                .background(Color.White, RoundedCornerShape(28.dp)))
+            Row(Modifier.padding(4.dp)) {
+                Box(Modifier.width(88.dp).height(44.dp).quietClickable(RoundedCornerShape(28.dp), onClick = onChat),
+                    contentAlignment = Alignment.Center) { Text("聊天", fontSize = 18.sp, color = Ink) }
+                Box(Modifier.width(88.dp).height(44.dp).quietClickable(RoundedCornerShape(28.dp), onClick = onProjects),
+                    contentAlignment = Alignment.Center) { Text("项目", fontSize = 18.sp, color = Ink) }
             }
         }
         RoundIconButton("chat_bubble", "语音聊天", onUnsupported, size = 52.dp)
@@ -186,32 +199,50 @@ internal fun Composer(
     onUnsupported: () -> Unit,
 ) {
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending
+    var focused by remember { mutableStateOf(false) }
+    val expanded = focused || attachments.isNotEmpty()
+    val horizontalPadding by animateDpAsState(
+        if (activeConversation || expanded) 14.dp else 34.dp,
+        animationSpec = spring(stiffness = 350f), label = "composer width")
+    val corner by animateDpAsState(if (expanded) 30.dp else 36.dp,
+        animationSpec = spring(stiffness = 350f), label = "composer corner")
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = if (activeConversation) 14.dp else 34.dp),
-        shape = RoundedCornerShape(if (activeConversation) 30.dp else 36.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
+        shape = RoundedCornerShape(corner),
         color = Color.White,
         shadowElevation = 8.dp,
     ) {
-        if (activeConversation || attachments.isNotEmpty()) {
-            Column(modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 15.dp, bottom = 8.dp)) {
-                if (attachments.isNotEmpty()) AttachmentTray(attachments, onRemoveImage)
-                ComposerTextField(draft, onDraftChange, onSend, canSend,
-                    if (activeConversation) "回复 Multigravity" else "询问 Multigravity", Modifier.fillMaxWidth())
-                Spacer(Modifier.height(18.dp))
-                ComposerActions(canSend, onSend, onAddImage, onUnsupported)
+        Column(Modifier.fillMaxWidth().animateContentSize(animationSpec = spring(stiffness = 350f))) {
+            AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()) {
+                Box(Modifier.padding(start = 20.dp, top = 12.dp)) { AttachmentTray(attachments, onRemoveImage) }
             }
-        } else {
-            Row(
-                modifier = Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
-                Spacer(Modifier.width(12.dp))
+            Row(Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                AnimatedVisibility(!expanded, enter = expandHorizontally() + fadeIn(),
+                    exit = shrinkHorizontally() + fadeOut()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
+                        Spacer(Modifier.width(12.dp))
+                    }
+                }
                 ComposerTextField(draft, onDraftChange, onSend, canSend,
-                    "询问 Multigravity", Modifier.weight(1f))
-                Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 26)
-                Spacer(Modifier.width(15.dp))
-                SendAction(canSend, onSend)
+                    if (activeConversation) "回复 Multigravity" else "询问 Multigravity",
+                    Modifier.weight(1f).onFocusChanged { focused = it.isFocused }, expanded)
+                AnimatedVisibility(!expanded, enter = expandHorizontally() + fadeIn(),
+                    exit = shrinkHorizontally() + fadeOut()) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 26)
+                        Spacer(Modifier.width(15.dp))
+                        SendAction(canSend, onSend)
+                    }
+                }
+            }
+            AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()) {
+                Box(Modifier.padding(start = 20.dp, end = 12.dp, bottom = 9.dp, top = 3.dp)) {
+                    ComposerActions(canSend, onSend, onAddImage, onUnsupported)
+                }
             }
         }
     }
@@ -268,13 +299,14 @@ private fun ComposerTextField(
     canSend: Boolean,
     placeholder: String,
     modifier: Modifier,
+    expanded: Boolean,
 ) {
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
         modifier = modifier,
         textStyle = TextStyle(color = Ink, fontSize = 17.sp, lineHeight = 23.sp),
-        maxLines = 4,
+        maxLines = if (expanded) 4 else 1,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
         keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
         decorationBox = { inner ->
