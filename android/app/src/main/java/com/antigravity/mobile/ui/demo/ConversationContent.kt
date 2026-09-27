@@ -39,6 +39,7 @@ internal fun ConversationContent(
     isLoadingOlder: Boolean,
     onLoadOlder: () -> Unit,
     modifier: Modifier = Modifier,
+    bottomSpace: androidx.compose.ui.unit.Dp = 24.dp,
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.effectiveText?.length) {
@@ -50,7 +51,7 @@ internal fun ConversationContent(
         modifier = modifier.fillMaxWidth(),
         state = listState,
         reverseLayout = true,
-        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = 24.dp),
+        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
         verticalArrangement = Arrangement.spacedBy(25.dp),
     ) {
         if (isLoading && messages.isEmpty()) {

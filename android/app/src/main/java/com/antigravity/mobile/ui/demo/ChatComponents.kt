@@ -188,6 +188,7 @@ internal fun ConversationTopBar(
 
 @Composable
 internal fun Composer(
+    modifier: Modifier = Modifier,
     activeConversation: Boolean,
     draft: String,
     attachments: List<PendingImage>,
@@ -207,7 +208,7 @@ internal fun Composer(
     val corner by animateDpAsState(if (expanded) 30.dp else 36.dp,
         animationSpec = spring(stiffness = 350f), label = "composer corner")
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
+        modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
         shape = RoundedCornerShape(corner),
         color = Color.White,
         shadowElevation = 8.dp,

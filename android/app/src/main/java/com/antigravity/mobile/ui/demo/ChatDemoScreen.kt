@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -44,6 +47,8 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -59,6 +64,10 @@ import kotlin.math.abs
 fun ChatDemoScreen(viewModel: ChatViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    val density = LocalDensity.current
+    val keyboardHeight = with(density) { WindowInsets.ime.getBottom(this).toDp() }
+    var composerHeightPx by remember { mutableStateOf(0) }
+    val composerHeight = with(density) { composerHeightPx.toDp() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var pairingSettingsOpen by rememberSaveable { mutableStateOf(false) }
     var pairSuccessAtOpen by rememberSaveable { mutableStateOf(0) }
@@ -82,12 +91,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             pairingSettingsOpen = false
         }
     }
-    LaunchedEffect(pagerState.currentPage) {
-        projectsSelected = pagerState.currentPage == 1
+    LaunchedEffect(pagerState.settledPage) {
+        projectsSelected = pagerState.settledPage == 1
         if (projectsSelected) viewModel.refreshProjects()
     }
     LaunchedEffect(projectsSelected, state.selectedConversationId) {
-        if (state.selectedConversationId == null && pagerState.currentPage != (if (projectsSelected) 1 else 0)) {
+        if (state.selectedConversationId == null && pagerState.settledPage != (if (projectsSelected) 1 else 0)) {
             pagerState.animateScrollToPage(if (projectsSelected) 1 else 0)
         }
     }
@@ -182,6 +191,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     onMore = { showDeleteConfirm = true },
                 )
                 key(state.selectedConversationId) {
+                Box(Modifier.weight(1f)) {
                     ConversationContent(
                         viewModel = viewModel,
                         messages = state.messages,
@@ -189,7 +199,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                         hasMore = state.hasMoreMessages,
                         isLoadingOlder = state.isLoadingOlder,
                         onLoadOlder = viewModel::loadOlderMessages,
-                        modifier = Modifier.weight(1f).pointerInput(Unit) {
+                        bottomSpace = composerHeight + keyboardHeight + 23.dp,
+                        modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {
                                 awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                 var travel = 0f
@@ -203,6 +214,31 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             }
                         },
                     )
+                    Column(Modifier.align(Alignment.BottomCenter).imePadding()) {
+                    Column(Modifier.onSizeChanged { composerHeightPx = it.height }) {
+                        if (state.isRunning) Text("正在回复…",
+                            modifier = Modifier.padding(start = 28.dp, bottom = 12.dp),
+                            color = SecondaryInk, fontSize = 14.sp)
+                        state.pendingInteraction?.let { interaction ->
+                            InteractionPanel(interaction = interaction,
+                                isSubmitting = state.isSubmittingInteraction,
+                                onChoose = viewModel::respondToInteraction)
+                        }
+                        Composer(
+                            activeConversation = true,
+                            draft = state.draft,
+                            attachments = state.attachments,
+                            onDraftChange = viewModel::setDraft,
+                            onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onRemoveImage = viewModel::removeImage,
+                            onSend = viewModel::send,
+                            isSending = state.isSending,
+                            onUnsupported = unsupported,
+                        )
+                        Spacer(Modifier.height(23.dp))
+                    }
+                    }
+                }
                 }
             } else {
                 EmptyTopBar(
@@ -216,7 +252,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     onUnsupported = unsupported,
                 )
                 HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
-                    userScrollEnabled = pagerState.currentPage == 1,
+                    userScrollEnabled = pagerState.settledPage == 1,
                     beyondViewportPageCount = 1) { page ->
                 if (page == 1) {
                     ProjectOverview(
@@ -242,15 +278,24 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                             var horizontal = 0f
                             var vertical = 0f
+                            var draggingPage = false
                             do {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
                                 event.changes.forEach { change ->
-                                    horizontal += change.positionChange().x
-                                    vertical += change.positionChange().y
+                                    val delta = change.positionChange()
+                                    horizontal += delta.x
+                                    vertical += delta.y
+                                    if (!draggingPage && horizontal < -viewConfiguration.touchSlop &&
+                                        abs(horizontal) > abs(vertical) * 1.2f) draggingPage = true
+                                    if (draggingPage) {
+                                        pagerState.dispatchRawDelta(-delta.x)
+                                        change.consume()
+                                    }
                                 }
                             } while (event.changes.any { it.pressed })
-                            if (horizontal < -80.dp.toPx() && abs(horizontal) > abs(vertical) * 1.4f) {
-                                scope.launch { pagerState.animateScrollToPage(1) }
+                            if (draggingPage) {
+                                val progress = pagerState.currentPage + pagerState.currentPageOffsetFraction
+                                scope.launch { pagerState.animateScrollToPage(if (progress > 0.38f) 1 else 0) }
                             }
                         }
                     }) {
@@ -280,18 +325,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 }
                 }
             }
-            if (state.selectedConversationId != null && state.isRunning) {
-                Text("正在回复…", modifier = Modifier.padding(start = 28.dp, bottom = 12.dp),
-                    color = SecondaryInk, fontSize = 14.sp)
-            }
-            state.pendingInteraction?.let { interaction ->
-                InteractionPanel(
-                    interaction = interaction,
-                    isSubmitting = state.isSubmittingInteraction,
-                    onChoose = viewModel::respondToInteraction,
-                )
-            }
-            if (!projectsSelected || state.selectedConversationId != null) Composer(
+            if (state.selectedConversationId == null && !projectsSelected) Composer(
                 activeConversation = state.selectedConversationId != null,
                 draft = state.draft,
                 attachments = state.attachments,
@@ -304,7 +338,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 isSending = state.isSending,
                 onUnsupported = unsupported,
             )
-            Spacer(Modifier.height(23.dp))
+            if (state.selectedConversationId == null) Spacer(Modifier.height(23.dp))
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
