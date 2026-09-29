@@ -1,6 +1,8 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -56,6 +58,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.ui.viewinterop.AndroidView
@@ -73,6 +76,12 @@ internal fun ConversationContent(
     bottomSpace: androidx.compose.ui.unit.Dp = 24.dp,
 ) {
     val listState = rememberLazyListState()
+    if (isLoading && messages.isEmpty()) {
+        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = AccentBlue)
+        }
+        return
+    }
     LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.effectiveText?.length) {
         if (messages.isNotEmpty() && listState.firstVisibleItemIndex == 0 &&
             listState.firstVisibleItemScrollOffset < 80
@@ -85,9 +94,6 @@ internal fun ConversationContent(
         contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
         verticalArrangement = Arrangement.spacedBy(25.dp),
     ) {
-        if (isLoading && messages.isEmpty()) {
-            item { CircularProgressIndicator(color = AccentBlue) }
-        }
         itemsIndexed(messages.asReversed(), key = { index, message -> message.id.ifBlank { "${message.type}-$index" } }) { _, message ->
             MessageRow(message, viewModel)
         }
@@ -308,6 +314,10 @@ private fun MathBlock(expression: String) {
 @Composable
 private fun MathWebView(html: String, expression: String?) {
     var heightDp by remember(html, expression) { mutableStateOf(80.dp) }
+    if (!rememberWebContentReady(html, expression)) {
+        Spacer(Modifier.fillMaxWidth().height(heightDp))
+        return
+    }
     val script = if (expression == null) """
         renderMathInElement(document.body,{delimiters:[
         {left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},
@@ -319,7 +329,7 @@ private fun MathWebView(html: String, expression: String?) {
             settings.javaScriptEnabled = true
             settings.allowFileAccess = true
             settings.allowContentAccess = false
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setBackgroundColor(android.graphics.Color.WHITE)
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String?) {
                     view.evaluateJavascript("document.body.scrollHeight.toString()") { result ->
@@ -336,7 +346,7 @@ private fun MathWebView(html: String, expression: String?) {
                 <script src="katex.min.js"></script><script src="auto-render.min.js"></script>
                 <script>$script</script></body></html>
             """.trimIndent(), "text/html", "UTF-8", null)
-        } }, modifier = Modifier.fillMaxWidth().height(heightDp)
+        } }, modifier = Modifier.fillMaxWidth().height(heightDp), onRelease = { it.destroy() }
     )
 }
 
@@ -377,6 +387,10 @@ private fun MarkdownChildren(node: Node) {
 @Composable
 private fun CodeBlock(code: String, language: String) {
     var heightDp by remember(code, language) { mutableStateOf(100.dp) }
+    if (!rememberWebContentReady(code, language)) {
+        Spacer(Modifier.fillMaxWidth().height(heightDp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)))
+        return
+    }
     val quotedCode = remember(code) { JSONObject.quote(code.trimEnd()) }
     val quotedLanguage = remember(language) { JSONObject.quote(language.trim()) }
     AndroidView(
@@ -384,7 +398,7 @@ private fun CodeBlock(code: String, language: String) {
             settings.javaScriptEnabled = true
             settings.allowFileAccess = true
             settings.allowContentAccess = false
-            setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            setBackgroundColor(android.graphics.Color.rgb(243, 243, 243))
             isVerticalScrollBarEnabled = false
             webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, url: String?) {
@@ -408,18 +422,23 @@ private fun CodeBlock(code: String, language: String) {
                 hljs.highlightElement(element);
                 </script></body></html>
             """.trimIndent(), "text/html", "UTF-8", null)
-        } }, modifier = Modifier.fillMaxWidth().height(heightDp)
+        } }, modifier = Modifier.fillMaxWidth().height(heightDp), onRelease = { it.destroy() }
     )
 }
 
 @Composable
 private fun MermaidBlock(source: String) {
+    if (!rememberWebContentReady(source)) {
+        Spacer(Modifier.fillMaxWidth().height(280.dp).background(Color(0xFFF3F3F3)))
+        return
+    }
     val quoted = remember(source) { JSONObject.quote(source) }
     AndroidView(
         factory = { context -> WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.allowFileAccess = true
             settings.allowContentAccess = false
+            setBackgroundColor(android.graphics.Color.rgb(243, 243, 243))
             loadDataWithBaseURL("file:///android_asset/", """
                 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
                 <body style="margin:0;background:#f3f3f3;overflow:auto"><div id="diagram"></div>
@@ -428,8 +447,18 @@ private fun MermaidBlock(source: String) {
                 mermaid.render('diagram-svg', $quoted).then(({svg}) => { document.getElementById('diagram').innerHTML = svg; });
                 </script></body></html>
             """.trimIndent(), "text/html", "UTF-8", null)
-        } }, modifier = Modifier.fillMaxWidth().height(280.dp)
+        } }, modifier = Modifier.fillMaxWidth().height(280.dp), onRelease = { it.destroy() }
     )
+}
+
+@Composable
+private fun rememberWebContentReady(vararg content: String?): Boolean {
+    var ready by remember(*content) { mutableStateOf(false) }
+    LaunchedEffect(*content) {
+        delay(180)
+        ready = true
+    }
+    return ready
 }
 
 @Composable
