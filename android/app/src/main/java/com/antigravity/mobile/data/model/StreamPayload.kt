@@ -15,6 +15,14 @@ data class ToolCallItem(
 )
 
 @Serializable
+data class GatewayStepDetail(
+    val name: String = "",
+    val summary: String = "",
+    val command: String = "",
+    val status: String = "",
+)
+
+@Serializable
 data class GatewayMessageItem(
     val id: String = "",
     val type: String = "user", // "user", "agent", "tools", "error"
@@ -28,6 +36,9 @@ data class GatewayMessageItem(
     val timestamp: String? = null,
     val status: String? = null,
     val stepIndex: Int? = null,
+    val title: String = "",
+    val duration: String = "",
+    val details: List<GatewayStepDetail> = emptyList(),
     @SerialName("tool_calls") val toolCalls: List<ToolCallItem>? = null,
     @SerialName("reasoning_content") val reasoningContent: String? = null,
     @kotlinx.serialization.Transient val imageDataList: List<ByteArray> = emptyList()

@@ -8,6 +8,12 @@
 !/.gitignore
 !/Agent.md
 !/android/
+!/internal/
+/internal/*
+!/internal/proxy/
+/internal/proxy/*
+!/internal/proxy/trajectory.go
+!/internal/proxy/rich_message_test.go
 
 # 2. Android 编译中间件与构建产物
 .gradle/
