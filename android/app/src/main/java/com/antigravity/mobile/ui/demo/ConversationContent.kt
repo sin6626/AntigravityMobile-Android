@@ -45,7 +45,6 @@ import com.antigravity.mobile.data.model.GatewayMessageItem
 import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlRenderer
 import org.commonmark.node.*
 import org.commonmark.ext.gfm.tables.TablesExtension
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
@@ -58,11 +57,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.delay
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.compose.ui.viewinterop.AndroidView
-import org.json.JSONObject
+import com.antigravity.mobile.data.service.MathSymbolProcessor
 
 @Composable
 internal fun ConversationContent(
@@ -183,7 +178,6 @@ private fun MarkdownBody(source: String) {
 private val markdownParser = Parser.builder().extensions(
     listOf(TablesExtension.create(), StrikethroughExtension.create())
 ).build()
-private val mathHtmlRenderer = HtmlRenderer.builder().escapeHtml(true).sanitizeUrls(true).build()
 
 @Composable
 private fun StepPanel(message: GatewayMessageItem) {
@@ -302,52 +296,13 @@ private fun MarkdownListItem(node: ListItem) {
 
 @Composable
 private fun MathParagraph(node: Paragraph) {
-    val html = remember(node) { mathHtmlRenderer.render(node) }
-    MathWebView(html, null)
+    MarkdownAnnotatedText(remember(node) { buildAnnotatedString { append(MathSymbolProcessor.process(inlineText(node).text)) } })
 }
 
 @Composable
 private fun MathBlock(expression: String) {
-    MathWebView("<div id=\"math\"></div>", expression.trim())
-}
-
-@Composable
-private fun MathWebView(html: String, expression: String?) {
-    var heightDp by remember(html, expression) { mutableStateOf(80.dp) }
-    if (!rememberWebContentReady(html, expression)) {
-        Spacer(Modifier.fillMaxWidth().height(heightDp))
-        return
-    }
-    val script = if (expression == null) """
-        renderMathInElement(document.body,{delimiters:[
-        {left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},
-        {left:'$',right:'$',display:false},{left:'\\(',right:'\\)',display:false}
-        ],throwOnError:false});
-    """.trimIndent() else "katex.render(${JSONObject.quote(expression)},document.getElementById('math'),{displayMode:true,throwOnError:false});"
-    AndroidView(
-        factory = { context -> WebView(context).apply {
-            settings.javaScriptEnabled = true
-            settings.allowFileAccess = true
-            settings.allowContentAccess = false
-            setBackgroundColor(android.graphics.Color.WHITE)
-            webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String?) {
-                    view.evaluateJavascript("document.body.scrollHeight.toString()") { result ->
-                        val pixels = result.trim('"').toFloatOrNull() ?: return@evaluateJavascript
-                        heightDp = pixels.dp + 8.dp
-                    }
-                }
-            }
-            loadDataWithBaseURL("file:///android_asset/katex/", """
-                <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-                <link rel="stylesheet" href="katex.min.css">
-                <style>body{margin:0;color:#1e1e1e;font:18px/1.55 sans-serif;overflow-x:auto}p{margin:0}</style>
-                </head><body>$html
-                <script src="katex.min.js"></script><script src="auto-render.min.js"></script>
-                <script>$script</script></body></html>
-            """.trimIndent(), "text/html", "UTF-8", null)
-        } }, modifier = Modifier.fillMaxWidth().height(heightDp), onRelease = { it.destroy() }
-    )
+    Text(MathSymbolProcessor.cleanMathExpression(expression), color = Ink, fontSize = 19.sp,
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp))
 }
 
 private fun normalizeBlockMath(source: String): String {
@@ -386,79 +341,24 @@ private fun MarkdownChildren(node: Node) {
 
 @Composable
 private fun CodeBlock(code: String, language: String) {
-    var heightDp by remember(code, language) { mutableStateOf(100.dp) }
-    if (!rememberWebContentReady(code, language)) {
-        Spacer(Modifier.fillMaxWidth().height(heightDp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)))
-        return
+    Column(Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(12.dp)) {
+        if (language.isNotBlank()) Text(language, color = SecondaryInk, fontSize = 12.sp)
+        Text(code.trimEnd(), color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
+            fontFamily = FontFamily.Monospace, softWrap = false,
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()))
     }
-    val quotedCode = remember(code) { JSONObject.quote(code.trimEnd()) }
-    val quotedLanguage = remember(language) { JSONObject.quote(language.trim()) }
-    AndroidView(
-        factory = { context -> WebView(context).apply {
-            settings.javaScriptEnabled = true
-            settings.allowFileAccess = true
-            settings.allowContentAccess = false
-            setBackgroundColor(android.graphics.Color.rgb(243, 243, 243))
-            isVerticalScrollBarEnabled = false
-            webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String?) {
-                    view.evaluateJavascript("document.body.scrollHeight.toString()") { result ->
-                        val pixels = result.trim('"').toFloatOrNull() ?: return@evaluateJavascript
-                        heightDp = pixels.dp + 4.dp
-                    }
-                }
-            }
-            loadDataWithBaseURL("file:///android_asset/highlight/", """
-                <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-                <link rel="stylesheet" href="github.min.css">
-                <style>body{margin:0;background:#f3f3f3;border-radius:10px}#label{padding:10px 12px 0;color:#666;font:12px sans-serif}pre{margin:0;background:#f3f3f3;border-radius:10px;padding:12px;overflow-x:auto;font-size:14px;line-height:1.5}code,.hljs{white-space:pre;background:#f3f3f3;padding:0}</style>
-                </head><body><div id="label"></div><pre><code id="code"></code></pre>
-                <script src="highlight.min.js"></script><script>
-                const element=document.getElementById('code');
-                element.textContent=$quotedCode;
-                const language=$quotedLanguage;
-                document.getElementById('label').textContent=language;
-                if(language && hljs.getLanguage(language)) element.className='language-'+language;
-                hljs.highlightElement(element);
-                </script></body></html>
-            """.trimIndent(), "text/html", "UTF-8", null)
-        } }, modifier = Modifier.fillMaxWidth().height(heightDp), onRelease = { it.destroy() }
-    )
 }
 
 @Composable
 private fun MermaidBlock(source: String) {
-    if (!rememberWebContentReady(source)) {
-        Spacer(Modifier.fillMaxWidth().height(280.dp).background(Color(0xFFF3F3F3)))
-        return
+    val lines = remember(source) { source.lines().map(String::trim).filter(String::isNotBlank) }
+    Column(Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        lines.forEach { line ->
+            Text(line, color = Ink, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()))
+        }
     }
-    val quoted = remember(source) { JSONObject.quote(source) }
-    AndroidView(
-        factory = { context -> WebView(context).apply {
-            settings.javaScriptEnabled = true
-            settings.allowFileAccess = true
-            settings.allowContentAccess = false
-            setBackgroundColor(android.graphics.Color.rgb(243, 243, 243))
-            loadDataWithBaseURL("file:///android_asset/", """
-                <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-                <body style="margin:0;background:#f3f3f3;overflow:auto"><div id="diagram"></div>
-                <script src="mermaid.min.js"></script><script>
-                mermaid.initialize({startOnLoad:false,securityLevel:'strict',theme:'default'});
-                mermaid.render('diagram-svg', $quoted).then(({svg}) => { document.getElementById('diagram').innerHTML = svg; });
-                </script></body></html>
-            """.trimIndent(), "text/html", "UTF-8", null)
-        } }, modifier = Modifier.fillMaxWidth().height(280.dp), onRelease = { it.destroy() }
-    )
-}
-
-@Composable
-private fun rememberWebContentReady(vararg content: String?): Boolean {
-    var ready by remember(*content) { mutableStateOf(false) }
-    LaunchedEffect(*content) {
-        delay(180)
-        ready = true
-    }
-    return ready
 }
 
 @Composable
