@@ -103,8 +103,4 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
-    debugImplementation("io.github.didi.dokit:dokitx:3.7.11") {
-        exclude(group = "com.android.volley", module = "volley")
-    }
-    debugImplementation("com.android.volley:volley:1.2.1")
 }
