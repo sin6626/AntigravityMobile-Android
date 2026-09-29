@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.antigravity.mobile.data.model.ConversationItem
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.data.model.PairingInfo
 import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
@@ -62,6 +63,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
     fun mediaImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw)
+    suspend fun fetchLinkedFile(uri: String): Result<FileContentResponse> =
+        api.fetchFileContent(uri.substringBefore('#'), _state.value.selectedConversationId)
     val gatewayUrl: String? get() = prefs.gatewayBaseUrl
 
     init {

@@ -6,8 +6,10 @@ func TestParseTrajectoryDetailsPreservesThinkingAndToolDetail(t *testing.T) {
 	raw := &upstreamTrajectoryResp{}
 	raw.Trajectory.Steps = make([]TrajectoryStep, 3)
 	raw.Trajectory.Steps[0].Type = "CORTEX_STEP_TYPE_USER_INPUT"
+	raw.Trajectory.Steps[0].Metadata.CreatedAt = "2026-09-29T06:06:06Z"
 	raw.Trajectory.Steps[0].UserInput = &TrajectoryUserInput{UserResponse: "test"}
 	raw.Trajectory.Steps[1].Type = "CORTEX_STEP_TYPE_RUN_COMMAND"
+	raw.Trajectory.Steps[1].Metadata.CompletedAt = "2026-09-29T06:06:42Z"
 	raw.Trajectory.Steps[1].Metadata.ToolSummary = "Inspect files"
 	raw.Trajectory.Steps[1].RunCommand = &struct {
 		CommandLine         string `json:"commandLine"`
@@ -16,6 +18,8 @@ func TestParseTrajectoryDetailsPreservesThinkingAndToolDetail(t *testing.T) {
 		WaitMsBeforeAsync   string `json:"waitMsBeforeAsync"`
 	}{CommandLine: "pwd"}
 	raw.Trajectory.Steps[2].Type = "CORTEX_STEP_TYPE_PLANNER_RESPONSE"
+	raw.Trajectory.Steps[2].Metadata.ViewableAt = "2026/9/29 6:06:53"
+	raw.Trajectory.Steps[2].Metadata.FinishedGeneratingAt = "2026-09-29T06:07:06Z"
 	raw.Trajectory.Steps[2].PlannerResponse = &struct {
 		Response string `json:"response"`
 		Thinking string `json:"thinking"`
@@ -27,10 +31,23 @@ func TestParseTrajectoryDetailsPreservesThinkingAndToolDetail(t *testing.T) {
 	if got[1].Type != "tools" || len(got[1].Details) != 1 || got[1].Details[0].Command != "pwd" {
 		t.Fatalf("tool details lost: %#v", got[1])
 	}
+	if got[1].Duration != "36s" {
+		t.Fatalf("worked duration = %q", got[1].Duration)
+	}
 	if got[2].Type != "thought" || got[2].Text != "reasoning" {
 		t.Fatalf("thinking lost: %#v", got[2])
 	}
+	if got[2].Duration != "13s" {
+		t.Fatalf("thought duration = %q", got[2].Duration)
+	}
 	if got[3].Type != "agent" || got[3].Text != "answer" {
 		t.Fatalf("answer lost: %#v", got[3])
+	}
+}
+
+func TestCascadeStepDurationHandlesDesktopTimestamps(t *testing.T) {
+	got := cascadeStepDuration("2026/9/29 6:06:53", "2026-09-29T06:07:06.341458200Z")
+	if got != "13s" {
+		t.Fatalf("want desktop Thought duration 13s, got %q", got)
 	}
 }

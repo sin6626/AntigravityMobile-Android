@@ -454,6 +454,9 @@ type TrajectoryStep struct {
 	Status   string `json:"status"`
 	Metadata struct {
 		CreatedAt                string `json:"createdAt"`
+		CompletedAt              string `json:"completedAt"`
+		ViewableAt               string `json:"viewableAt"`
+		FinishedGeneratingAt     string `json:"finishedGeneratingAt"`
 		ToolSummary              string `json:"toolSummary,omitempty"`
 		ToolAction               string `json:"toolAction,omitempty"`
 		SourceTrajectoryStepInfo *struct {
@@ -888,11 +891,16 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 	var toolDetails []CascadeStepDetail
 	var toolsStartedAt string
 	var toolsEndedAt string
+	var turnStartedAt string
 	totalToolsCount := 0
 
 	flushTools := func() {
 		if pendingTools == 0 {
 			return
+		}
+		durationStart := toolsStartedAt
+		if turnStartedAt != "" {
+			durationStart = turnStartedAt
 		}
 		item := CascadeMessageItem{
 			ID:        fmt.Sprintf("tools-%d", len(allMessages)),
@@ -903,7 +911,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 			ToolCount: pendingTools,
 			ToolNames: toolNames,
 			Title:     "Worked",
-			Duration:  cascadeStepDuration(toolsStartedAt, toolsEndedAt),
+			Duration:  cascadeStepDuration(durationStart, toolsEndedAt),
 			Details:   toolDetails,
 		}
 		allMessages = append(allMessages, item)
@@ -919,6 +927,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 
 		if stepType == "CORTEX_STEP_TYPE_USER_INPUT" {
 			flushTools()
+			turnStartedAt = s.Metadata.CreatedAt
 			text := ""
 			if s.UserInput != nil {
 				text = s.UserInput.UserResponse
@@ -1003,6 +1012,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 				allMessages = append(allMessages, CascadeMessageItem{
 					ID: fmt.Sprintf("thought-%d", idx), Type: "thought", Role: "assistant",
 					Text: thinking, Content: thinking, Title: "Thought", StepIndex: &stepIdx,
+					Duration: cascadeStepDuration(s.Metadata.ViewableAt, s.Metadata.FinishedGeneratingAt),
 				})
 			}
 
@@ -1044,7 +1054,10 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 			if toolsStartedAt == "" {
 				toolsStartedAt = s.Metadata.CreatedAt
 			}
-			toolsEndedAt = s.Metadata.CreatedAt
+			toolsEndedAt = s.Metadata.CompletedAt
+			if toolsEndedAt == "" {
+				toolsEndedAt = s.Metadata.CreatedAt
+			}
 			command := ""
 			if s.RunCommand != nil {
 				command = s.RunCommand.CommandLine
@@ -1514,8 +1527,14 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 }
 
 func cascadeStepDuration(start, end string) string {
-	first, err1 := parseTime(start)
-	last, err2 := parseTime(end)
+	parse := func(value string) (time.Time, error) {
+		if parsed, err := parseTime(value); err == nil {
+			return parsed, nil
+		}
+		return time.Parse("2006/1/2 15:04:05", value)
+	}
+	first, err1 := parse(start)
+	last, err2 := parse(end)
 	if err1 != nil || err2 != nil || last.Before(first) {
 		return ""
 	}
