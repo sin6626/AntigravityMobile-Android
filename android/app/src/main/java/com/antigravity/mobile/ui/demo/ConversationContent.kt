@@ -31,6 +31,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
@@ -57,12 +58,18 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.antigravity.mobile.data.service.MathSymbolProcessor
+import androidx.compose.ui.platform.LocalContext
+import android.provider.Settings
 
 @Composable
 internal fun ConversationContent(
     viewModel: ChatViewModel,
     messages: List<GatewayMessageItem>,
+    streamingMessageId: String?,
     isLoading: Boolean,
     hasMore: Boolean,
     isLoadingOlder: Boolean,
@@ -71,6 +78,14 @@ internal fun ConversationContent(
     bottomSpace: androidx.compose.ui.unit.Dp = 24.dp,
 ) {
     val listState = rememberLazyListState()
+    LaunchedEffect(messages, streamingMessageId) {
+        withContext(Dispatchers.Default) {
+            messages.asReversed().asSequence()
+                .filter { it.isAgent && it.id != streamingMessageId && it.effectiveText.isNotBlank() }
+                .take(40)
+                .forEach { markdownCache.getOrParse(it.effectiveText.trim()) }
+        }
+    }
     if (isLoading && messages.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = AccentBlue)
@@ -90,7 +105,7 @@ internal fun ConversationContent(
         verticalArrangement = Arrangement.spacedBy(25.dp),
     ) {
         itemsIndexed(messages.asReversed(), key = { index, message -> message.id.ifBlank { "${message.type}-$index" } }) { _, message ->
-            MessageRow(message, viewModel)
+            MessageRow(message, viewModel, message.id == streamingMessageId)
         }
         if (hasMore) {
             item {
@@ -107,7 +122,7 @@ internal fun ConversationContent(
 }
 
 @Composable
-private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean) {
     val text = message.effectiveText.trim()
     val scope = rememberCoroutineScope()
     var linkedFile by remember(message.id) { mutableStateOf<FileContentResponse?>(null) }
@@ -144,7 +159,9 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel) {
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             MessageImages(message, viewModel)
-            if (text.isNotBlank()) MarkdownBody(text)
+            if (text.isNotBlank()) {
+                if (isStreaming) StreamingMessageText(message.id, text) else MarkdownBody(text)
+            }
         }
     }
     }
@@ -161,11 +178,31 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel) {
     }
 }
 
+@Composable
+private fun StreamingMessageText(id: String, source: String) {
+    val context = LocalContext.current
+    val animate = remember(context) {
+        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f
+    }
+    var shown by rememberSaveable(id) { mutableStateOf("") }
+    val reveal = remember(id) { StreamingTextReveal(shown) }
+    LaunchedEffect(id, source, animate) {
+        reveal.receive(source, animate, System.nanoTime() / 1_000_000)
+        shown = reveal.shown
+        while (reveal.hasPending) {
+            delay(16)
+            reveal.advance(System.nanoTime() / 1_000_000)
+            shown = reveal.shown
+        }
+    }
+    Text(shown, color = Ink, fontSize = 18.sp, lineHeight = 27.sp)
+}
+
 private val LocalRichLinkAction = staticCompositionLocalOf<(String) -> Unit> { {} }
 
 @Composable
 private fun MarkdownBody(source: String) {
-    val document = remember(source) { markdownParser.parse(normalizeBlockMath(source)) }
+    val document = remember(source) { markdownCache.getOrParse(source) }
     Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         var node = document.firstChild
         while (node != null) {
@@ -175,9 +212,21 @@ private fun MarkdownBody(source: String) {
     }
 }
 
-private val markdownParser = Parser.builder().extensions(
-    listOf(TablesExtension.create(), StrikethroughExtension.create())
-).build()
+private val markdownCache = object {
+    private val documents = object : LinkedHashMap<String, Node>(80, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Node>): Boolean = size > 80
+    }
+
+    fun getOrParse(source: String): Node {
+        synchronized(documents) { documents[source]?.let { return it } }
+        val parser = Parser.builder().extensions(
+            listOf(TablesExtension.create(), StrikethroughExtension.create())
+        ).build()
+        val parsed = parser.parse(normalizeBlockMath(source))
+        synchronized(documents) { documents[source] = parsed }
+        return parsed
+    }
+}
 
 @Composable
 private fun StepPanel(message: GatewayMessageItem) {

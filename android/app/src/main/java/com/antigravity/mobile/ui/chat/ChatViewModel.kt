@@ -40,6 +40,7 @@ data class ChatUiState(
     val nextMessageOffset: Int = 0,
     val isSending: Boolean = false,
     val isRunning: Boolean = false,
+    val streamingMessageId: String? = null,
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
     val conversations: List<ConversationItem> = emptyList(),
@@ -76,11 +77,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             stream.streamUpdates.collect { update ->
                 if (update == null || update.cascadeId != _state.value.selectedConversationId) return@collect
+                val previous = _state.value
+                val nextMessages = update.messages?.let { incoming ->
+                    if (update.isFullSnapshot) incoming else mergeMessages(previous.messages, incoming)
+                } ?: previous.messages
+                val running = update.status.contains("RUNNING", ignoreCase = true)
+                val latestAgent = nextMessages.lastOrNull { it.type == "agent" }
+                val previousText = previous.messages.firstOrNull { it.id == latestAgent?.id }?.effectiveText.orEmpty()
+                val growing = update.type != "init" && !previous.isLoadingMessages && latestAgent != null &&
+                    latestAgent.effectiveText.isNotEmpty() &&
+                    latestAgent.effectiveText != previousText && latestAgent.effectiveText.startsWith(previousText)
                 _state.value = _state.value.copy(
-                    messages = update.messages?.let { incoming ->
-                        if (update.isFullSnapshot) incoming else mergeMessages(_state.value.messages, incoming)
-                    } ?: _state.value.messages,
-                    isRunning = update.status.contains("RUNNING", ignoreCase = true),
+                    messages = nextMessages,
+                    isRunning = running,
+                    streamingMessageId = if (running && (growing || previous.streamingMessageId == latestAgent?.id)) latestAgent?.id else null,
                     pendingInteraction = update.pendingInteraction,
                 )
             }
@@ -251,6 +261,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             selectedConversationId = id,
             messages = emptyList(),
             isLoadingMessages = true,
+            streamingMessageId = null,
             isRunning = false,
             pendingInteraction = null,
             hasMoreMessages = false,
@@ -268,6 +279,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             selectedConversationId = null,
             messages = emptyList(),
             draft = "",
+            streamingMessageId = null,
             attachments = emptyList(),
             isLoadingMessages = false,
             isRunning = false,
@@ -283,7 +295,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val images = _state.value.attachments
         if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending) return
         val id = _state.value.selectedConversationId
-        _state.value = _state.value.copy(isSending = true, isRunning = true, error = null)
+        _state.value = _state.value.copy(isSending = true, isRunning = true, streamingMessageId = null, error = null)
         viewModelScope.launch {
             val result = if (id == null && images.isEmpty()) {
                 api.createCascade(

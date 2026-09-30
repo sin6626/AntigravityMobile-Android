@@ -143,6 +143,9 @@ class ApiClient(
                     if (pairResp.endpoints != null) {
                         for (ep in pairResp.endpoints) {
                             val epUrl = ep.url.trim().trimEnd('/')
+                            // The gateway's loopback address is only valid on the computer,
+                            // never as an endpoint for this Android device.
+                            if (ConnectionManager.extractHost(epUrl) in setOf("127.0.0.1", "::1", "localhost")) continue
                             if (!ConnectionManager.isTrustedEndpoint(epUrl, info, candidate)) {
                                 continue
                             }

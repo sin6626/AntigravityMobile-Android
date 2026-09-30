@@ -195,6 +195,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     ConversationContent(
                         viewModel = viewModel,
                         messages = state.messages,
+                        streamingMessageId = state.streamingMessageId,
                         isLoading = state.isLoadingMessages,
                         hasMore = state.hasMoreMessages,
                         isLoadingOlder = state.isLoadingOlder,
