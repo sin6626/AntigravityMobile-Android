@@ -1,19 +1,21 @@
 # ====================================================================
 # Antigravity Mobile - Git Ignore 配置
-# 仅追踪 Android 端代码，完全忽略其他后端与非 Android 模块
+# 追踪 Android 与 Go 网关源码，忽略本地构建与研究资料
 # ====================================================================
 
-# 1. 忽略根目录除 Android、.gitignore、Agent.md 外的所有文件和文件夹
+# 1. 仅放行应用与网关源码
 /*
 !/.gitignore
 !/Agent.md
 !/android/
+!/cmd/
 !/internal/
-/internal/*
-!/internal/proxy/
-/internal/proxy/*
-!/internal/proxy/trajectory.go
-!/internal/proxy/rich_message_test.go
+!/web/
+!/go.mod
+!/go.sum
+!/Makefile
+!/env.example
+!/.gitattributes
 
 # 2. Android 编译中间件与构建产物
 .gradle/
