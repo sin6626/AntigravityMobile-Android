@@ -21,3 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "antigravity-mobile"
 include(":app")
+include(":mermaidkotlin")

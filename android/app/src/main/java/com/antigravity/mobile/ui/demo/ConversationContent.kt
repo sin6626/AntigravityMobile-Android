@@ -1,6 +1,7 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Image as ComposeImage
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.horizontalScroll
@@ -13,6 +14,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.widthIn
@@ -55,6 +58,10 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.launch
@@ -63,6 +70,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.antigravity.mobile.data.service.MathSymbolProcessor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.asImageBitmap
 import android.provider.Settings
 
 @Composable
@@ -345,13 +354,39 @@ private fun MarkdownListItem(node: ListItem) {
 
 @Composable
 private fun MathParagraph(node: Paragraph) {
-    MarkdownAnnotatedText(remember(node) { buildAnnotatedString { append(MathSymbolProcessor.process(inlineText(node).text)) } })
+    val source = remember(node) { inlineText(node) }
+    val formulas = remember(source) { findInlineMath(source) }
+    val density = LocalDensity.current
+    val bitmaps = formulas.map { rememberMathBitmap(it.expression, with(density) { 18.sp.toPx() }, false) }
+    val text = buildAnnotatedString {
+        var cursor = 0
+        formulas.forEachIndexed { index, formula ->
+            append(source.subSequence(cursor, formula.start))
+            if (bitmaps[index] == null) append(MathSymbolProcessor.cleanMathExpression(formula.expression))
+            else appendInlineContent("formula-$index", formula.expression)
+            cursor = formula.endExclusive
+        }
+        append(source.subSequence(cursor, source.length))
+    }
+    val inline = bitmaps.mapIndexedNotNull { index, bitmap ->
+        bitmap ?: return@mapIndexedNotNull null
+        val scale = density.density * density.fontScale
+        "formula-$index" to InlineTextContent(
+            Placeholder((bitmap.width / scale).sp, (bitmap.height / scale).sp, PlaceholderVerticalAlign.Center)
+        ) { ComposeImage(bitmap.asImageBitmap(), contentDescription = formulas[index].expression, modifier = Modifier.fillMaxSize()) }
+    }.toMap()
+    Text(text, color = Ink, fontSize = 18.sp, lineHeight = 27.sp, inlineContent = inline)
 }
 
 @Composable
 private fun MathBlock(expression: String) {
-    Text(MathSymbolProcessor.cleanMathExpression(expression), color = Ink, fontSize = 19.sp,
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp))
+    val density = LocalDensity.current
+    val bitmap = rememberMathBitmap(expression, with(density) { 19.sp.toPx() }, true)
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(vertical = 8.dp)) {
+        if (bitmap == null) Text(MathSymbolProcessor.cleanMathExpression(expression), color = Ink, fontSize = 19.sp)
+        else ComposeImage(bitmap.asImageBitmap(), contentDescription = expression,
+            modifier = Modifier.width(with(density) { bitmap.width.toDp() }).height(with(density) { bitmap.height.toDp() }))
+    }
 }
 
 private fun normalizeBlockMath(source: String): String {
@@ -376,7 +411,7 @@ private fun normalizeBlockMath(source: String): String {
                 continue
             }
         }
-        output.append(line).append('\n')
+        output.append(if (fence.isEmpty()) line.replace("\\$", "\uE000") else line).append('\n')
         index++
     }
     return output.toString()
@@ -400,13 +435,12 @@ private fun CodeBlock(code: String, language: String) {
 
 @Composable
 private fun MermaidBlock(source: String) {
-    val lines = remember(source) { source.lines().map(String::trim).filter(String::isNotBlank) }
-    Column(Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        lines.forEach { line ->
-            Text(line, color = Ink, fontFamily = FontFamily.Monospace, fontSize = 14.sp,
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()))
-        }
+    val bitmap = rememberMermaidBitmap(source)
+    val density = LocalDensity.current
+    if (bitmap == null) CodeBlock(source, "mermaid")
+    else Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+        ComposeImage(bitmap.asImageBitmap(), contentDescription = "Mermaid 图表",
+            modifier = Modifier.width(with(density) { bitmap.width.toDp() }).height(with(density) { bitmap.height.toDp() }))
     }
 }
 
@@ -431,7 +465,13 @@ private fun MarkdownAnnotatedText(value: AnnotatedString, size: androidx.compose
 private fun inlineText(parent: Node): AnnotatedString = buildAnnotatedString {
     fun appendNode(node: Node) {
         when (node) {
-            is org.commonmark.node.Text -> append(node.literal)
+            is org.commonmark.node.Text -> {
+                val parts = node.literal.split('\uE000')
+                parts.forEachIndexed { index, part ->
+                    if (index > 0) { pushStringAnnotation("ESCAPED_DOLLAR", "1"); append("$"); pop() }
+                    append(part)
+                }
+            }
             is Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFFF2F2F2))) { append(node.literal) }
             is SoftLineBreak, is HardLineBreak -> append("\n")
             is Image -> append(node.title.ifBlank { node.destination })

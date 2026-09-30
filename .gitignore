@@ -20,6 +20,7 @@
 # 2. Android 编译中间件与构建产物
 .gradle/
 android/.gradle/
+android/.kotlin/
 android/**/build/
 android/**/.cxx/
 android/local.properties

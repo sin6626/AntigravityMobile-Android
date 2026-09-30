@@ -10,7 +10,7 @@
 - **UI 框架**：Jetpack Compose + Material 3
 - **异步与流式处理**：Kotlin Coroutines + StateFlow + OkHttp (WebSocket / HTTP)
 - **数据持久化与安全**：`EncryptedSharedPreferences` + Local Cache
-- **图表与渲染**：Mermaid WebView, Markdown 渲染, Coil 图片加载与手势大图查看器
+- **图表与渲染**：Compose/CommonMark 正文、RaTeX 原生公式、MermaidKotlin/Android Canvas 图表、Coil 图片加载
 
 ## 3. 核心目录结构
 ```
@@ -53,9 +53,10 @@ android/app/src/main/java/com/antigravity/mobile/
 - Android 正文改用 CommonMark 语法树；Go 网关原始 `plannerResponse.thinking` 和工具步骤元数据有独立字段，旧网关目前只返回工具汇总。Android 已兼容新旧响应。
 - 2026-09-30 用户要求将完整 Go 网关、构建入口与内嵌 Web 静态资源纳入 Git。网关源码位于 `cmd/`、`internal/`、`web/`，根目录保留 `go.mod`、`go.sum`、`Makefile` 和 `env.example`；本地构建、研究目录与私密配置继续忽略。
 - 网关保留独立 Thought、Worked 和工具详情、状态、时长，并使用原始步骤时间戳计算截图中的 36 秒与 13 秒。Android 历史与实时消息共用结构模型，旧响应继续兼容。
-- Android 已覆盖固定会话的标题、列表和任务框、表格、代码高亮、警示块、行内及块级公式、Mermaid、轮播、文件链接；KaTeX 与 Highlight.js 资源随 APK 离线打包，Mermaid 使用项目原有本地脚本。文件链接通过现有网关文件接口读取；模拟器上已点开样本中的 `sshd_config`。
-- 模拟器已逐段核对固定会话正文、公式、代码、Mermaid、轮播切换与文件弹窗；验收截图位于被 Git 忽略的 `android/design/.verification/`，含私人内容，不对外展示。新网关的真实响应和 Android 显示分别验证，未把已配对的 Android 切换到隔离网关。
-- 2026-09-29 用户反馈：聊天初始加载圈偏左上，快速滚动到富文本回复时闪黑卡顿。Android 将空消息加载态置于会话视口中央；WebView 内容进入可见区域后短暂延迟挂载，滚出后释放实例，并用与内容一致的背景色减少黑帧。用户强调后端修改须事先获得许可；此前两次提交曾改动 Go 网关，后续不再继续改动或替换正在运行的 mgy，须先征得同意。
+- Android 正文使用 Compose/CommonMark；旧版 KaTeX、Highlight.js 和 Mermaid 脚本资源虽仍在仓库，聊天渲染不再调用。文件链接通过现有网关文件接口读取。
+- 2026-09-30 再次通过运行中的网关核对“新建测试窗口”最新回复 `step-92`（先前只核对 `step-90`，漏掉真正样本）。该回复包含转义货币符号、行内/块级公式、矩阵、flowchart、sequenceDiagram、stateDiagram。Android 现用 RaTeX 原生 Canvas 绘制公式，用仓库内 MIT 授权的 MermaidKotlin 原生 Canvas 绘图，均不使用 WebView；图像在后台生成并按大小缓存。模拟器已核对公式、矩阵、流程图、时序图、状态图、轮播和链接；状态图边线布局仍拥挤，无法宣称与桌面图形完全一致。私密截图仅存 Git 忽略目录。
+- 本次滚动卡顿只排查、不修改列表性能逻辑。当前 LazyColumn 以消息为单位复用；一条长消息内部所有 Markdown 块同时组合、测量。解析有 80 项 LRU 和后台预热，但进入视口时的块组合仍在 UI 帧执行。模拟器对已加载的同一段内容连续快滑两轮分别为 23/96 和 41/131 掉帧，UI 慢帧计数均为 0，慢绘制命令计数为 18 和 33；重复快滑仍掉帧，因此缓存未命中不是唯一原因，绘制/布局成本更可疑。该模拟器数据不等同于真机定位。
+- 2026-09-29 用户反馈：聊天初始加载圈偏左上，快速滚动到富文本回复时闪黑卡顿。Android 将空消息加载态置于会话视口中央。此前 WebView 缓解方案已被后续原生渲染替代。用户现已授权 Go 网关纳入 Git 并用于配对；运行中的 mgy 须保持开启。
 - 2026-09-29 用户进一步确认不接受聊天内容中的 WebView，并明确后端若无法满足完整步骤数据需求可以修改、纳入 Git，但须先说明必要性。Android 聊天正文现改为 Compose 原生公式文本、代码块和 Mermaid 源结构展示，不再创建 WebView；复杂公式排版与 Mermaid 图形布局尚未达到桌面效果。先前打包的 JS/字体资源仍在仓库，但聊天代码不引用。
 - 2026-09-30 长列表与实时动画：对照 haklex 的静态渲染分层与 ChatKit 的增量显示状态，将流式动画限于 WebSocket 正在增长的最新 AI 正文，历史消息仍直接渲染完整 Markdown。动画按字符簇分批追加，积压超过阈值或停止输入后快速追上；内容修正时以网关正文为准。聊天列表中无 WebView/AndroidView 调用。
 - 2026-09-30 新网关由项目内 `go build -o bin/mgy.exe ./cmd/gateway` 构建，并在 58900 端口启动；`/healthz` 返回 200，能发现 Antigravity 实例。此进程为当前开发验收用，非旧安装版 mgy。
