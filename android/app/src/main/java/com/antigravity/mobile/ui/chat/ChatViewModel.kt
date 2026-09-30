@@ -161,14 +161,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun pair(uri: String, customUrl: String = "") {
         if (_state.value.isPairing) return
-        val info = try { PairingInfo.parseFromUri(uri) } catch (_: Exception) { null }
-        if (info == null) {
-            _state.value = _state.value.copy(error = "请粘贴 mgy pair 显示的完整配对链接或扫描二维码")
-            return
-        }
+        val input = uri.trim()
         val override = customUrl.trim().trimEnd('/').takeIf { it.isNotBlank() }
+        val parsed = override?.toHttpUrlOrNull()
         if (override != null) {
-            val parsed = override.toHttpUrlOrNull()
             if (parsed == null || parsed.encodedPath != "/" || parsed.query != null ||
                 parsed.fragment != null || parsed.username.isNotEmpty() || parsed.password.isNotEmpty()
             ) {
@@ -181,6 +177,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 _state.value = _state.value.copy(error = "公网地址请使用 HTTPS；局域网和 Tailscale 地址可使用 HTTP")
                 return
             }
+        }
+        val info = if (input.startsWith("agy://", ignoreCase = true) ||
+            input.startsWith("multigravity://", ignoreCase = true)
+        ) {
+            try { PairingInfo.parseFromUri(input) } catch (_: Exception) { null }
+        } else if (input.isNotBlank() && parsed != null) {
+            PairingInfo(host = parsed.host, port = parsed.port, code = input, ssl = parsed.isHttps)
+        } else null
+        if (info == null) {
+            _state.value = _state.value.copy(error = if (input.isBlank())
+                "还需填写 mgy pair 生成的配对码或扫描配对二维码（网关地址不能代替配对码）"
+            else "请粘贴完整配对链接；单独填写配对码时还需填写网关 URL")
+            return
         }
         _state.value = _state.value.copy(isPairing = true, error = null)
         viewModelScope.launch {

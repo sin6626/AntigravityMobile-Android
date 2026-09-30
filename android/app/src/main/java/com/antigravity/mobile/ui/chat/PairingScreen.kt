@@ -58,7 +58,7 @@ fun PairingScreen(
         }
         Text(if (onBack == null) "连接电脑网关" else "配对设置", color = Ink, fontSize = 29.sp)
         Spacer(Modifier.height(14.dp))
-        Text("在电脑运行 mgy pair，扫描二维码或粘贴完整配对链接。", color = Color(0xFF666666),
+        Text("在电脑运行 mgy pair，扫描二维码、粘贴配对链接，或填写配对码和网关地址。", color = Color(0xFF666666),
             fontSize = 16.sp, lineHeight = 24.sp)
         if (!currentGatewayUrl.isNullOrBlank()) {
             Spacer(Modifier.height(12.dp))
@@ -69,8 +69,8 @@ fun PairingScreen(
             value = uri,
             onValueChange = { uri = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("配对链接") },
-            placeholder = { Text("agy://pair?...") },
+            label = { Text("配对链接或配对码") },
+            placeholder = { Text("agy://pair?... 或 mgy pair 的配对码") },
             shape = RoundedCornerShape(18.dp),
             maxLines = 3,
         )
@@ -85,7 +85,7 @@ fun PairingScreen(
             singleLine = true,
         )
         Spacer(Modifier.height(9.dp))
-        Text("填写后将使用这个地址配对。Tailscale、内网穿透仍需 mgy pair 的配对码。",
+        Text("只填 Tailscale 地址无法配对；还需上方的配对码。点击配对可查看缺少的信息。",
             color = Color(0xFF666666), fontSize = 13.sp, lineHeight = 20.sp)
         if (error != null) {
             Spacer(Modifier.height(12.dp))
@@ -94,7 +94,7 @@ fun PairingScreen(
         Spacer(Modifier.height(22.dp))
         Button(
             onClick = { onPair(uri, customUrl) },
-            enabled = !isPairing && uri.isNotBlank(),
+            enabled = !isPairing,
             modifier = Modifier.fillMaxWidth().height(52.dp),
             colors = ButtonDefaults.buttonColors(containerColor = AccentBlue),
         ) { Text(if (isPairing) "正在连接…" else "重新配对") }
