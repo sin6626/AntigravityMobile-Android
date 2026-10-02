@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -75,6 +77,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import android.provider.Settings
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 internal fun ConversationContent(
     viewModel: ChatViewModel,
     messages: List<GatewayMessageItem>,
@@ -86,23 +89,24 @@ internal fun ConversationContent(
     modifier: Modifier = Modifier,
     bottomSpace: androidx.compose.ui.unit.Dp = 24.dp,
 ) {
-    val listState = rememberLazyListState()
+    val listState = rememberLazyListState(cacheWindow = remember {
+        LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
+    })
+    var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
     LaunchedEffect(messages, streamingMessageId) {
-        withContext(Dispatchers.Default) {
-            messages.asReversed().asSequence()
-                .filter { it.isAgent && it.id != streamingMessageId && it.effectiveText.isNotBlank() }
-                .take(40)
-                .forEach { markdownCache.getOrParse(it.effectiveText.trim()) }
+        val previous = renderItems
+        renderItems = withContext(Dispatchers.Default) {
+            buildConversationRenderItems(messages, streamingMessageId, previous)
         }
     }
-    if (isLoading && messages.isEmpty()) {
+    if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = AccentBlue)
         }
         return
     }
-    LaunchedEffect(messages.lastOrNull()?.id, messages.lastOrNull()?.effectiveText?.length) {
-        if (messages.isNotEmpty() && listState.firstVisibleItemIndex == 0 &&
+    LaunchedEffect(renderItems.lastOrNull()?.key, renderItems.lastOrNull()?.message?.effectiveText?.length) {
+        if (renderItems.isNotEmpty() && listState.firstVisibleItemIndex == 0 &&
             listState.firstVisibleItemScrollOffset < 80
         ) listState.scrollToItem(0)
     }
@@ -111,16 +115,22 @@ internal fun ConversationContent(
         state = listState,
         reverseLayout = true,
         contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
-        verticalArrangement = Arrangement.spacedBy(25.dp),
     ) {
-        itemsIndexed(messages.asReversed(), key = { index, message -> message.id.ifBlank { "${message.type}-$index" } }) { _, message ->
-            MessageRow(message, viewModel, message.id == streamingMessageId)
+        itemsIndexed(renderItems.asReversed(), key = { _, item -> item.key },
+            contentType = { _, item -> item.node?.javaClass?.name ?: item.message.type }) { index, item ->
+            Box(Modifier.padding(top = when {
+                index == renderItems.lastIndex -> 0.dp
+                item.blockIndex == 0 -> 25.dp
+                else -> 12.dp
+            })) {
+                MessageRow(item.message, viewModel, item.streaming, item.node, item.blockIndex == 0)
+            }
         }
         if (hasMore) {
             item {
                 Text(
                     if (isLoadingOlder) "正在加载…" else "加载更早消息",
-                    modifier = Modifier.fillMaxWidth().quietClickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 25.dp).quietClickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
                         .padding(vertical = 10.dp),
                     color = AccentBlue,
                     fontSize = 15.sp,
@@ -130,8 +140,46 @@ internal fun ConversationContent(
     }
 }
 
+internal data class ConversationRenderItem(
+    val message: GatewayMessageItem,
+    val messageKey: String,
+    val node: Node?,
+    val blockIndex: Int,
+    val streaming: Boolean,
+    val key: String,
+)
+
+internal fun buildConversationRenderItems(
+    messages: List<GatewayMessageItem>,
+    streamingMessageId: String?,
+    previous: List<ConversationRenderItem> = emptyList(),
+): List<ConversationRenderItem> {
+    val existing = previous.groupBy { it.messageKey }
+    return buildList {
+        messages.forEachIndexed { index, message ->
+            val messageKey = message.id.ifBlank { "${message.type}-$index" }
+            val streaming = message.id == streamingMessageId
+            val cached = existing[messageKey]
+            if (cached?.firstOrNull()?.let { it.message == message && it.streaming == streaming } == true) {
+                addAll(cached)
+            } else {
+                val blocks = if (message.isAgent && message.type != "thought" && !streaming && message.effectiveText.isNotBlank()) {
+                    // ponytail: top-level blocks are lazy; split individual huge tables/lists only if traces show they remain slow.
+                    generateSequence(markdownCache.getOrParse(message.effectiveText.trim()).firstChild) { it.next }.toList()
+                } else emptyList()
+                if (blocks.isEmpty()) add(ConversationRenderItem(message, messageKey, null, 0, streaming, messageKey))
+                else blocks.forEachIndexed { blockIndex, node ->
+                    // Retain the bottom item's identity when a streaming reply becomes Markdown.
+                    val key = if (blockIndex == blocks.lastIndex) messageKey else "$messageKey:markdown:$blockIndex"
+                    add(ConversationRenderItem(message, messageKey, node, blockIndex, false, key))
+                }
+            }
+        }
+    }
+}
+
 @Composable
-private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true) {
     val text = message.effectiveText.trim()
     val scope = rememberCoroutineScope()
     var linkedFile by remember(message.id) { mutableStateOf<FileContentResponse?>(null) }
@@ -167,8 +215,9 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
         Text(text.ifBlank { "请求失败" }, color = Color(0xFFB3261E), fontSize = 16.sp)
     } else {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            MessageImages(message, viewModel)
-            if (text.isNotBlank()) {
+            if (showImages) MessageImages(message, viewModel)
+            if (markdownNode != null) MarkdownBlock(markdownNode)
+            else if (text.isNotBlank()) {
                 if (isStreaming) StreamingMessageText(message.id, text) else MarkdownBody(text)
             }
         }
@@ -239,7 +288,7 @@ private val markdownCache = object {
 
 @Composable
 private fun StepPanel(message: GatewayMessageItem) {
-    var expanded by remember(message.id) { mutableStateOf(false) }
+    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "${message.title.ifBlank { if (message.type == "thought") "Thought" else "Worked" }}${message.duration.takeIf { it.isNotBlank() }?.let { " for $it" } ?: ""}  ${if (expanded) "⌄" else "›"}",
