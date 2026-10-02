@@ -276,9 +276,11 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 } else {
                     Column(Modifier.fillMaxSize().pointerInput(Unit) {
                         awaitEachGesture {
-                            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                            val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                             var horizontal = 0f
                             var vertical = 0f
+                            var travel = 0f
+                            var elapsed = 0L
                             var draggingPage = false
                             do {
                                 val event = awaitPointerEvent(PointerEventPass.Initial)
@@ -286,6 +288,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                                     val delta = change.positionChange()
                                     horizontal += delta.x
                                     vertical += delta.y
+                                    travel += abs(delta.x) + abs(delta.y)
+                                    elapsed = change.uptimeMillis - down.uptimeMillis
                                     if (!draggingPage && horizontal < -viewConfiguration.touchSlop &&
                                         abs(horizontal) > abs(vertical) * 1.2f) draggingPage = true
                                     if (draggingPage) {
@@ -297,6 +301,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             if (draggingPage) {
                                 val progress = pagerState.currentPage + pagerState.currentPageOffsetFraction
                                 scope.launch { pagerState.animateScrollToPage(if (progress > 0.38f) 1 else 0) }
+                            } else if (travel < viewConfiguration.touchSlop && elapsed < viewConfiguration.longPressTimeoutMillis) {
+                                focusManager.clearFocus()
                             }
                         }
                     }) {
