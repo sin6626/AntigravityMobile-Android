@@ -326,20 +326,22 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 }
                 }
             }
-            if (state.selectedConversationId == null && !projectsSelected) Composer(
-                activeConversation = state.selectedConversationId != null,
-                draft = state.draft,
-                attachments = state.attachments,
-                onDraftChange = viewModel::setDraft,
-                onAddImage = {
-                    imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                },
-                onRemoveImage = viewModel::removeImage,
-                onSend = viewModel::send,
-                isSending = state.isSending,
-                onUnsupported = unsupported,
-            )
-            if (state.selectedConversationId == null) Spacer(Modifier.height(23.dp))
+            if (state.selectedConversationId == null) Column(Modifier.imePadding()) {
+                if (!projectsSelected) Composer(
+                    activeConversation = state.selectedConversationId != null,
+                    draft = state.draft,
+                    attachments = state.attachments,
+                    onDraftChange = viewModel::setDraft,
+                    onAddImage = {
+                        imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    onRemoveImage = viewModel::removeImage,
+                    onSend = viewModel::send,
+                    isSending = state.isSending,
+                    onUnsupported = unsupported,
+                )
+                Spacer(Modifier.height(23.dp))
+            }
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
