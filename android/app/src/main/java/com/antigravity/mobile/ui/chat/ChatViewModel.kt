@@ -47,12 +47,45 @@ data class ChatUiState(
     val projects: List<ProjectItem> = emptyList(),
     val selectedConversationId: String? = null,
     val messages: List<GatewayMessageItem> = emptyList(),
+    val outgoing: List<OutgoingMessage> = emptyList(),
     val draft: String = "",
     val attachments: List<PendingImage> = emptyList(),
     val error: String? = null,
 )
 
 data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String)
+
+data class OutgoingMessage(
+    val conversationId: String,
+    val message: GatewayMessageItem,
+    val knownUserIds: Set<String>,
+    val afterStepIndex: Int? = null,
+)
+
+// The gateway does not echo X-Client-Message-Id in history; only match newly observed user steps.
+internal fun reconcileOutgoing(
+    outgoing: List<OutgoingMessage>,
+    conversationId: String,
+    incoming: List<GatewayMessageItem>,
+): List<OutgoingMessage> {
+    val candidates = incoming.filter { it.isUser }.toMutableList()
+    val confirmedIds = mutableSetOf<String>()
+    val remaining = outgoing.mapNotNull { pending ->
+        if (pending.conversationId != conversationId) pending else {
+            val index = candidates.indexOfFirst {
+                it.id !in pending.knownUserIds && it.effectiveText == pending.message.effectiveText &&
+                    (pending.afterStepIndex == null || (it.stepIndex ?: -1) > pending.afterStepIndex) &&
+                    (pending.message.imageDataList.isEmpty() ||
+                        !it.media.isNullOrEmpty() || !it.imageUrls.isNullOrEmpty() || it.imageDataList.isNotEmpty())
+            }
+            if (index >= 0) confirmedIds += candidates.removeAt(index).id
+            if (index >= 0) null else pending
+        }
+    }
+    return remaining.map {
+        if (it.conversationId == conversationId) it.copy(knownUserIds = it.knownUserIds + confirmedIds) else it
+    }
+}
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = PreferencesManager(application)
@@ -87,9 +120,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val growing = update.type != "init" && !previous.isLoadingMessages && latestAgent != null &&
                     latestAgent.effectiveText.isNotEmpty() &&
                     latestAgent.effectiveText != previousText && latestAgent.effectiveText.startsWith(previousText)
+                val outgoing = reconcileOutgoing(previous.outgoing, update.cascadeId, nextMessages)
                 _state.value = _state.value.copy(
                     messages = nextMessages,
-                    isRunning = running,
+                    outgoing = outgoing,
+                    isRunning = running || outgoing.any { it.conversationId == update.cascadeId },
                     streamingMessageId = if (running && (growing || previous.streamingMessageId == latestAgent?.id)) latestAgent?.id else null,
                     pendingInteraction = update.pendingInteraction,
                 )
@@ -155,7 +190,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(
             isPaired = false, isLoadingConversations = false, isLoadingProjects = false,
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
-            messages = emptyList(), error = "设备授权已失效，请重新配对",
+            messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
         )
     }
 
@@ -271,7 +306,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             messages = emptyList(),
             isLoadingMessages = true,
             streamingMessageId = null,
-            isRunning = false,
+            isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -302,9 +337,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun send() {
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
-        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending) return
+        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages) return
         val id = _state.value.selectedConversationId
-        _state.value = _state.value.copy(isSending = true, isRunning = true, streamingMessageId = null, error = null)
+        val clientId = UUID.randomUUID().toString()
+        var targetId = id ?: "local:$clientId"
+        val pending = OutgoingMessage(targetId,
+            GatewayMessageItem(id = "local:$clientId", text = text, imageDataList = images.map { it.bytes }),
+            _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
+            _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull())
+        val wasRunning = _state.value.isRunning
+        _state.value = _state.value.copy(
+            selectedConversationId = targetId, outgoing = _state.value.outgoing + pending,
+            draft = "", attachments = emptyList(),
+            isSending = true, isRunning = true, streamingMessageId = null, error = null)
         viewModelScope.launch {
             val result = if (id == null && images.isEmpty()) {
                 api.createCascade(
@@ -317,11 +362,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 api.createCascade("", "", model = DEFAULT_CHAT_MODEL, projectId = ProjectItem.PURE_CHAT.id)
                     .fold(
                         onSuccess = { createdId ->
-                            openConversation(createdId)
+                            _state.value = _state.value.copy(outgoing = _state.value.outgoing.map {
+                                if (it.message.id == pending.message.id) it.copy(conversationId = createdId) else it
+                            })
+                            if (_state.value.selectedConversationId == targetId) openConversation(createdId)
+                            targetId = createdId
                             api.sendMessage(
                                 createdId, text, model = DEFAULT_CHAT_MODEL,
                                 images = images.map { it.bytes to it.mimeType },
-                                clientMessageId = UUID.randomUUID().toString(),
+                                clientMessageId = clientId,
                             ).map { createdId }
                         },
                         onFailure = { Result.failure(it) },
@@ -329,24 +378,34 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 api.sendMessage(
                     id, text, images = images.map { it.bytes to it.mimeType },
-                    clientMessageId = UUID.randomUUID().toString(),
+                    clientMessageId = clientId,
                 ).map { id }
             }
             result.fold(
                 onSuccess = { conversationId ->
-                    _state.value = _state.value.copy(draft = "", attachments = emptyList(), isSending = false)
-                    if (id == null && images.isEmpty()) {
+                    _state.value = _state.value.copy(isSending = false,
+                        outgoing = _state.value.outgoing.map {
+                            if (it.message.id == pending.message.id) it.copy(conversationId = conversationId) else it
+                        })
+                    if (_state.value.selectedConversationId == targetId && targetId.startsWith("local:")) {
                         openConversation(conversationId)
-                    } else {
+                    } else if (_state.value.selectedConversationId == conversationId) {
                         loadMessages(conversationId)
                     }
                     refreshConversations()
                 },
                 onFailure = { error ->
-                    _state.value = _state.value.copy(
+                    val current = _state.value
+                    val stillHere = current.selectedConversationId == targetId
+                    val unconfirmed = current.outgoing.any { it.message.id == pending.message.id }
+                    _state.value = current.copy(
+                        outgoing = current.outgoing.filterNot { it.message.id == pending.message.id },
+                        selectedConversationId = if (stillHere && targetId.startsWith("local:")) null else current.selectedConversationId,
+                        draft = if (unconfirmed) listOf(text, current.draft).filter { it.isNotBlank() }.joinToString("\n\n") else current.draft,
+                        attachments = if (unconfirmed) (images + current.attachments).distinctBy { it.uri } else current.attachments,
                         isSending = false,
-                        isRunning = false,
-                        error = error.message ?: "消息发送失败",
+                        isRunning = if (stillHere && unconfirmed) wasRunning else current.isRunning,
+                        error = if (unconfirmed) "${error.message ?: "消息发送失败"}（内容已恢复到输入框）" else null,
                     )
                 },
             )
@@ -355,6 +414,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteSelectedConversation() {
         val id = _state.value.selectedConversationId ?: return
+        if (id.startsWith("local:")) return
         viewModelScope.launch {
             api.deleteConversation(id).fold(
                 onSuccess = {
@@ -398,9 +458,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             api.fetchMessages(id, limit = 50).fold(
                 onSuccess = { payload ->
                     if (_state.value.selectedConversationId == id) {
+                        val outgoing = reconcileOutgoing(_state.value.outgoing, id, payload.messages.orEmpty())
                         _state.value = _state.value.copy(
                             messages = payload.messages ?: emptyList(),
-                            isRunning = payload.status.contains("RUNNING", ignoreCase = true),
+                            outgoing = outgoing,
+                            isRunning = payload.status.contains("RUNNING", ignoreCase = true) ||
+                                outgoing.any { it.conversationId == id },
                             pendingInteraction = payload.pendingInteraction,
                             isLoadingMessages = false,
                             hasMoreMessages = payload.hasMore,

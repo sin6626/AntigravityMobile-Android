@@ -26,6 +26,9 @@ import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.DisableSelection
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -89,6 +92,7 @@ internal fun ConversationContent(
     viewModel: ChatViewModel,
     messages: List<GatewayMessageItem>,
     streamingMessageId: String?,
+    isRunning: Boolean,
     isLoading: Boolean,
     hasMore: Boolean,
     isLoadingOlder: Boolean,
@@ -100,6 +104,8 @@ internal fun ConversationContent(
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
     })
     var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
+    val newestLocalId = messages.lastOrNull { it.id.startsWith("local:") }?.id
+    var lastScrolledLocalId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(messages, streamingMessageId) {
         val previous = renderItems
         renderItems = withContext(Dispatchers.Default) {
@@ -117,6 +123,12 @@ internal fun ConversationContent(
             listState.firstVisibleItemScrollOffset < 80
         ) listState.scrollToItem(0)
     }
+    LaunchedEffect(newestLocalId, renderItems.lastOrNull()?.key, isRunning) {
+        if (newestLocalId != null && newestLocalId != lastScrolledLocalId && renderItems.any { it.message.id == newestLocalId }) {
+            listState.scrollToItem(0)
+            lastScrolledLocalId = newestLocalId
+        }
+    }
     SelectionContainer {
         LazyColumn(
             modifier = modifier.fillMaxWidth(),
@@ -124,9 +136,21 @@ internal fun ConversationContent(
             reverseLayout = true,
             contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
         ) {
+            if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
+                DisableSelection {
+                    Text("正在回复…", color = SecondaryInk, fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 12.dp))
+                }
+            }
             itemsIndexed(renderItems.asReversed(), key = { _, item -> item.key },
                 contentType = { _, item -> item.node?.javaClass?.name ?: item.message.type }) { index, item ->
-                Column(Modifier.padding(top = when {
+                val entryModifier = if (item.message.id.startsWith("local:")) {
+                    var entered by rememberSaveable(item.key) { mutableStateOf(false) }
+                    LaunchedEffect(item.key) { entered = true }
+                    val alpha by animateFloatAsState(if (entered) 1f else 0f, tween(180), label = "sentMessage")
+                    Modifier.graphicsLayer { this.alpha = alpha }
+                } else Modifier
+                Column(entryModifier.padding(top = when {
                     index == renderItems.lastIndex -> 0.dp
                     item.blockIndex == 0 -> 25.dp
                     else -> 12.dp

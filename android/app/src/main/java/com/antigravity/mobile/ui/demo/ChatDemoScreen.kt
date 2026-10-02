@@ -194,8 +194,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 Box(Modifier.weight(1f)) {
                     ConversationContent(
                         viewModel = viewModel,
-                        messages = state.messages,
+                        messages = state.messages + state.outgoing.filter { it.conversationId == state.selectedConversationId }.map { it.message },
                         streamingMessageId = state.streamingMessageId,
+                        isRunning = state.isRunning,
                         isLoading = state.isLoadingMessages,
                         hasMore = state.hasMoreMessages,
                         isLoadingOlder = state.isLoadingOlder,
@@ -219,9 +220,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                     )
                     Column(Modifier.align(Alignment.BottomCenter).imePadding()) {
                     Column(Modifier.onSizeChanged { composerHeightPx = it.height }) {
-                        if (state.isRunning) Text("正在回复…",
-                            modifier = Modifier.padding(start = 28.dp, bottom = 12.dp),
-                            color = SecondaryInk, fontSize = 14.sp)
                         state.pendingInteraction?.let { interaction ->
                             InteractionPanel(interaction = interaction,
                                 isSubmitting = state.isSubmittingInteraction,
@@ -235,7 +233,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onRemoveImage = viewModel::removeImage,
                             onSend = viewModel::send,
-                            isSending = state.isSending,
+                            isSending = state.isSending || state.isLoadingMessages,
                             onUnsupported = unsupported,
                         )
                         Spacer(Modifier.height(23.dp))
