@@ -16,6 +16,7 @@ class ConversationRenderItemsTest {
         assertTrue(items[2].node is Heading)
         assertTrue(items[3].node is Paragraph)
         assertNull(items[1].node)
+        assertEquals(listOf("reply"), items.filter { it.canCopy }.map { it.message.id })
 
         val older = GatewayMessageItem(id = "older", text = "older question")
         val paged = buildConversationRenderItems(listOf(older, user, thought, reply), null, items)
@@ -26,9 +27,11 @@ class ConversationRenderItemsTest {
         assertEquals(2, streaming.size)
         assertNull(streaming.last().node)
         assertTrue(streaming.last().streaming)
+        assertFalse(streaming.any { it.canCopy })
         val finished = buildConversationRenderItems(listOf(user, reply), null, streaming)
         assertEquals(streaming.last().key, finished.last().key)
         assertEquals(4, finished.size)
+        assertEquals(1, finished.count { it.canCopy })
         assertEquals(finished.size, finished.map { it.key }.toSet().size)
     }
 }

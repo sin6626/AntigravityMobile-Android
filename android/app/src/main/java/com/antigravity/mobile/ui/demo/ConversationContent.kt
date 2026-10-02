@@ -24,6 +24,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.layout.LazyLayoutCacheWindow
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -57,7 +59,7 @@ import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
 import coil.compose.AsyncImage
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.foundation.text.ClickableText
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.InlineTextContent
@@ -75,6 +77,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.asImageBitmap
 import android.provider.Settings
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -110,31 +117,38 @@ internal fun ConversationContent(
             listState.firstVisibleItemScrollOffset < 80
         ) listState.scrollToItem(0)
     }
-    LazyColumn(
-        modifier = modifier.fillMaxWidth(),
-        state = listState,
-        reverseLayout = true,
-        contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
-    ) {
-        itemsIndexed(renderItems.asReversed(), key = { _, item -> item.key },
-            contentType = { _, item -> item.node?.javaClass?.name ?: item.message.type }) { index, item ->
-            Box(Modifier.padding(top = when {
-                index == renderItems.lastIndex -> 0.dp
-                item.blockIndex == 0 -> 25.dp
-                else -> 12.dp
-            })) {
-                MessageRow(item.message, viewModel, item.streaming, item.node, item.blockIndex == 0)
+    SelectionContainer {
+        LazyColumn(
+            modifier = modifier.fillMaxWidth(),
+            state = listState,
+            reverseLayout = true,
+            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
+        ) {
+            itemsIndexed(renderItems.asReversed(), key = { _, item -> item.key },
+                contentType = { _, item -> item.node?.javaClass?.name ?: item.message.type }) { index, item ->
+                Column(Modifier.padding(top = when {
+                    index == renderItems.lastIndex -> 0.dp
+                    item.blockIndex == 0 -> 25.dp
+                    else -> 12.dp
+                }), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (item.streaming) DisableSelection {
+                        MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
+                    } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
+                    if (item.canCopy) DisableSelection { CopyReplyButton(item.message.effectiveText) }
+                }
             }
-        }
-        if (hasMore) {
-            item {
-                Text(
-                    if (isLoadingOlder) "正在加载…" else "加载更早消息",
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 25.dp).quietClickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
-                        .padding(vertical = 10.dp),
-                    color = AccentBlue,
-                    fontSize = 15.sp,
-                )
+            if (hasMore) {
+                item {
+                    DisableSelection {
+                        Text(
+                            if (isLoadingOlder) "正在加载…" else "加载更早消息",
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 25.dp).quietClickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
+                                .padding(vertical = 10.dp),
+                            color = AccentBlue,
+                            fontSize = 15.sp,
+                        )
+                    }
+                }
             }
         }
     }
@@ -147,7 +161,19 @@ internal data class ConversationRenderItem(
     val blockIndex: Int,
     val streaming: Boolean,
     val key: String,
-)
+) {
+    val canCopy: Boolean
+        get() = !streaming && key == messageKey && message.isAgent && message.type != "thought" && message.effectiveText.isNotBlank()
+}
+
+@Composable
+private fun CopyReplyButton(source: String) {
+    val clipboard = LocalClipboardManager.current
+    Box(Modifier.size(44.dp).semantics { contentDescription = "复制整条回复"; role = Role.Button }
+        .quietClickable { clipboard.setText(AnnotatedString(source)) }, contentAlignment = Alignment.Center) {
+        Symbol("content_copy", size = 20, color = SecondaryInk)
+    }
+}
 
 internal fun buildConversationRenderItems(
     messages: List<GatewayMessageItem>,
@@ -503,12 +529,18 @@ private fun MarkdownText(node: Node, size: androidx.compose.ui.unit.TextUnit = 1
 private fun MarkdownAnnotatedText(value: AnnotatedString, size: androidx.compose.ui.unit.TextUnit = 18.sp, weight: FontWeight = FontWeight.Normal) {
     val uriHandler = LocalUriHandler.current
     val richLinkAction = LocalRichLinkAction.current
-    ClickableText(text = value, style = androidx.compose.ui.text.TextStyle(color = Ink, fontSize = size, lineHeight = (size.value * 1.5f).sp, fontWeight = weight), onClick = { offset ->
-        value.getStringAnnotations("URL", offset, offset).firstOrNull()?.item?.let { url ->
-            if (url.startsWith("https://") || url.startsWith("http://")) uriHandler.openUri(url)
-            else richLinkAction(url)
+    val selectable = remember(value, uriHandler, richLinkAction) {
+        buildAnnotatedString {
+            append(value)
+            value.getStringAnnotations("URL", 0, value.length).forEach { link ->
+                addLink(LinkAnnotation.Clickable(link.item) {
+                    if (link.item.startsWith("https://") || link.item.startsWith("http://")) uriHandler.openUri(link.item)
+                    else richLinkAction(link.item)
+                }, link.start, link.end)
+            }
         }
-    })
+    }
+    Text(text = selectable, color = Ink, fontSize = size, lineHeight = (size.value * 1.5f).sp, fontWeight = weight)
 }
 
 private fun inlineText(parent: Node): AnnotatedString = buildAnnotatedString {

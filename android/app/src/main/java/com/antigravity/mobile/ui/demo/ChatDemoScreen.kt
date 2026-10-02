@@ -203,15 +203,17 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                         bottomSpace = composerHeight + keyboardHeight + 23.dp,
                         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {
-                                awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                 var travel = 0f
+                                var elapsed = 0L
                                 do {
                                     val event = awaitPointerEvent(PointerEventPass.Initial)
                                     event.changes.forEach { change ->
                                         travel += abs(change.positionChange().x) + abs(change.positionChange().y)
+                                        elapsed = change.uptimeMillis - down.uptimeMillis
                                     }
                                 } while (event.changes.any { it.pressed })
-                                if (travel < viewConfiguration.touchSlop) focusManager.clearFocus()
+                                if (travel < viewConfiguration.touchSlop && elapsed < viewConfiguration.longPressTimeoutMillis) focusManager.clearFocus()
                             }
                         },
                     )
