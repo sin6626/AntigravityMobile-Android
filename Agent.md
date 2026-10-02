@@ -48,6 +48,11 @@ android/app/src/main/java/com/antigravity/mobile/
 - 2026-09-27：聊天消息列表改为固定在页面视口，输入栏叠加并跟随 IME Insets；列表底部按键盘高度增加可滚动空间，收起键盘时移除。使用 edge-to-edge；模拟器已验证键盘打开无黑色空隙、列表可继续滚动。验证图仍仅保存在忽略目录中。
 
 ## 5. 开发与规范准则
+### 2026-10-02 USB 真机卡顿排查
+- 使用 vivo V2339FA（Android 16）和用户刚 Run 的当前开发包，未修改 Android 性能代码，未停止或重启 mgy。
+- 两轮快滑都出现少数慢帧；Perfetto 定位到 41.635/43.655 ms 的界面帧，其中 Compose 布局耗时 35.029/33.257 ms，分别测量 90/84 个富文本节点。主线程在布局时持续 Running，RenderThread 最慢约 5.36 ms，另有 15.139 ms 紧急预取。
+- 首要瓶颈是整条长消息进入视口时的组合与布局；AST 预解析不能消除布局成本。建议下一步拆分长消息内 Markdown 块为稳定列表项，当前仅诊断没有实现。详情见 `android/docs/chat-scroll-diagnosis-2026-10-02.md`，私密轨迹仅留忽略目录。
+
 ### 2026-09-29 对话内容适配
 - 固定验收会话“新建测试窗口”已通过运行中的 mgy 网关定位；其末条回复包含标题、强调、任务清单、GFM 表格、代码、警示块、数学和 Mermaid 示例。
 - Android 正文改用 CommonMark 语法树；Go 网关原始 `plannerResponse.thinking` 和工具步骤元数据有独立字段，旧网关目前只返回工具汇总。Android 已兼容新旧响应。
