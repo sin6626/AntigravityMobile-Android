@@ -5,6 +5,9 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.text.selection.LocalTextSelectionColors
 import androidx.compose.foundation.text.selection.TextSelectionColors
 import androidx.compose.runtime.CompositionLocalProvider
@@ -17,6 +20,7 @@ import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.longClick
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -149,12 +153,14 @@ class ReplyMediaAndCopyTest {
     @Test fun failedImageShowsAnExplanationInsteadOfBlankSpace() {
         val vm = ViewModelProvider(compose.activity)[ChatViewModel::class.java]
         compose.setContent {
+            Box(Modifier.padding(48.dp)) {
             MessageImages(GatewayMessageItem(id = "broken-image", type = "agent",
                 imageUrls = listOf("http://127.0.0.1:1/missing.png")), vm)
+            }
         }
         compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithContentDescription("聊天图片，点击放大").performClick()
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败，点击关闭").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("图片加载失败，点击关闭").performClick()
+        compose.onNodeWithContentDescription("聊天图片，点击放大").performTouchInput { click(center) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("关闭").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("关闭").performClick()
     }
 }

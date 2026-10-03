@@ -119,6 +119,7 @@ internal fun ConversationContent(
     onLoadOlder: () -> Unit,
     modifier: Modifier = Modifier,
     bottomSpace: androidx.compose.ui.unit.Dp = 24.dp,
+    olderError: String? = null,
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -201,8 +202,8 @@ internal fun ConversationContent(
             ) {
                 if (hasMore) item(key = "load-older", contentType = "load-older") {
                     DisableSelection {
-                        Text(if (isLoadingOlder) "正在加载…" else "加载更早消息",
-                            modifier = Modifier.fillMaxWidth().quietClickable(enabled = !isLoadingOlder) {
+                        Text(if (isLoadingOlder) "正在加载…" else olderError?.let { "加载失败，点击重试" } ?: "加载更早消息",
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).quietClickable(enabled = !isLoadingOlder) {
                                 listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "load-older" }?.let {
                                     historyAnchor = it.key.toString() to -it.offset
                                 }
@@ -251,7 +252,7 @@ internal fun ConversationContent(
             modifier = Modifier.align(Alignment.BottomCenter).offset(y = -bottomSpace),
             enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
             Surface(shape = CircleShape, color = Color.White, shadowElevation = 3.dp) {
-                Box(Modifier.size(44.dp).semantics { contentDescription = "回到最新消息" }
+                Box(Modifier.size(48.dp).semantics { contentDescription = "回到最新消息" }
                     .quietClickable(CircleShape) {
                         scope.launch {
                             followLatest = true
@@ -297,7 +298,7 @@ internal fun CopyTextButton(source: String, description: String) {
             copies = 0
         }
     }
-    Box(Modifier.size(44.dp).semantics {
+    Box(Modifier.size(48.dp).semantics {
         contentDescription = description
         role = Role.Button
         stateDescription = if (copies > 0) "已复制" else "未复制"
@@ -380,7 +381,7 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
                 if (message.stepIndex != null && !message.id.startsWith("local:")) DisableSelection {
                     Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
                         CopyTextButton(message.effectiveText, "复制用户消息")
-                        Box(Modifier.size(44.dp).semantics { contentDescription = "回退到这条消息";
+                        Box(Modifier.size(48.dp).semantics { contentDescription = "回退到这条消息";
                             stateDescription = if (message.canRevert && allowRevert) "可回退" else message.revertReason ?: "当前无法回退" }
                             .quietClickable(enabled = message.canRevert && allowRevert) { viewModel.previewRevert(message) }
                             .alpha(if (message.canRevert && allowRevert) 1f else 0.35f), contentAlignment = Alignment.Center) {

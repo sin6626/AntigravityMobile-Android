@@ -104,7 +104,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         ActivityResultContracts.PickMultipleVisualMedia(4),
     ) { uris -> viewModel.addImages(uris) }
     val unsupported: () -> Unit = {
-        scope.launch { snackbar.showSnackbar("当前版本先支持文字聊天") }
+        scope.launch { snackbar.showSnackbar("已支持文字和图片，语音功能暂未开放") }
     }
     LaunchedEffect(state.selectedConversationId) {
         showDeleteConfirm = false
@@ -173,6 +173,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 projects = state.projects,
                 isLoading = state.isLoadingConversations,
                 isLoadingProjects = state.isLoadingProjects,
+                selectedConversationId = state.selectedConversationId,
+                conversationsError = state.conversationsError, projectsError = state.projectsError,
+                onRetryConversations = viewModel::refreshConversations, onRetryProjects = viewModel::refreshProjects,
                 onOpenConversation = { id ->
                     archivedOpen = false; openedFromArchive = false
                     openedFromProject = false
@@ -213,6 +216,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             if (archivedOpen) {
+                state.conversationsError?.let { LoadFailure(it, state.isLoadingConversations, viewModel::refreshConversations) }
                 ArchivedConversations(state.conversations, state.isLoadingConversations, state.busyConversations,
                     onBack = { archivedOpen = false }, onRefresh = viewModel::refreshConversations,
                     onOpen = { id -> archivedOpen = false; openedFromArchive = true; viewModel.openConversation(id) },
@@ -245,6 +249,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
                         state.selectedConversationId !in state.busyConversations && !state.isReverting,
                 )
+                state.messagesError?.let { LoadFailure(it, state.isLoadingMessages, viewModel::retryMessages) }
+                if (!state.selectedConversationId.orEmpty().startsWith("local:") && state.connectionStatus != com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED) {
+                    LoadFailure(if (state.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTING)
+                        "正在连接，生成状态待同步…" else "连接已断开，正在自动重连…", state.isLoadingMessages, viewModel::retryMessages)
+                } else if (state.pendingInteraction != null) {
+                    Text("等待你的操作", color = SecondaryInk, modifier = Modifier.padding(horizontal = 22.dp))
+                }
                 key(state.selectedConversationId) {
                 Box(Modifier.weight(1f)) {
                     ConversationContent(
@@ -256,6 +267,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         hasMore = state.hasMoreMessages,
                         isLoadingOlder = state.isLoadingOlder,
                         onLoadOlder = viewModel::loadOlderMessages,
+                        olderError = state.olderMessagesError,
                         bottomSpace = composerHeight + keyboardHeight + 23.dp,
                         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {
@@ -294,6 +306,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         projects = state.projects,
                         conversations = activeConversations,
                         isLoading = state.isLoadingProjects,
+                        error = state.projectsError, onRetry = viewModel::refreshProjects,
                         onOpenConversation = { id ->
                             archivedOpen = false; openedFromArchive = false
                             openedFromProject = true
@@ -347,6 +360,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         if (recent.isEmpty() && state.isLoadingConversations) {
                             Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)
                         }
+                        state.conversationsError?.let { LoadFailure(it, state.isLoadingConversations, viewModel::refreshConversations) }
                         recent.forEach { conversation ->
                             Text(
                                 conversation.displayTitle,

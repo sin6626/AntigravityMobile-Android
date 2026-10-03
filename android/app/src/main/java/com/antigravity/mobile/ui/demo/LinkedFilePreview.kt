@@ -18,6 +18,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -33,8 +34,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -99,17 +98,21 @@ internal fun MarkdownImage(uri: String, title: String?) {
     val request = LocalRichImageRequest.current
     var loading by remember(uri) { mutableStateOf(true) }
     var failed by remember(uri) { mutableStateOf(false) }
+    var attempt by remember(uri) { mutableStateOf(0) }
+    var expanded by remember(uri) { mutableStateOf(false) }
     Box(Modifier.fillMaxWidth().heightIn(min = 80.dp, max = 400.dp), contentAlignment = Alignment.Center) {
-        AsyncImage(model = remember(uri, request) { request(uri) },
+        key(uri, attempt) { AsyncImage(model = remember(uri, request, attempt) { request(uri) },
             imageLoader = LocalRichImageLoader.current ?: LocalContext.current.imageLoader,
             contentDescription = title ?: "文档图片", contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().quietClickable { expanded = true },
             onLoading = { loading = true; failed = false },
             onSuccess = { loading = false; failed = false },
-            onError = { loading = false; failed = true })
+            onError = { loading = false; failed = true }) }
         if (loading) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-        if (failed) Text("图片加载失败", color = SecondaryInk, fontSize = 14.sp)
+        if (failed) TextButton(onClick = { attempt++ }) { Text("图片加载失败，重试", color = AccentBlue) }
     }
+    if (expanded) ImageViewer(request(uri), LocalRichImageLoader.current ?: LocalContext.current.imageLoader,
+        title ?: "文档图片", { expanded = false })
 }
 
 @Composable
@@ -137,7 +140,7 @@ internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss:
                     Text(file?.filename ?: previewFileName(uri), color = Ink, fontWeight = FontWeight.SemiBold,
                         maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     if (kind != FilePreviewKind.IMAGE && kind != FilePreviewKind.UNSUPPORTED) {
-                        Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                             file?.let { CopyTextButton(it.content, "复制文件原文") }
                         }
                     }
@@ -149,7 +152,7 @@ internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss:
                     kind == FilePreviewKind.UNSUPPORTED -> Text("暂不支持预览此文件类型", color = SecondaryInk)
                     error != null -> Column {
                         Text(error.orEmpty(), color = Color(0xFFB3261E))
-                        Text("重试", color = AccentBlue, modifier = Modifier.quietClickable { attempt++ }.padding(12.dp))
+                        TextButton(onClick = { attempt++ }) { Text("重试", color = AccentBlue) }
                     }
                     file != null -> CompositionLocalProvider(LocalRichImageRequest provides imageRequest) {
                         FileTextPreview(file!!, Modifier.fillMaxSize())
@@ -161,7 +164,7 @@ internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss:
             }
             DisableSelection {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Text("关闭", color = AccentBlue, modifier = Modifier.quietClickable(onClick = onDismiss).padding(12.dp))
+                    TextButton(onClick = onDismiss) { Text("关闭", color = AccentBlue) }
                 }
             }
         }
@@ -190,19 +193,5 @@ internal fun FileTextPreview(file: FileContentResponse, modifier: Modifier = Mod
 
 @Composable
 private fun FileImagePreview(uri: String, viewModel: ChatViewModel, modifier: Modifier) {
-    var loading by remember(uri) { mutableStateOf(true) }
-    var failed by remember(uri) { mutableStateOf(false) }
-    var attempt by remember(uri) { mutableStateOf(0) }
-    val request = remember(uri, attempt) { viewModel.linkedImageRequest(uri.substringBefore('#')) }
-    Box(modifier.fillMaxWidth().heightIn(min = 120.dp), contentAlignment = Alignment.Center) {
-        key(uri, attempt) {
-            AsyncImage(model = request, imageLoader = viewModel.mediaImageLoader,
-                contentDescription = "文件图片预览", contentScale = ContentScale.Fit,
-                modifier = Modifier.fillMaxWidth().semantics { stateDescription = if (failed) "加载失败" else if (loading) "加载中" else "已加载" }, onLoading = { loading = true; failed = false },
-                onSuccess = { loading = false; failed = false }, onError = { loading = false; failed = true })
-        }
-        if (loading) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
-        if (failed) Text("图片加载失败，点击重试", color = AccentBlue,
-            modifier = Modifier.quietClickable { attempt++ }.padding(20.dp))
-    }
+    ZoomableImage(remember(uri) { viewModel.linkedImageRequest(uri.substringBefore('#')) }, viewModel.mediaImageLoader, "文件图片预览", modifier)
 }

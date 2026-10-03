@@ -19,6 +19,7 @@ import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
 import com.antigravity.mobile.data.service.PreferencesManager
 import com.antigravity.mobile.data.service.StreamWebSocketClient
+import com.antigravity.mobile.data.service.ConnectionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -62,6 +63,11 @@ data class ChatUiState(
     val draft: String = "",
     val attachments: List<PendingImage> = emptyList(),
     val error: String? = null,
+    val messagesError: String? = null,
+    val olderMessagesError: String? = null,
+    val conversationsError: String? = null,
+    val projectsError: String? = null,
+    val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
 )
 
 data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String)
@@ -107,6 +113,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var draftKey = NEW_CHAT_DRAFT
     private val draftAttachments = mutableMapOf<String, List<PendingImage>>()
     private var conversationVisit = 0L
+    private var messagesRevision = 0L
+    private var fullSnapshotRevision = 0L
+    private var messagesJob: Job? = null
     private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired(), draft = prefs.getDraftText(draftKey)))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
@@ -123,8 +132,21 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             refreshProjects()
         }
         viewModelScope.launch {
+            stream.connectionStatus.collect { status ->
+                _state.value = _state.value.copy(connectionStatus = status)
+                if (status == ConnectionStatus.UNAUTHORIZED) expirePairing()
+                else if (status == ConnectionStatus.CONNECTED) _state.value.selectedConversationId?.let { loadMessages(it) }
+            }
+        }
+        viewModelScope.launch {
             stream.streamUpdates.collect { update ->
                 if (update == null || update.cascadeId != _state.value.selectedConversationId) return@collect
+                if (update.type == "error") {
+                    _state.value = _state.value.copy(messagesError = update.errorMessage ?: "同步消息失败", isLoadingMessages = false)
+                    return@collect
+                }
+                messagesRevision++
+                if (update.isFullSnapshot) fullSnapshotRevision = messagesRevision
                 val previous = _state.value
                 val nextMessages = update.messages?.let { incoming ->
                     if (update.isFullSnapshot) incoming else mergeMessages(previous.messages, incoming)
@@ -142,6 +164,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isRunning = running || outgoing.any { it.conversationId == update.cascadeId },
                     streamingMessageId = if (running && (growing || previous.streamingMessageId == latestAgent?.id)) latestAgent?.id else null,
                     pendingInteraction = update.pendingInteraction,
+                    isLoadingMessages = false, messagesError = null,
+                    hasMoreMessages = if (previous.isLoadingMessages || update.isFullSnapshot) update.hasMore else previous.hasMoreMessages,
+                    nextMessageOffset = if (previous.isLoadingMessages || update.isFullSnapshot) update.nextOffset else previous.nextMessageOffset,
                 )
             }
         }
@@ -226,6 +251,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun expirePairing() {
         if (!_state.value.isPaired) return
+        conversationVisit++
+        messagesJob?.cancel(); messagesJob = null
         prefs.deviceToken = null
         prefs.deviceId = null
         stream.disconnect()
@@ -234,6 +261,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isPaired = false, isLoadingConversations = false, isLoadingProjects = false,
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
             messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
+            isLoadingMessages = false,
         )
     }
 
@@ -277,6 +305,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isPaired = true, isPairing = false,
                         pairSuccessCount = _state.value.pairSuccessCount + 1,
                         conversations = emptyList(), projects = emptyList(), error = null,
+                        isLoadingConversations = false, isLoadingProjects = false,
+                        conversationsError = null, projectsError = null,
                     )
                     connectionManager.startMonitoring(prefs, viewModelScope)
                     refreshConversations()
@@ -290,15 +320,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshConversations() {
-        if (!_state.value.isPaired) return
+        if (!_state.value.isPaired || _state.value.isLoadingConversations) return
         _state.value = _state.value.copy(isLoadingConversations = true)
         viewModelScope.launch {
-            api.fetchConversations().fold(
+            val token = prefs.deviceToken
+            val result = api.fetchConversations()
+            if (prefs.deviceToken != token) return@launch
+            result.fold(
                 onSuccess = { conversations ->
+                    if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         conversations = conversations,
                         isLoadingConversations = false,
-                        error = null,
+                        conversationsError = null,
                     )
                 },
                 onFailure = { error ->
@@ -309,7 +343,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         isLoadingConversations = false,
-                        error = error.message ?: "获取会话列表失败",
+                        conversationsError = error.message ?: "获取会话列表失败",
                     )
                 },
             )
@@ -320,11 +354,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (!_state.value.isPaired || _state.value.isLoadingProjects) return
         _state.value = _state.value.copy(isLoadingProjects = true)
         viewModelScope.launch {
-            api.fetchProjects().fold(
+            val token = prefs.deviceToken
+            val result = api.fetchProjects()
+            if (prefs.deviceToken != token) return@launch
+            result.fold(
                 onSuccess = { projects ->
+                    if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         projects = projects.filterNot { it.isPureChat },
                         isLoadingProjects = false,
+                        projectsError = null,
                     )
                 },
                 onFailure = { error ->
@@ -335,7 +374,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         isLoadingProjects = false,
-                        error = error.message ?: "获取项目失败",
+                        projectsError = error.message ?: "获取项目失败",
                     )
                 },
             )
@@ -344,6 +383,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun openConversation(id: String) {
         conversationVisit++
+        messagesJob?.cancel(); messagesJob = null
         switchDraft(id)
         stream.disconnect()
         _state.value = _state.value.copy(
@@ -360,6 +400,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
+            messagesError = null, olderMessagesError = null,
         )
         stream.connect(id)
         loadMessages(id)
@@ -376,6 +417,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun closeConversation() {
         conversationVisit++
+        messagesJob?.cancel(); messagesJob = null
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = null,
@@ -391,6 +433,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
+            messagesError = null, olderMessagesError = null,
         )
     }
 
@@ -605,6 +648,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 draftAttachments[id] = (images + if (draftKey == id) _state.value.attachments else draftAttachments[id].orEmpty()).distinctBy { it.uri }
                 if (conversationVisit == visit) {
                     conversationVisit++
+                    messagesJob?.cancel(); messagesJob = null
                     stream.disconnect()
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
                         draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
@@ -668,35 +712,52 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadMessages(id: String): Job {
+        messagesJob?.takeIf { it.isActive }?.let { return it }
         val visit = conversationVisit
+        val revision = messagesRevision
         return viewModelScope.launch {
             api.fetchMessages(id, limit = 50).fold(
                 onSuccess = { payload ->
                     if (_state.value.selectedConversationId == id && conversationVisit == visit) {
-                        val outgoing = reconcileOutgoing(_state.value.outgoing, id, payload.messages.orEmpty())
+                        if (fullSnapshotRevision > revision) return@fold
+                        val changed = messagesRevision != revision
+                        val current = _state.value
+                        val merged = if (changed) mergeMessages(payload.messages.orEmpty(), current.messages)
+                            else mergeMessages(current.messages, payload.messages.orEmpty())
+                        val outgoing = reconcileOutgoing(current.outgoing, id, merged)
                         _state.value = _state.value.copy(
-                            messages = payload.messages ?: emptyList(),
+                            messages = merged,
                             outgoing = outgoing,
-                            isRunning = payload.status.contains("RUNNING", ignoreCase = true) ||
+                            isRunning = (if (changed) current.isRunning else payload.status.contains("RUNNING", ignoreCase = true)) ||
                                 outgoing.any { it.conversationId == id },
-                            pendingInteraction = payload.pendingInteraction,
+                            pendingInteraction = if (changed) current.pendingInteraction else payload.pendingInteraction,
                             isLoadingMessages = false,
                             hasMoreMessages = payload.hasMore,
                             nextMessageOffset = payload.nextOffset,
-                            error = null,
+                            messagesError = null,
                         )
                     }
                 },
                 onFailure = { error ->
                     if (_state.value.selectedConversationId == id && conversationVisit == visit) {
+                        if (error is GatewayAuthorizationException) { expirePairing(); return@fold }
+                        if (messagesRevision != revision) return@fold
                         _state.value = _state.value.copy(
                             isLoadingMessages = false,
-                            error = error.message ?: "获取消息失败",
+                            messagesError = error.message ?: "获取消息失败",
                         )
                     }
                 },
             )
-        }
+        }.also { messagesJob = it }
+    }
+
+    fun retryMessages() {
+        val id = _state.value.selectedConversationId ?: return
+        if (messagesJob?.isActive == true) return
+        _state.value = _state.value.copy(isLoadingMessages = true, messagesError = null)
+        loadMessages(id)
+        if (_state.value.connectionStatus != ConnectionStatus.CONNECTED) stream.reconnect()
     }
 
     fun loadOlderMessages() {
@@ -704,7 +765,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val id = current.selectedConversationId ?: return
         if (!current.hasMoreMessages || current.isLoadingOlder) return
-        _state.value = current.copy(isLoadingOlder = true)
+        _state.value = current.copy(isLoadingOlder = true, olderMessagesError = null)
         viewModelScope.launch {
             api.fetchMessages(id, limit = 50, offset = current.nextMessageOffset).fold(
                 onSuccess = { payload ->
@@ -721,9 +782,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 },
                 onFailure = { error ->
                     if (conversationVisit != visit) return@fold
+                    if (error is GatewayAuthorizationException) { expirePairing(); return@fold }
                     _state.value = _state.value.copy(
                         isLoadingOlder = false,
-                        error = error.message ?: "加载更早消息失败",
+                        olderMessagesError = error.message ?: "加载更早消息失败",
                     )
                 },
             )
@@ -731,7 +793,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
-        stream.disconnect()
+        stream.close()
         connectionManager.stopMonitoring()
         super.onCleared()
     }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,6 +36,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.material3.TextButton
 import com.antigravity.mobile.data.model.ConversationItem
 import com.antigravity.mobile.data.model.ProjectItem
 
@@ -50,6 +56,9 @@ internal fun DemoDrawer(
     onNewChat: () -> Unit,
     onPairing: () -> Unit,
     onArchived: () -> Unit,
+    selectedConversationId: String? = null,
+    conversationsError: String? = null, projectsError: String? = null,
+    onRetryConversations: () -> Unit = {}, onRetryProjects: () -> Unit = {},
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
@@ -64,11 +73,11 @@ internal fun DemoDrawer(
                 fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             RoundIconButton("search", "搜索", { searchOpen = !searchOpen }, size = 50.dp)
         }
-        if (searchOpen) {
+        if (searchOpen) Row(verticalAlignment = Alignment.CenterVertically) {
             BasicTextField(
                 value = searchText,
                 onValueChange = { searchText = it },
-                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                modifier = Modifier.weight(1f).padding(bottom = 16.dp)
                     .background(Color(0xFFF3F3F3), RoundedCornerShape(20.dp))
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 singleLine = true,
@@ -79,11 +88,14 @@ internal fun DemoDrawer(
                     }
                 },
             )
+            TextButton(onClick = { searchText = "" }, enabled = searchText.isNotEmpty()) { Text("清空", color = AccentBlue) }
         }
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             DrawerMenuItem("chat_bubble", "聊天", onNewChat)
             DrawerMenuItem("archive", "已归档", onArchived)
             DrawerMenuItem("folder", "项目") { projectsOpen = !projectsOpen }
+            projectsError?.let { LoadFailure(it, isLoadingProjects, onRetryProjects) }
+            conversationsError?.let { LoadFailure(it, isLoading, onRetryConversations) }
             if (projectsOpen || searchText.isNotBlank()) {
                 val visibleProjects = projects.filter { project ->
                     searchText.isBlank() || project.name.contains(searchText, ignoreCase = true) ||
@@ -94,11 +106,11 @@ internal fun DemoDrawer(
                     Text("正在加载项目…", modifier = Modifier.padding(start = 45.dp, top = 8.dp),
                         color = SecondaryInk, fontSize = 15.sp)
                 } else if (visibleProjects.isEmpty()) {
-                    Text("暂无项目", modifier = Modifier.padding(start = 45.dp, top = 8.dp),
+                    Text(if (searchText.isBlank()) "暂无项目" else "没有匹配的项目", modifier = Modifier.padding(start = 45.dp, top = 8.dp),
                         color = SecondaryInk, fontSize = 15.sp)
                 }
-                visibleProjects.forEachIndexed { index, project ->
-                    val projectKey = "$index:${project.id}:${project.uri}"
+                visibleProjects.distinctBy { it.navigationKey() }.forEach { project ->
+                    val projectKey = project.navigationKey()
                     val projectChats = conversations.filter { it.belongsTo(project, projects) && !it.isSubagent }
                     DrawerProject(project.name, expandedProjects.contains(projectKey)) {
                         expandedProjects = if (projectKey in expandedProjects)
@@ -115,7 +127,7 @@ internal fun DemoDrawer(
                                 color = SecondaryInk, fontSize = 14.sp)
                         }
                         visibleChats.forEach { item ->
-                            DrawerConversation(item.displayTitle, indent = 45.dp) {
+                            DrawerConversation(item.displayTitle, indent = 45.dp, current = item.id == selectedConversationId) {
                                 onOpenProjectConversation(item.id)
                             }
                         }
@@ -127,7 +139,7 @@ internal fun DemoDrawer(
             val pinned = conversations.filter { it.isPinned && it.displayTitle.contains(searchText, true) }
             if (pinned.isNotEmpty()) {
                 DrawerSection("置顶")
-                pinned.forEach { item -> DrawerConversation(item.displayTitle) {
+                pinned.forEach { item -> DrawerConversation(item.displayTitle, current = item.id == selectedConversationId) {
                     if (item.isPureChat) onOpenConversation(item.id) else onOpenProjectConversation(item.id)
                 } }
                 Spacer(Modifier.height(20.dp))
@@ -138,10 +150,10 @@ internal fun DemoDrawer(
             if (isLoading && filtered.isEmpty()) {
                 Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)
             } else if (filtered.isEmpty()) {
-                Text("暂无会话", color = SecondaryInk, fontSize = 16.sp)
+                if (conversationsError == null) Text(if (searchText.isBlank()) "暂无最近会话" else "没有匹配的最近会话", color = SecondaryInk, fontSize = 16.sp)
             }
             filtered.forEach { item ->
-                DrawerConversation(item.displayTitle) { onOpenConversation(item.id) }
+                DrawerConversation(item.displayTitle, current = item.id == selectedConversationId) { onOpenConversation(item.id) }
             }
         }
         Row(
@@ -159,11 +171,11 @@ internal fun DemoDrawer(
                 Spacer(Modifier.width(10.dp))
                 Text("配对", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium)
             }
-            Box(
-                modifier = Modifier.size(42.dp).background(Color(0xFFE8E8E8), CircleShape)
-                    .quietClickable(CircleShape, onClick = onPairing),
-                contentAlignment = Alignment.Center,
-            ) { Symbol("person", size = 26, color = SecondaryInk) }
+            Box(Modifier.size(48.dp).semantics { contentDescription = "打开配对设置" }
+                .quietClickable(CircleShape, onClick = onPairing), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(42.dp).background(Color(0xFFE8E8E8), CircleShape),
+                    contentAlignment = Alignment.Center) { Symbol("person", size = 26, color = SecondaryInk) }
+            }
         }
     }
 }
@@ -189,7 +201,7 @@ private fun DrawerSection(title: String) {
 @Composable
 private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(51.dp).quietClickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().heightIn(min = 51.dp).semantics { stateDescription = if (expanded) "已展开" else "已折叠" }.quietClickable(onClick = onClick)
             .padding(start = 28.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -202,10 +214,11 @@ private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit)
 }
 
 @Composable
-private fun DrawerConversation(title: String, indent: androidx.compose.ui.unit.Dp = 0.dp, onClick: () -> Unit) {
+private fun DrawerConversation(title: String, indent: androidx.compose.ui.unit.Dp = 0.dp, current: Boolean = false, onClick: () -> Unit) {
     Text(
         title,
-        modifier = Modifier.fillMaxWidth().height(52.dp).quietClickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { selected = current }
+            .background(if (current) Color(0xFFF1F1F1) else Color.Transparent, RoundedCornerShape(14.dp)).quietClickable(onClick = onClick)
             .padding(start = indent, top = 12.dp),
         color = Ink,
         fontSize = 17.sp,
@@ -213,6 +226,10 @@ private fun DrawerConversation(title: String, indent: androidx.compose.ui.unit.D
         overflow = TextOverflow.Ellipsis,
     )
 }
+
+// ponytail: rows without ID/URI/path use their name; identical names need stable backend IDs to distinguish them.
+internal fun ProjectItem.navigationKey(): String =
+    listOf(id, uri.ifBlank { path }.trimEnd('/')).takeIf { it.any(String::isNotBlank) }?.joinToString("\u0000") ?: "name:$name"
 
 internal fun ConversationItem.belongsTo(project: ProjectItem, allProjects: List<ProjectItem>): Boolean {
     if (isPureChat) return false

@@ -24,6 +24,7 @@ internal fun ArchivedConversations(conversations: List<ConversationItem>, loadin
             TextButton(onClick = onRefresh, enabled = !loading) { Text("刷新", color = AccentBlue) }
         }
         OutlinedTextField(query, { query = it }, placeholder = { Text("搜索归档会话") }, singleLine = true,
+            trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清空", color = AccentBlue) } },
             shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
             colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
                 focusedBorderColor = AccentBlue, unfocusedContainerColor = androidx.compose.ui.graphics.Color(0xFFF3F3F3),

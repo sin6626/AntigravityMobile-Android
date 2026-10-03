@@ -9,12 +9,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.Json
 import okhttp3.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 enum class ConnectionStatus {
     DISCONNECTED,
     CONNECTING,
     CONNECTED,
-    FAILED
+    FAILED,
+    UNAUTHORIZED
 }
 
 class StreamWebSocketClient(
@@ -43,6 +45,7 @@ class StreamWebSocketClient(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
+    private val generation = AtomicLong()
 
     init {
         connectionManager?.addOnRouteChangedListener { newUrl ->
@@ -73,6 +76,7 @@ class StreamWebSocketClient(
     }
 
     fun disconnect(intentional: Boolean = true) {
+        generation.incrementAndGet()
         isIntentionallyClosed = intentional
         reconnectAttempt = 0
         reconnectJob?.cancel()
@@ -82,6 +86,8 @@ class StreamWebSocketClient(
         } catch (_: Exception) {}
         webSocket = null
         if (intentional) {
+            activeCascadeId = null
+            _streamUpdates.value = null
             _connectionStatus.value = ConnectionStatus.DISCONNECTED
         }
     }
@@ -93,6 +99,7 @@ class StreamWebSocketClient(
             return
         }
         val cascadeId = activeCascadeId ?: return
+        val visit = generation.incrementAndGet()
 
         val wsUrl = buildWebSocketUrl(baseUrl, cascadeId)
         _connectionStatus.value = ConnectionStatus.CONNECTING
@@ -110,12 +117,14 @@ class StreamWebSocketClient(
 
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (generation.get() != visit) { webSocket.close(1000, "Stale connection"); return }
                 Log.d("StreamWS", "Connected to cascade stream: $cascadeId")
                 reconnectAttempt = 0
                 _connectionStatus.value = ConnectionStatus.CONNECTED
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (generation.get() != visit) return
                 try {
                     val payload = json.decodeFromString<StreamUpdatePayload>(text)
                     _streamUpdates.value = payload
@@ -125,12 +134,18 @@ class StreamWebSocketClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (generation.get() != visit) return
+                if (response?.code == 401) {
+                    _connectionStatus.value = ConnectionStatus.UNAUTHORIZED
+                    return
+                }
                 Log.w("StreamWS", "WebSocket failure: ${t.message}")
                 _connectionStatus.value = ConnectionStatus.FAILED
                 scheduleReconnect()
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (generation.get() != visit) return
                 Log.d("StreamWS", "WebSocket closed: $code - $reason")
                 if (!isIntentionallyClosed) {
                     _connectionStatus.value = ConnectionStatus.DISCONNECTED
@@ -153,15 +168,20 @@ class StreamWebSocketClient(
         }
         reconnectAttempt++
 
+        val visit = generation.get()
         reconnectJob = scope.launch {
             delay(delayMs)
-            if (!isIntentionallyClosed && activeCascadeId != null) {
+            if (generation.get() == visit && !isIntentionallyClosed && activeCascadeId != null) {
                 connectionManager?.probeEndpoints(prefs)
+                if (generation.get() != visit) return@launch
                 Log.d("StreamWS", "Attempting reconnection (attempt #$reconnectAttempt, delay=${delayMs}ms)...")
+                reconnectJob = null
                 startConnection()
             }
         }
     }
+
+    fun close() { disconnect(); scope.cancel() }
 
     private fun buildWebSocketUrl(baseUrl: String, cascadeId: String, ticket: String? = null): String {
         val cleanBase = baseUrl.trimEnd('/')

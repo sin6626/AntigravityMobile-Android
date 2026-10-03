@@ -496,16 +496,290 @@ class ChatUxTest {
         }
     }
 
+    @Test fun reconnectRetriesAndLateSnapshotsPreserveMessagesDraftsAndOtherConversations() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true; gateway.liveStream = true
+            gateway.failurePath = "/gateway/cascade/messages"
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("recovery", vm) }
+            fun main(action: () -> Unit) = compose.runOnIdle(action)
+            try {
+                main { vm.openConversation("A"); vm.setDraft("keep draft") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.messagesError != null }
+                assertTrue(vm.state.value.messages.isEmpty())
+                gateway.failurePath = null
+                main { vm.retryMessages(); vm.retryMessages() }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.messages.isNotEmpty() }
+                assertNull(vm.state.value.messagesError)
+                gateway.messageText = "after reconnect"
+                gateway.dropStreams()
+                compose.waitUntil(15_000) { vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED &&
+                    vm.state.value.messages.any { it.effectiveText == "after reconnect" } }
+                assertEquals("keep draft", vm.state.value.draft)
+
+                val requested = CountDownLatch(1); val release = CountDownLatch(1)
+                gateway.block = { path -> if (path.startsWith("/gateway/cascade/messages")) { requested.countDown(); release.await(10, TimeUnit.SECONDS) } }
+                main { vm.retryMessages() }
+                assertTrue(requested.await(10, TimeUnit.SECONDS))
+                gateway.emit("A", """{"cascadeId":"A","status":"RUNNING","messages":[{"id":"step-0","type":"user","text":"new stream"}]}""")
+                compose.waitUntil(10_000) { vm.state.value.messages.any { it.effectiveText == "new stream" } }
+                release.countDown()
+                compose.waitForIdle()
+                assertEquals("new stream", vm.state.value.messages.single().effectiveText)
+                assertTrue(vm.state.value.isRunning)
+                gateway.block = {}
+                gateway.failurePath = "GetAllCascadeTrajectories"
+                main { vm.refreshConversations() }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingConversations }
+                assertNotNull(vm.state.value.conversationsError)
+                assertEquals(2, vm.state.value.conversations.size)
+                val listsBefore = gateway.requests.count { it.first.contains("GetAllCascadeTrajectories") }
+                gateway.failurePath = null
+                main { vm.refreshConversations(); vm.refreshConversations() }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingConversations }
+                assertNull(vm.state.value.conversationsError)
+                assertEquals(listsBefore + 1, gateway.requests.count { it.first.contains("GetAllCascadeTrajectories") })
+                main { vm.openConversation("B"); vm.setDraft("B draft") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                assertEquals("B", vm.state.value.selectedConversationId)
+                assertEquals("B draft", vm.state.value.draft)
+                gateway.failurePath = "/gateway/cascade/messages"; gateway.failureCode = 401
+                main { vm.retryMessages() }
+                compose.waitUntil(10_000) { !vm.state.value.isPaired }
+                assertEquals("B draft", vm.state.value.draft)
+                PreferencesManager(app).deviceToken = "test-token"
+                gateway.failurePath = "/gateway/cascade/stream"
+                val socketVm = ChatViewModel(app)
+                val socketStore = ViewModelStore().apply { put("socket-auth", socketVm) }
+                try {
+                    main { socketVm.openConversation("A") }
+                    compose.waitUntil(10_000) { !socketVm.state.value.isPaired }
+                    assertEquals("keep draft", socketVm.state.value.draft)
+                } finally { main { socketStore.clear() } }
+            } finally { main { store.clear() } }
+        }
+    }
+
+    @Test fun realEmulatorOfflineRecoveryKeepsTheDraft() {
+        org.junit.Assume.assumeTrue(android.os.Build.HARDWARE == "ranchu" &&
+            InstrumentationRegistry.getArguments().getString("round2RealNetwork") == "true")
+        val original = PreferencesManager(compose.activity.application)
+        val app = isolatedApplication()
+        PreferencesManager(app).apply {
+            gatewayBaseUrl = InstrumentationRegistry.getArguments().getString("uxGatewayUrl") ?: original.gatewayBaseUrl
+            deviceToken = original.deviceToken
+        }
+        fun shell(command: String): String = android.os.ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).bufferedReader().use { it.readText() }
+        val wifi = shell("settings get global wifi_on").trim() == "1"
+        val data = shell("settings get global mobile_data").trim() == "1"
+        val api = ApiClient(app, PreferencesManager(app))
+        val id = runBlocking { api.createCascade("", "", "gemini-3.8-flash-high", ProjectItem.PURE_CHAT.id).getOrThrow() }
+        val vm = ChatViewModel(app)
+        val store = ViewModelStore().apply { put("offline", vm) }
+        try {
+            compose.setContent { ChatDemoScreen(vm, {}) }
+            compose.runOnIdle { vm.openConversation(id); vm.setDraft("网络恢复验收草稿，不发送") }
+            compose.waitUntil(20_000) { !vm.state.value.isLoadingMessages && vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+            shell("svc wifi disable"); shell("svc data disable")
+            compose.runOnIdle { vm.retryMessages() }
+            compose.waitUntil(30_000) { !vm.state.value.isLoadingMessages && vm.state.value.messagesError != null }
+            assertEquals("网络恢复验收草稿，不发送", vm.state.value.draft)
+            saveScreenshot("round2-offline.png")
+            shell("svc wifi ${if (wifi) "enable" else "disable"}"); shell("svc data ${if (data) "enable" else "disable"}")
+            val network = app.getSystemService(android.net.ConnectivityManager::class.java)
+            compose.waitUntil(30_000) { network.activeNetwork != null }
+            compose.runOnIdle { vm.retryMessages() }
+            compose.waitUntil(30_000) { !vm.state.value.isLoadingMessages && vm.state.value.messagesError == null &&
+                vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+            assertEquals("网络恢复验收草稿，不发送", vm.state.value.draft)
+        } finally {
+            shell("svc wifi ${if (wifi) "enable" else "disable"}"); shell("svc data ${if (data) "enable" else "disable"}")
+            compose.runOnIdle { store.clear() }
+            runBlocking { api.deleteConversation(id).getOrThrow() }
+        }
+    }
+
+    @Test fun searchSelectionAndProjectExpansionSurviveFilteringAndReordering() {
+        val projects = mutableStateOf(listOf(ProjectItem(rawId = "p", name = "Project 1"), ProjectItem(rawId = "q", name = "Project 2")))
+        val chats = listOf(com.antigravity.mobile.data.model.ConversationItem("A", "中文会话"),
+            com.antigravity.mobile.data.model.ConversationItem("P", "项目对话", projectId = "p", workspaceName = "Project 1"))
+        compose.setContent { DemoDrawer(Modifier.fillMaxSize(), chats, projects.value, false, false, {}, {}, {}, {}, {}, selectedConversationId = "A") }
+        compose.onNodeWithText("中文会话").assertIsSelected()
+        compose.onNodeWithText("项目").performClick()
+        compose.onNodeWithText("Project 1").performClick()
+        compose.onNodeWithText("项目对话").assertIsDisplayed()
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("missing")
+        compose.onNodeWithText("没有匹配的最近会话").assertIsDisplayed()
+        compose.onNodeWithText("没有匹配的项目").assertIsDisplayed()
+        compose.onNodeWithText("清空").performClick()
+        compose.runOnIdle { projects.value = projects.value.reversed() }
+        compose.onNodeWithText("项目对话").assertIsDisplayed()
+        compose.onNodeWithText("中文会话").assertIsSelected()
+        saveScreenshot("round2-search.png")
+    }
+
+    @Test fun imagesZoomResetSwitchCloseAndRetry() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("image-viewer", vm) }
+            val index = mutableStateOf(0); val showing = mutableStateOf(true)
+            try {
+                gateway.failurePath = "/image.png"
+                val files = listOf("image.png", "wide.png", "long.png")
+                compose.setContent { if (showing.value) ImageViewer(vm.mediaImageRequest("${gateway.url}/${files[index.value]}"), vm.mediaImageLoader,
+                    "图片验收", { showing.value = false }, index.value, files.size, { index.value = it }) }
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败").fetchSemanticsNodes().isNotEmpty() }
+                gateway.failurePath = null
+                compose.onNodeWithText("重试").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败").fetchSemanticsNodes().isEmpty() &&
+                    compose.onNodeWithText("放大").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled).not() }
+                compose.onNodeWithText("放大").performClick()
+                compose.onNodeWithText("200%").assertExists()
+                compose.onNodeWithContentDescription("图片验收").performTouchInput {
+                    val center = androidx.compose.ui.geometry.Offset(width / 2f, height / 2f)
+                    down(0, center - androidx.compose.ui.geometry.Offset(30f, 0f)); down(1, center + androidx.compose.ui.geometry.Offset(30f, 0f))
+                    moveTo(0, center - androidx.compose.ui.geometry.Offset(150f, 0f)); moveTo(1, center + androidx.compose.ui.geometry.Offset(150f, 0f))
+                    up(0); up(1)
+                }
+                compose.onNodeWithText("200%").assertDoesNotExist()
+                compose.onNodeWithContentDescription("图片验收").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(0f, -200f)) }
+                compose.onNodeWithText("重置").performClick()
+                compose.onNodeWithText("100%").assertExists()
+                compose.onNodeWithText("放大").performClick()
+                compose.onNodeWithText("下一张").performClick()
+                compose.onNodeWithText("100%").assertExists()
+                compose.waitUntil(10_000) { compose.onNodeWithText("放大").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled).not() }
+                compose.onNodeWithText("放大").performClick()
+                compose.onNodeWithText("200%").assertExists()
+                compose.onNodeWithText("下一张").performClick()
+                compose.waitUntil(10_000) { compose.onNodeWithText("放大").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled).not() }
+                repeat(4) { compose.onNodeWithText("放大").performClick() }
+                compose.onNodeWithText("1600%").assertExists()
+                compose.onNodeWithContentDescription("图片验收").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(0f, -200f)) }
+                compose.onNodeWithText("重置").performClick()
+                compose.onNodeWithText("100%").assertExists()
+                saveScreenshot("round2-image.png")
+                compose.onNodeWithText("关闭").performClick()
+                assertFalse(showing.value)
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun authorizationAndExternalImageFailuresDoNotChangeGatewayRoutes() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway -> FakeGateway().use { cloud ->
+            val prefs = PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url; deviceToken = "test-token"
+                primaryCloudUrl = cloud.url.replace("127.0.0.1", "localhost")
+            }
+            val api = com.antigravity.mobile.data.service.ApiClient(app, prefs)
+            gateway.failurePath = "GetAllCascadeTrajectories"; gateway.failureCode = 401
+            val failure = runBlocking { api.fetchConversations() }.exceptionOrNull()
+            assertTrue(failure is com.antigravity.mobile.data.service.GatewayAuthorizationException)
+            assertEquals(gateway.url, prefs.gatewayBaseUrl)
+            assertTrue(runBlocking { api.imageForDraft("http://127.0.0.1:1/image.png", "A") }.isFailure)
+            assertTrue("Unrelated requests reached the cloud gateway", cloud.requests.isEmpty())
+            assertEquals(gateway.url, prefs.gatewayBaseUrl)
+        } }
+    }
+
+    @Test fun pairingAgainDoesNotLeavePreviousListRequestsBusy() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            val requested = CountDownLatch(1); val release = CountDownLatch(1)
+            val first = java.util.concurrent.atomic.AtomicBoolean(true)
+            gateway.block = { path -> if (path.contains("GetAllCascadeTrajectories") && first.getAndSet(false)) {
+                requested.countDown(); release.await(10, TimeUnit.SECONDS)
+            } }
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "old-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("pairing", vm) }
+            try {
+                assertTrue(requested.await(10, TimeUnit.SECONDS))
+                compose.runOnIdle { vm.pair("a".repeat(64), gateway.url) }
+                compose.waitUntil(10_000) { vm.state.value.pairSuccessCount == 1 && !vm.state.value.isLoadingConversations && vm.state.value.conversations.size == 2 }
+                assertTrue(vm.state.value.isPaired)
+                assertEquals("new-token", PreferencesManager(app).deviceToken)
+                assertEquals(2, gateway.requests.count { it.first.contains("GetAllCascadeTrajectories") })
+            } finally { release.countDown(); compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun composerActionsHaveAccessibleTargetsAndBusyStates() {
+        val sending = mutableStateOf(false)
+        val images = mutableStateOf(listOf(com.antigravity.mobile.ui.chat.PendingImage(android.net.Uri.parse("test://image"), byteArrayOf(), "image/png")))
+        var submitted = 0
+        compose.setContent { Composer(activeConversation = true, draft = "验收文字", attachments = images.value,
+            onDraftChange = {}, onAddImage = {}, onRemoveImage = { images.value = emptyList() },
+            onSend = { submitted++; sending.value = true }, isSending = sending.value, onUnsupported = {}) }
+        for (label in listOf("添加图片", "移除待发送图片", "语音输入，暂不可用", "发送消息")) {
+            compose.onNodeWithContentDescription(label).assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+        }
+        if (InstrumentationRegistry.getArguments().getString("round2TalkBack") == "true") {
+            org.junit.Assume.assumeTrue(android.os.Build.HARDWARE == "ranchu")
+            val automation = InstrumentationRegistry.getInstrumentation().getUiAutomation(android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+            val manager = compose.activity.getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+            compose.waitUntil(10_000) { manager.getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+                .any { it.id.contains("talkback", true) } }
+            fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
+                if (node == null) return null
+                if (node.contentDescription?.toString() == "添加图片") return node
+                for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
+                return null
+            }
+            val add = find(automation.rootInActiveWindow)
+            assertNotNull("TalkBack cannot find the image action", add)
+            assertTrue(add!!.performAction(android.view.accessibility.AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
+        }
+        saveScreenshot("round2-accessibility.png")
+        compose.onNodeWithContentDescription("移除待发送图片").performClick()
+        compose.onNodeWithContentDescription("移除待发送图片").assertDoesNotExist()
+        compose.onNodeWithContentDescription("发送消息").performClick()
+        compose.onNodeWithContentDescription("发送消息").assertIsNotEnabled()
+            .assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "正在发送"))
+        assertEquals(1, submitted)
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
         val requests = CopyOnWriteArrayList<Pair<String, String>>()
         @Volatile var block: (String) -> Unit = {}
         @Volatile var failurePath: String? = null
+        @Volatile var failureCode = 500
+        @Volatile var liveStream = false
+        @Volatile var messageText = "original message"
+        private val streams = CopyOnWriteArrayList<Pair<java.net.Socket, String>>()
+        fun dropStreams() { streams.forEach { it.first.close() }; streams.clear() }
+        fun emit(id: String, text: String) {
+            val bytes = text.toByteArray()
+            streams.filter { it.second == id && !it.first.isClosed }.forEach { (socket, _) ->
+                val output = java.io.DataOutputStream(socket.getOutputStream())
+                output.writeByte(0x81)
+                if (bytes.size < 126) output.writeByte(bytes.size) else { output.writeByte(126); output.writeShort(bytes.size) }
+                output.write(bytes); output.flush()
+            }
+        }
         @Volatile var management = false
         @Volatile var reverted = false
         @Volatile var userImage = false
-        val imageBytes = android.util.Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", android.util.Base64.DEFAULT)
+        private fun image(width: Int, height: Int) = java.io.ByteArrayOutputStream().let { output ->
+            val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(android.graphics.Color.BLUE)
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+            bitmap.recycle(); output.toByteArray()
+        }
+        val imageBytes = image(200, 400)
+        private val wideImage = image(800, 200)
+        private val longImage = image(100, 20_000)
         private val annotations = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
         private val stopped = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         init {
@@ -513,20 +787,30 @@ class ChatUxTest {
                 while (!server.isClosed) {
                     val socket = try { server.accept() } catch (_: Exception) { break }
                     thread(isDaemon = true) {
-                        socket.use {
+                        try { socket.use {
                             val reader = it.getInputStream().bufferedReader()
                             val path = reader.readLine()?.split(' ')?.getOrNull(1) ?: return@use
                             var length = 0
+                            var webSocketKey = ""
                             while (true) {
                                 val header = reader.readLine() ?: return@use
                                 if (header.isEmpty()) break
                                 if (header.startsWith("Content-Length:", true)) length = header.substringAfter(':').trim().toInt()
+                                if (header.startsWith("Sec-WebSocket-Key:", true)) webSocketKey = header.substringAfter(':').trim()
                             }
                             val chars = CharArray(length)
                             var read = 0
                             while (read < length) { val n = reader.read(chars, read, length - read); if (n < 0) break; read += n }
                             requests += path to String(chars)
                             block(path)
+                            if (liveStream && path.startsWith("/gateway/cascade/stream") && failurePath?.let(path::contains) != true) {
+                                val accept = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-1")
+                                    .digest((webSocketKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray()), android.util.Base64.NO_WRAP)
+                                it.getOutputStream().write("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: $accept\r\n\r\n".toByteArray())
+                                streams += it to if (path.contains("cascadeId=A")) "A" else "B"
+                                try { while (it.getInputStream().read() >= 0) {} } catch (_: java.io.IOException) {}
+                                return@use
+                            }
                             if (path.contains("CancelCascadeInvocation") && failurePath?.let(path::contains) != true)
                                 stopped += JSONObject(String(chars)).getString("cascadeId")
                             if (management && failurePath?.let(path::contains) != true) {
@@ -541,10 +825,11 @@ class ChatUxTest {
                             }
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
+                                path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
                                 path.startsWith("/gateway/projects") -> "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"files":[]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"IDLE","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"original message\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
+                                    """{"status":"IDLE","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
                                 management && path.contains("GetAllCascadeTrajectories") -> {
                                     val summaries = JSONObject()
                                     for (key in listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
@@ -554,20 +839,25 @@ class ChatUxTest {
                                 path.startsWith("/gateway/cascade/messages") -> """{"status":"${if (id in stopped) "IDLE" else "RUNNING"}","messages":[],"cascadeId":"$id"}"""
                                 path.contains("GetAllCascadeTrajectories") -> """{"trajectorySummaries":{}}"""
                                 else -> "{}"
-                            }.toByteArray().let { if (path.startsWith("/image.png")) imageBytes else it }
+                            }.toByteArray().let { when {
+                                path.startsWith("/image.png") -> imageBytes
+                                path.startsWith("/wide.png") -> wideImage
+                                path.startsWith("/long.png") -> longImage
+                                else -> it
+                            } }
                             val status = when {
-                                failurePath?.let(path::contains) == true -> "500 Failure"
+                                failurePath?.let(path::contains) == true -> "$failureCode Failure"
                                 path.startsWith("/gateway/cascade/stream") -> "503 Unavailable"
                                 else -> "200 OK"
                             }
                             val output = it.getOutputStream()
                             output.write("HTTP/1.1 $status\r\nContent-Type: application/json\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
                             output.write(body)
-                        }
+                        } } catch (_: java.io.IOException) { /* The client may cancel an in-flight test request. */ }
                     }
                 }
             }
         }
-        override fun close() { server.close() }
+        override fun close() { dropStreams(); server.close() }
     }
 }

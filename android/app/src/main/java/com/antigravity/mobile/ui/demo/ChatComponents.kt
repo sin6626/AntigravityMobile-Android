@@ -55,11 +55,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.animation.Crossfade
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.material3.TextButton
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -161,14 +161,14 @@ internal fun EmptyTopBar(
             Box(Modifier.padding(4.dp).width(88.dp).height(44.dp)
                 .graphicsLayer { translationX = with(density) { (88.dp * tabPosition.coerceIn(0f, 1f)).toPx() } }
                 .background(Color.White, RoundedCornerShape(28.dp)))
-            Row(Modifier.padding(4.dp)) {
-                Box(Modifier.width(88.dp).height(44.dp).quietClickable(RoundedCornerShape(28.dp), onClick = onChat),
+            Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
+                Box(Modifier.width(88.dp).height(48.dp).semantics { selected = tabPosition < 0.5f }.quietClickable(RoundedCornerShape(28.dp), onClick = onChat),
                     contentAlignment = Alignment.Center) { Text("聊天", fontSize = 18.sp, color = Ink) }
-                Box(Modifier.width(88.dp).height(44.dp).quietClickable(RoundedCornerShape(28.dp), onClick = onProjects),
+                Box(Modifier.width(88.dp).height(48.dp).semantics { selected = tabPosition >= 0.5f }.quietClickable(RoundedCornerShape(28.dp), onClick = onProjects),
                     contentAlignment = Alignment.Center) { Text("项目", fontSize = 18.sp, color = Ink) }
             }
         }
-        RoundIconButton("chat_bubble", "语音聊天", onUnsupported, size = 52.dp)
+        RoundIconButton("chat_bubble", "语音聊天，暂未开放", onUnsupported, size = 52.dp)
     }
 }
 
@@ -253,8 +253,7 @@ internal fun Composer(
                 AnimatedVisibility(!expanded, enter = expandHorizontally() + fadeIn(),
                     exit = shrinkHorizontally() + fadeOut()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
-                        Spacer(Modifier.width(12.dp))
+                        ComposerIcon("add", "添加图片", 32, onAddImage)
                     }
                 }
                 ComposerTextField(draft, onDraftChange, onSend, canSend,
@@ -263,8 +262,7 @@ internal fun Composer(
                 AnimatedVisibility(!expanded, enter = expandHorizontally() + fadeIn(),
                     exit = shrinkHorizontally() + fadeOut()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 26)
-                        Spacer(Modifier.width(15.dp))
+                        ComposerIcon("mic", "语音输入，暂不可用", 26, onUnsupported)
                         SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
                     }
                 }
@@ -283,10 +281,9 @@ internal fun Composer(
 private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit,
     isRunning: Boolean, isSending: Boolean, isStopping: Boolean, onStop: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
+        ComposerIcon("add", "添加图片", 32, onAddImage)
         Spacer(Modifier.weight(1f))
-        Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 27)
-        Spacer(Modifier.width(22.dp))
+        ComposerIcon("mic", "语音输入，暂不可用", 27, onUnsupported)
         SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
     }
 }
@@ -302,10 +299,11 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.size(58.dp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)),
                 )
-                Text("×", modifier = Modifier.align(Alignment.TopEnd)
-                    .background(Color.White, CircleShape)
-                    .quietClickable(CircleShape) { onRemove(image.uri) }.padding(horizontal = 4.dp),
-                    color = Ink, fontSize = 18.sp)
+                Box(Modifier.size(48.dp).align(Alignment.TopEnd)
+                    .semantics { contentDescription = "移除待发送图片" }
+                    .quietClickable(CircleShape) { onRemove(image.uri) }, contentAlignment = Alignment.TopEnd) {
+                    Icon(Icons.Filled.Close, null, tint = Ink, modifier = Modifier.size(22.dp).background(Color.White, CircleShape))
+                }
             }
         }
     }
@@ -317,8 +315,7 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean,
     isStopping: Boolean, onStop: () -> Unit) {
     val enabled = !isStopping && (if (isRunning) !isSending else canSend)
     Box(
-        modifier = Modifier.size(44.dp)
-            .background(if (enabled || isStopping) AccentBlue else Color(0xFFD2D3D5), CircleShape)
+        modifier = Modifier.size(48.dp)
             .quietClickable(CircleShape, enabled = enabled, onClick = if (isRunning) onStop else onSend)
             .semantics {
                 contentDescription = if (isRunning) "停止生成" else "发送消息"
@@ -326,14 +323,30 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean,
             },
         contentAlignment = Alignment.Center,
     ) {
-        Crossfade(targetState = if (isStopping || isSending) "busy" else if (isRunning) "stop" else "send",
-            animationSpec = androidx.compose.animation.core.tween(120), label = "send action") { action ->
-            when (action) {
-                "busy" -> CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                "stop" -> Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(23.dp))
-                else -> Symbol("arrow_upward", size = 26, color = Color.White)
+        Box(Modifier.size(44.dp).background(if (enabled || isStopping) AccentBlue else Color(0xFFD2D3D5), CircleShape), contentAlignment = Alignment.Center) {
+            Crossfade(targetState = if (isStopping || isSending) "busy" else if (isRunning) "stop" else "send",
+                animationSpec = androidx.compose.animation.core.tween(120), label = "send action") { action ->
+                when (action) {
+                    "busy" -> CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    "stop" -> Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(23.dp))
+                    else -> Symbol("arrow_upward", size = 26, color = Color.White)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ComposerIcon(icon: String, label: String, size: Int, action: () -> Unit) {
+    Box(Modifier.size(48.dp).semantics { contentDescription = label }.quietClickable(CircleShape, onClick = action),
+        contentAlignment = Alignment.Center) { Symbol(icon, size = size) }
+}
+
+@Composable
+internal fun LoadFailure(error: String, loading: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(error, color = SecondaryInk, fontSize = 14.sp, modifier = Modifier.weight(1f))
+        TextButton(enabled = !loading, onClick = onRetry) { Text(if (loading) "重试中…" else "重试", color = AccentBlue) }
     }
 }
 
@@ -392,7 +405,7 @@ internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, t
 
 @Composable
 private fun ConversationMenuRow(icon: String, text: String, enabled: Boolean, onClick: () -> Unit, color: Color = Ink) {
-    Row(Modifier.fillMaxWidth().height(56.dp).quietClickable(enabled = enabled, onClick = onClick)
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).quietClickable(enabled = enabled, onClick = onClick)
         .alpha(if (enabled) 1f else 0.45f).padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
         Symbol(icon, size = 25, color = color); Spacer(Modifier.width(20.dp))
         Text(text, color = color, fontSize = 18.sp)

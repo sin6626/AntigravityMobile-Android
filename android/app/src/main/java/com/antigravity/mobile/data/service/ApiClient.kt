@@ -70,6 +70,14 @@ class ApiClient(
         .cache(Cache(File(context.cacheDir, "http_cache"), 10L * 1024L * 1024L))
         .addInterceptor(RouteFailoverInterceptor(prefs, connectionManager))
         .addInterceptor(LanCleartextSecurityInterceptor())
+        .addInterceptor { chain ->
+            val response = chain.proceed(chain.request())
+            if (response.code == 401 && chain.request().header("Authorization") != null) {
+                response.close()
+                throw GatewayAuthorizationException()
+            }
+            response
+        }
         .addInterceptor(ApiTraceInterceptor())
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
@@ -1141,6 +1149,13 @@ class RouteFailoverInterceptor(
         try {
             return initialChain.proceed(request)
         } catch (e: IOException) {
+            if (e is GatewayAuthorizationException) throw e
+            val isGateway = listOf(prefs.gatewayBaseUrl, prefs.primaryCloudUrl, prefs.lanServerUrl,
+                prefs.ipv6ServerUrl, prefs.relayServerUrl, prefs.customServerUrl).any { candidate ->
+                val endpoint = candidate?.toHttpUrlOrNull()
+                endpoint != null && endpoint.scheme == originalUrl.scheme && endpoint.host == originalHost && endpoint.port == originalUrl.port
+            }
+            if (!isGateway) throw e
             val cloud = prefs.primaryCloudUrl?.trim()?.trimEnd('/')
             if (!cloud.isNullOrBlank()) {
                 val cloudHost = ConnectionManager.extractHost(cloud)
@@ -1170,6 +1185,7 @@ class RouteFailoverInterceptor(
                         }
                         return fallbackResponse
                     } catch (fallbackEx: Exception) {
+                        if (fallbackEx is GatewayAuthorizationException) throw fallbackEx
                         Log.w("ApiClient", "Failover to $cloud also failed: ${fallbackEx.message}")
                     }
                 }
