@@ -9,8 +9,8 @@
 
 - 最终要求：电脑 Clash TUN 与手机 VPN 同时开启时仍可使用 App。当前复现本地 mgy 健康 200、公网 CF 530 / 1033、连接器就绪检查 503、健康连接数 0。
 - 电脑 Mihomo 使用 Fake-IP；cloudflared 旧地址 198.18.0.150/151 的 TLS 握手复现 EOF，而当前 DNS 返回的新地址及真实 CF 地址均能握手。证据指向连接器保留了失效虚拟地址；具体映射变化事件未确认，不能归因于手机 VPN。
-- 已准备仅将 `argotunnel.com`、`cftunnel.com` 排除 Fake-IP 的配置，Mihomo 配置校验通过。候选、备份与只读探针仅保存在 `android/design/.verification/`。
-- **用户选择“先不重启，只保留排查结果”：没有应用代理配置，没有停止或重启 mgy/cloudflared，没有改 Android 或 Go 源码。故障未修复；后续应用配置和重建隧道须等待用户重新允许。** 不清除配对认证文件或 CF 身份缓存。
+- 用户随后授权修改配置，并明确由自己重启 Clash，再重启 mgy。已在电脑 Clash Verge 的持久 `dns_config.yaml` 中仅追加 `+.argotunnel.com`、`+.cftunnel.com` 两项 Fake-IP 例外，现有规则和 TUN 设置保留。Mihomo 对合并后的候选配置校验通过，写入后逐字节验证只增加这两项规则。候选、原文件备份与只读探针只保存在 `android/design/.verification/`。
+- **尚未执行重载或重启，mgy/cloudflared/Mihomo 进程 PID 和启动时间均未改变，Android 与 Go 源码未修改。** 用户需完全退出并重新打开电脑 Clash Verge，再重启 mgy，使新的 DNS 例外和边缘地址池生效；重启后尚待验证，不能宣称公网已经恢复。不清除配对认证文件或 CF 身份缓存。
 - 证据、来源与后续验收条件见 `android/docs/cloudflare-tun-diagnosis-2026-10-03.md`。
 
 ## 2. 技术栈架构 (Android 端)

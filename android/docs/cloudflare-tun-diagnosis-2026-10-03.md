@@ -4,8 +4,9 @@
 
 - 用户要求电脑启用 Clash TUN、手机启用 VPN 时，Android App 仍能通过 Cloudflare 隧道使用。
 - 2026-10-03 19:20–19:29 排查了运行中的网关、连接器、电脑 DNS 和 USB 手机网络。
-- 用户最终选择“先不重启，只保留排查结果”。**没有应用 Clash 配置，没有停止或重启 mgy/cloudflared，没有修改 Android 或 Go 源码。**
-- 故障尚未修复，不能以进程存在判断隧道健康。
+- 排查结束时用户选择“先不重启，只保留排查结果”；随后授权仅修改 DNS 配置，并由用户自己重启 Clash 与 mgy。
+- 19:40 已将两项 DNS 例外写入电脑 Clash Verge 的持久配置；没有执行重载或重启，没有修改 Android 或 Go 源码。
+- 当前待用户重启及验收，不能以文件写入或进程存在判断隧道已恢复。
 
 ## 已验证的证据
 
@@ -33,7 +34,7 @@
 
 cloudflared 源码在初始发现阶段建立边缘地址池，重试从池中选择地址；单纯等待不能确保取得 Clash 当前的映射。此次没有执行重连，因此修复方案仍待实际恢复验证。
 
-## 已准备、尚未应用的方案
+## 已写入持久文件、待用户重启生效的配置
 
 电脑 Clash Verge 已启用独立 DNS 设置，持久文件为 `%APPDATA%/io.github.clash-verge-rev.clash-verge-rev/dns_config.yaml`。在现有 `dns.fake-ip-filter` 列表增加：
 
@@ -44,9 +45,10 @@ cloudflared 源码在初始发现阶段建立边缘地址池，重试从池中�
 
 两项规则只让 CF 隧道域名返回真实地址，不关闭 TUN、不关闭手机 VPN、不把其他域名改为直连。保留现有 DNS 和代理路由规则。
 
-- 候选持久 DNS 配置、候选运行配置和原文件备份只保存于项目的 Git 忽略目录 `android/design/.verification/cf-tun-repair/`。
-- 使用本机现有 `verge-mihomo.exe -t` 校验候选运行配置，返回 `test is successful`。
-- 应用配置后还需重新建立 CF 隧道，以释放旧地址池。此操作需要用户重新允许；不得按当前记录擅自执行。
+- 持久文件已经追加这两项规则；生成的运行文件没有直接修改。原文件的逐字节备份是忽略目录 `android/design/.verification/cf-tun-repair/dns_config.before-apply-20261003.yaml`，候选与检查结果也只保存在该目录。
+- 写入前使用本机现有 `verge-mihomo.exe -t` 校验合并后的候选运行配置，返回 `test is successful`；写入后验证撤掉新增两行即可逐字节还原原文件。
+- 用户操作顺序：完全退出电脑 Clash Verge，再重新打开并保持 TUN 启用；随后重启 mgy，释放旧边缘地址池。没有替用户执行这些操作。
+- 19:40 写入后确认 mgy、cloudflared、Mihomo 的 PID 和启动时间均与写入前一致。
 - 网关会从持久化认证文件读取已配对设备，从 `cf_tunnel.json` 读取原隧道身份；不删除这两类文件，不重置配对和域名。
 
 ## 后续验收条件
