@@ -5,7 +5,18 @@ import android.content.Context
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.selection.LocalTextSelectionColors
+import androidx.compose.foundation.text.selection.TextSelectionColors
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -46,14 +57,40 @@ class ReplyMediaAndCopyTest {
         }
         compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("复制整条回复").fetchSemanticsNodes().isNotEmpty() }
         compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+        compose.mainClock.autoAdvance = false
         compose.onNodeWithContentDescription("复制代码").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithContentDescription("复制代码").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "已复制"))
         val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         compose.runOnIdle { assertEquals(code, clipboard.primaryClip?.getItemAt(0)?.text?.toString()) }
+        compose.mainClock.advanceTimeBy(2000)
+        compose.onNodeWithContentDescription("复制代码").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "未复制"))
         compose.onNodeWithContentDescription("复制整条回复").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithContentDescription("复制整条回复").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "已复制"))
         compose.runOnIdle { assertEquals(source, clipboard.primaryClip?.getItemAt(0)?.text?.toString()) }
         val reply = compose.onNodeWithContentDescription("复制整条回复").fetchSemanticsNode().boundsInRoot
         val paragraph = compose.onNodeWithText("After").fetchSemanticsNode().boundsInRoot
         assertTrue("Reply copy should be at the right edge", reply.left > paragraph.right)
+    }
+
+    @Test fun inlineCodeKeepsItsBackgroundButSelectionPaintsOverIt() {
+        val vm = ViewModelProvider(compose.activity)[ChatViewModel::class.java]
+        compose.setContent {
+            CompositionLocalProvider(LocalTextSelectionColors provides TextSelectionColors(Color.Blue, Color(0xFF4488FF))) {
+                ConversationContent(vm, listOf(GatewayMessageItem(id = "select-answer", type = "agent",
+                    text = "before `SELECTABLE_CODE` after")), null, false, false, false, false, {}, Modifier.fillMaxSize())
+            }
+        }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("before SELECTABLE_CODE after").fetchSemanticsNodes().isNotEmpty() }
+        val text = compose.onNodeWithText("before SELECTABLE_CODE after")
+        fun countColor(color: Color): Int {
+            val pixels = text.captureToImage().toPixelMap()
+            return (0 until pixels.width).sumOf { x -> (0 until pixels.height).count { y -> pixels[x, y] == color } }
+        }
+        assertTrue("Inline code lost its normal background", countColor(Color(0xFFF2F2F2)) > 20)
+        text.performTouchInput { longClick(center) }
+        assertTrue("Code background covered the selection", countColor(Color(0xFF4488FF)) > 20)
     }
 
     @Test fun failedImageShowsAnExplanationInsteadOfBlankSpace() {

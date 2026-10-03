@@ -35,11 +35,15 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
@@ -47,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -74,6 +79,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
@@ -95,6 +101,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -234,9 +242,22 @@ internal data class ConversationRenderItem(
 @Composable
 private fun CopyTextButton(source: String, description: String) {
     val clipboard = LocalClipboardManager.current
-    Box(Modifier.size(44.dp).semantics { contentDescription = description; role = Role.Button }
-        .quietClickable { clipboard.setText(AnnotatedString(source)) }, contentAlignment = Alignment.Center) {
-        Symbol("content_copy", size = 20, color = SecondaryInk)
+    var copies by remember { mutableIntStateOf(0) }
+    LaunchedEffect(copies) {
+        if (copies > 0) {
+            delay(1800)
+            copies = 0
+        }
+    }
+    Box(Modifier.size(44.dp).semantics {
+        contentDescription = description
+        role = Role.Button
+        stateDescription = if (copies > 0) "已复制" else "未复制"
+        liveRegion = LiveRegionMode.Polite
+    }
+        .quietClickable { clipboard.setText(AnnotatedString(source)); copies++ }, contentAlignment = Alignment.Center) {
+        if (copies > 0) Icon(Icons.Default.Check, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(20.dp))
+        else Symbol("content_copy", size = 20, color = SecondaryInk)
     }
 }
 
@@ -518,7 +539,7 @@ private fun MarkdownBlock(node: Node) {
         is ListItem -> MarkdownListItem(node)
         is org.commonmark.ext.gfm.tables.TableBlock -> Column(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) { MarkdownChildren(node) }
         is org.commonmark.ext.gfm.tables.TableHead, is org.commonmark.ext.gfm.tables.TableBody -> MarkdownChildren(node)
-        is org.commonmark.ext.gfm.tables.TableRow -> Row { var cell = node.firstChild; while (cell != null) { Text(inlineText(cell), modifier = Modifier.widthIn(min = 110.dp).padding(8.dp), color = Ink); cell = cell.next } }
+        is org.commonmark.ext.gfm.tables.TableRow -> Row { var cell = node.firstChild; while (cell != null) { MarkdownAnnotatedText(inlineText(cell), size = 16.sp, modifier = Modifier.widthIn(min = 110.dp).padding(8.dp)); cell = cell.next } }
         is ThematicBreak -> Spacer(Modifier.fillMaxWidth().height(1.dp).background(SecondaryInk))
         else -> MarkdownChildren(node)
     }
@@ -602,7 +623,7 @@ private fun MathParagraph(node: Paragraph) {
             Placeholder((bitmap.width / scale).sp, (bitmap.height / scale).sp, PlaceholderVerticalAlign.Center)
         ) { ComposeImage(bitmap.asImageBitmap(), contentDescription = formulas[index].expression, modifier = Modifier.fillMaxSize()) }
     }.toMap()
-    Text(text, color = Ink, fontSize = 18.sp, lineHeight = 27.sp, inlineContent = inline)
+    MarkdownAnnotatedText(text, inlineContent = inline)
 }
 
 @Composable
@@ -682,7 +703,9 @@ private fun MarkdownText(node: Node, size: androidx.compose.ui.unit.TextUnit = 1
 }
 
 @Composable
-private fun MarkdownAnnotatedText(value: AnnotatedString, size: androidx.compose.ui.unit.TextUnit = 18.sp, weight: FontWeight = FontWeight.Normal) {
+private fun MarkdownAnnotatedText(value: AnnotatedString, size: androidx.compose.ui.unit.TextUnit = 18.sp,
+    weight: FontWeight = FontWeight.Normal, modifier: Modifier = Modifier,
+    inlineContent: Map<String, InlineTextContent> = emptyMap()) {
     val uriHandler = LocalUriHandler.current
     val richLinkAction = LocalRichLinkAction.current
     val selectable = remember(value, uriHandler, richLinkAction) {
@@ -696,7 +719,17 @@ private fun MarkdownAnnotatedText(value: AnnotatedString, size: androidx.compose
             }
         }
     }
-    Text(text = selectable, color = Ink, fontSize = size, lineHeight = (size.value * 1.5f).sp, fontWeight = weight)
+    val codeRanges = remember(value) { value.getStringAnnotations("INLINE_CODE", 0, value.length) }
+    val layout = remember(value) { if (codeRanges.isEmpty()) null else mutableStateOf<TextLayoutResult?>(null) }
+    // Draw code backgrounds before native selection highlights, not inside glyph painting.
+    val background = if (layout == null) modifier else modifier.drawBehind {
+        layout.value?.let { result ->
+            codeRanges.forEach { drawPath(result.getPathForRange(it.start, it.end), Color(0xFFF2F2F2)) }
+        }
+    }
+    Text(text = selectable, color = Ink, fontSize = size, lineHeight = (size.value * 1.5f).sp,
+        fontWeight = weight, modifier = background, inlineContent = inlineContent,
+        onTextLayout = { layout?.value = it })
 }
 
 private fun inlineText(parent: Node): AnnotatedString = buildAnnotatedString {
@@ -709,7 +742,11 @@ private fun inlineText(parent: Node): AnnotatedString = buildAnnotatedString {
                     append(part)
                 }
             }
-            is Code -> withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0xFFF2F2F2))) { append(node.literal) }
+            is Code -> {
+                pushStringAnnotation("INLINE_CODE", "1")
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace)) { append(node.literal) }
+                pop()
+            }
             is SoftLineBreak, is HardLineBreak -> append("\n")
             is Image -> append(node.title.ifBlank { node.destination })
             is StrongEmphasis -> withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { var c = node.firstChild; while (c != null) { appendNode(c); c = c.next } }
