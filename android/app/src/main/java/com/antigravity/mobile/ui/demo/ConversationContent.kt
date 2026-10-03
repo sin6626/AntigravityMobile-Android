@@ -27,13 +27,14 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.draw.alpha
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -92,6 +94,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -110,24 +113,36 @@ internal fun ConversationContent(
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
     })
-    var stepAnchor by remember { mutableStateOf(0 to 0) }
-    var stepScrollTarget by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    val onStepHeightChange: (Int, Boolean) -> Unit = { delta, starting ->
-        // Reverse layout anchors the bottom; compensate so the clicked header stays in place.
-        if (starting) stepAnchor = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
-        else stepScrollTarget = stepAnchor.first to stepAnchor.second + delta
-    }
-    LaunchedEffect(stepScrollTarget) {
-        stepScrollTarget?.let { (index, offset) -> listState.scrollToItem(index, offset) }
-    }
+    var positioned by remember { mutableStateOf(false) }
+    var expandedProcesses by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
     val newestLocalId = messages.lastOrNull { it.id.startsWith("local:") }?.id
     var lastScrolledLocalId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(messages, streamingMessageId) {
-        val previous = renderItems
-        renderItems = withContext(Dispatchers.Default) {
-            buildConversationRenderItems(messages, streamingMessageId, previous)
+    var historyAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    val nearBottom by remember {
+        derivedStateOf {
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let {
+                it.index == listState.layoutInfo.totalItemsCount - 1 &&
+                    it.offset + it.size <= listState.layoutInfo.viewportEndOffset - listState.layoutInfo.afterContentPadding + 80
+            } ?: true
         }
+    }
+    var followLatest by remember { mutableStateOf(true) }
+    LaunchedEffect(messages, streamingMessageId, isRunning) {
+        followLatest = !positioned || (nearBottom && expandedProcesses.isEmpty())
+        val previous = renderItems
+        val prepared = withContext(Dispatchers.Default) {
+            buildConversationRenderItems(messages, streamingMessageId, previous, isRunning)
+        }
+        historyAnchor?.let { (key, offset) ->
+            val index = prepared.indexOfFirst { it.key == key }
+            if (index >= 0) {
+                listState.requestScrollToItem(index + (if (hasMore) 1 else 0), offset)
+                historyAnchor = null
+                followLatest = false
+            }
+        }
+        renderItems = prepared
     }
     if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -135,60 +150,62 @@ internal fun ConversationContent(
         }
         return
     }
-    LaunchedEffect(renderItems.lastOrNull()?.key, renderItems.lastOrNull()?.message?.effectiveText?.length) {
-        if (renderItems.isNotEmpty() && listState.firstVisibleItemIndex == 0 &&
-            listState.firstVisibleItemScrollOffset < 80
-        ) listState.scrollToItem(0)
-    }
-    LaunchedEffect(newestLocalId, renderItems.lastOrNull()?.key, isRunning) {
-        if (newestLocalId != null && newestLocalId != lastScrolledLocalId && renderItems.any { it.message.id == newestLocalId }) {
-            listState.scrollToItem(0)
-            lastScrolledLocalId = newestLocalId
+    LaunchedEffect(renderItems, isRunning) {
+        val newLocal = newestLocalId != null && newestLocalId != lastScrolledLocalId &&
+            renderItems.any { it.message.id == newestLocalId }
+        if (renderItems.isNotEmpty() && (!positioned || followLatest || newLocal)) {
+            val lastIndex = (if (hasMore) 1 else 0) + renderItems.lastIndex + (if (isRunning) 1 else 0)
+            listState.scrollToItem(lastIndex)
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { listState.scrollBy(it.size.toFloat()) }
+            positioned = true
+            if (newLocal) lastScrolledLocalId = newestLocalId
         }
     }
     SelectionContainer {
         LazyColumn(
-            modifier = modifier.fillMaxWidth(),
+            modifier = modifier.fillMaxWidth().alpha(if (positioned) 1f else 0f),
             state = listState,
-            reverseLayout = true,
             contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
         ) {
-            if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
+            if (hasMore) item(key = "load-older", contentType = "load-older") {
                 DisableSelection {
-                    Text("正在回复…", color = SecondaryInk, fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 12.dp))
+                    Text(if (isLoadingOlder) "正在加载…" else "加载更早消息",
+                        modifier = Modifier.fillMaxWidth().quietClickable(enabled = !isLoadingOlder) {
+                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "load-older" }?.let {
+                                historyAnchor = it.key.toString() to -it.offset
+                            }
+                            onLoadOlder()
+                        }
+                            .padding(vertical = 10.dp), color = AccentBlue, fontSize = 15.sp)
                 }
             }
-            itemsIndexed(renderItems.asReversed(), key = { _, item -> item.key },
-                contentType = { _, item -> item.node?.javaClass?.name ?: item.message.type }) { index, item ->
+            itemsIndexed(renderItems, key = { _, item -> item.key },
+                contentType = { _, item -> if (item.process.isNotEmpty()) "process" else item.node?.javaClass?.name ?: item.message.type }) { index, item ->
                 val entryModifier = if (item.message.id.startsWith("local:")) {
                     var entered by rememberSaveable(item.key) { mutableStateOf(false) }
                     LaunchedEffect(item.key) { entered = true }
                     val alpha by animateFloatAsState(if (entered) 1f else 0f, tween(180), label = "sentMessage")
                     Modifier.graphicsLayer { this.alpha = alpha }
                 } else Modifier
-                Column(entryModifier.padding(top = when {
-                    index == renderItems.lastIndex -> 0.dp
-                    item.blockIndex == 0 -> 25.dp
-                    else -> 12.dp
-                }), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (item.streaming) DisableSelection {
-                        MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, onStepHeightChange)
-                    } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, onStepHeightChange)
+                Column(entryModifier.padding(top = if (item.blockIndex == 0) 25.dp else 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (item.process.isNotEmpty()) {
+                        val expanded = item.key in expandedProcesses
+                        val toggle = {
+                            expandedProcesses = if (expanded) expandedProcesses - item.key else expandedProcesses + item.key
+                        }
+                        if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
+                        else ExecutionPanel(item, viewModel, expanded, toggle)
+                    } else if (item.streaming) DisableSelection {
+                        MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
+                    } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
                     if (item.canCopy) DisableSelection { CopyReplyButton(item.message.effectiveText) }
                 }
             }
-            if (hasMore) {
-                item {
-                    DisableSelection {
-                        Text(
-                            if (isLoadingOlder) "正在加载…" else "加载更早消息",
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 25.dp).quietClickable(enabled = !isLoadingOlder, onClick = onLoadOlder)
-                                .padding(vertical = 10.dp),
-                            color = AccentBlue,
-                            fontSize = 15.sp,
-                        )
-                    }
+            if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
+                DisableSelection {
+                    Text("正在回复…", color = SecondaryInk, fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 12.dp))
                 }
             }
         }
@@ -202,9 +219,12 @@ internal data class ConversationRenderItem(
     val blockIndex: Int,
     val streaming: Boolean,
     val key: String,
+    val process: List<GatewayMessageItem> = emptyList(),
+    val executionItems: List<ExecutionRenderItem> = emptyList(),
+    val processRunning: Boolean = false,
 ) {
     val canCopy: Boolean
-        get() = !streaming && key == messageKey && message.isAgent && message.type != "thought" && message.effectiveText.isNotBlank()
+        get() = process.isEmpty() && !streaming && key == messageKey && message.isAgent && message.type != "thought" && message.effectiveText.isNotBlank()
 }
 
 @Composable
@@ -220,14 +240,16 @@ internal fun buildConversationRenderItems(
     messages: List<GatewayMessageItem>,
     streamingMessageId: String?,
     previous: List<ConversationRenderItem> = emptyList(),
+    isRunning: Boolean = false,
 ): List<ConversationRenderItem> {
     val existing = previous.groupBy { it.messageKey }
+    val previousProcessKeys = previous.flatMap { item -> item.process.map { it.id to item.key } }.toMap()
     return buildList {
-        messages.forEachIndexed { index, message ->
-            val messageKey = message.id.ifBlank { "${message.type}-$index" }
+        fun appendMessage(message: GatewayMessageItem) {
+            val messageKey = message.id.ifBlank { "${message.type}-${messages.indexOf(message)}" }
             val streaming = message.id == streamingMessageId
             val cached = existing[messageKey]
-            if (cached?.firstOrNull()?.let { it.message == message && it.streaming == streaming } == true) {
+            if (cached?.firstOrNull()?.let { it.process.isEmpty() && it.message == message && it.streaming == streaming } == true) {
                 addAll(cached)
             } else {
                 val blocks = if (message.isAgent && message.type != "thought" && !streaming && message.effectiveText.isNotBlank()) {
@@ -242,11 +264,34 @@ internal fun buildConversationRenderItems(
                 }
             }
         }
+        var start = 0
+        while (start < messages.size) {
+            val end = (start + 1 until messages.size).firstOrNull { messages[it].isUser } ?: messages.size
+            val turn = messages.subList(start, end)
+            val user = turn.firstOrNull()?.takeIf { it.isUser }
+            if (user != null) appendMessage(user)
+            val body = if (user != null) turn.drop(1) else turn
+            val answer = body.indexOfLast { it.isAgent && it.type != "thought" }
+                .takeIf { idx -> idx >= 0 && body.drop(idx + 1).none { it.isTools || it.type == "thought" } } ?: -1
+            val process = if (answer >= 0) body.take(answer) else body.take(body.indexOfLast { !it.isError } + 1)
+            if (process.isNotEmpty()) {
+                val key = process.firstNotNullOfOrNull { previousProcessKeys[it.id] }
+                    ?: "process:${user?.id ?: process.first().id}"
+                val running = isRunning && end == messages.size
+                val cached = existing[key]?.singleOrNull()
+                if (cached != null && cached.process == process && cached.processRunning == running) add(cached)
+                else add(ConversationRenderItem(process.first(), key, null, 0, false, key,
+                    process, buildExecutionRenderItems(process), running))
+            }
+            if (answer >= 0) body.drop(answer).forEach(::appendMessage)
+            else body.drop(process.size).forEach(::appendMessage)
+            start = end
+        }
     }
 }
 
 @Composable
-private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true, onStepHeightChange: (Int, Boolean) -> Unit) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true) {
     val text = message.effectiveText.trim()
     val scope = rememberCoroutineScope()
     var linkedFile by remember(message.id) { mutableStateOf<FileContentResponse?>(null) }
@@ -276,8 +321,6 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
                     fontSize = 17.sp, lineHeight = 26.sp)
             }
         }
-    } else if (message.isTools || message.type == "thought") {
-        StepPanel(message, onStepHeightChange)
     } else if (message.isError) {
         Text(text.ifBlank { "请求失败" }, color = Color(0xFFB3261E), fontSize = 16.sp)
     } else {
@@ -353,45 +396,87 @@ private val markdownCache = object {
     }
 }
 
-@Composable
-private fun StepPanel(message: GatewayMessageItem, onHeightChange: (Int, Boolean) -> Unit) {
-    var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
-    val visibility = remember(message.id) { MutableTransitionState(expanded) }
-    visibility.targetState = expanded
-    var previousHeight by remember(message.id) { mutableStateOf<Int?>(null) }
-    var toggleHeight by remember(message.id) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(visibility.isIdle) {
-        if (visibility.isIdle) toggleHeight = null
+internal data class ExecutionRenderItem(
+    val key: String,
+    val message: GatewayMessageItem,
+    val heading: Boolean = false,
+    val node: Node? = null,
+    val detail: com.antigravity.mobile.data.model.GatewayStepDetail? = null,
+    val images: Boolean = false,
+)
+
+internal fun buildExecutionRenderItems(messages: List<GatewayMessageItem>): List<ExecutionRenderItem> = buildList {
+    messages.forEachIndexed { index, message ->
+        val key = message.id.ifBlank { "step-$index" }
+        add(ExecutionRenderItem("$key:heading", message, heading = true))
+        if (message.isTools) {
+            if (message.details.isNotEmpty()) message.details.forEachIndexed { detailIndex, detail ->
+                add(ExecutionRenderItem("$key:tool:$detailIndex", message, detail = detail))
+            } else add(ExecutionRenderItem("$key:legacy", message))
+        } else if (message.isError) {
+            add(ExecutionRenderItem("$key:error", message))
+        } else {
+            if (!message.media.isNullOrEmpty() || !message.imageUrls.isNullOrEmpty() || message.imageDataList.isNotEmpty())
+                add(ExecutionRenderItem("$key:images", message, images = true))
+            generateSequence(markdownCache.getOrParse(message.effectiveText).firstChild) { it.next }
+                .forEachIndexed { block, node -> add(ExecutionRenderItem("$key:block:$block", message, node = node)) }
+        }
     }
-    Column(Modifier.onSizeChanged { size ->
-        val old = previousHeight
-        previousHeight = size.height
-        val initial = toggleHeight
-        if (initial != null && old != null && old != size.height) onHeightChange(size.height - initial, false)
-    }) {
-        Text(
-            text = "${message.title.ifBlank { if (message.type == "thought") "Thought" else "Worked" }}${message.duration.takeIf { it.isNotBlank() }?.let { " for $it" } ?: ""}  ${if (expanded) "⌄" else "›"}",
-            color = SecondaryInk, fontSize = 15.sp,
-            modifier = Modifier.quietClickable {
-                toggleHeight = previousHeight
-                onHeightChange(0, true)
-                expanded = !expanded
+}
+
+@Composable
+private fun ExecutionPanel(item: ConversationRenderItem, viewModel: ChatViewModel, expanded: Boolean, onToggle: () -> Unit) {
+    val thoughts = item.process.count { it.type == "thought" }
+    val tools = item.process.filter { it.isTools }.sumOf { it.toolCount ?: it.details.size }
+    val detailState = rememberLazyListState()
+    Column(Modifier.fillMaxWidth().background(Color(0xFFF6F7F9), RoundedCornerShape(12.dp))) {
+        DisableSelection {
+            Row(Modifier.fillMaxWidth().semantics {
+                contentDescription = "执行过程"
+                stateDescription = if (expanded) "已展开" else "已折叠"
+                role = Role.Button
+            }.quietClickable(onClick = onToggle).padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(if (item.processRunning) "执行过程 · 进行中" else "执行过程", color = Ink, fontSize = 15.sp)
+                    Text("$thoughts 段思考 · $tools 项操作", color = SecondaryInk, fontSize = 12.sp)
+                }
+                Text(if (expanded) "⌄" else "›", color = SecondaryInk, fontSize = 20.sp)
             }
-        )
-        AnimatedVisibility(
-            visibleState = visibility,
+        }
+        AnimatedVisibility(visible = expanded,
             enter = expandVertically(tween(220), expandFrom = Alignment.Top) + fadeIn(tween(180)),
-            exit = shrinkVertically(tween(220), shrinkTowards = Alignment.Top) + fadeOut(tween(150)),
-        ) {
-            Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (message.type == "thought") MarkdownBody(message.effectiveText)
-                else if (message.details.isNotEmpty()) message.details.forEach { detail ->
-                    Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(10.dp)) {
-                        val statusLabel = detail.status.removePrefix("CORTEX_STEP_STATUS_").lowercase()
-                        Text("${detail.summary.ifBlank { detail.name }}${statusLabel.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}", color = Ink, fontSize = 14.sp)
-                        if (detail.command.isNotBlank()) Text(detail.command, color = SecondaryInk, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+            exit = shrinkVertically(tween(220), shrinkTowards = Alignment.Top) + fadeOut(tween(150))) {
+            // A bounded lazy viewport avoids composing an entire coding run on expansion.
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 400.dp), state = detailState,
+                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(item.executionItems, key = { it.key }, contentType = { if (it.heading) "heading" else it.node?.javaClass?.name ?: "tool" }) { entry ->
+                    when {
+                        entry.images -> MessageImages(entry.message, viewModel)
+                        entry.heading -> {
+                            val duration = entry.message.duration.takeIf { entry.message.type == "thought" && it != "0s" && it.isNotBlank() }
+                            Text(when {
+                                entry.message.isTools -> "工具操作"
+                                entry.message.type == "thought" -> "思考${duration?.let { " · $it" }.orEmpty()}"
+                                entry.message.isError -> "执行异常"
+                                else -> "进度说明"
+                            }, color = SecondaryInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(top = 8.dp))
+                        }
+                        entry.node != null -> MessageRow(entry.message, viewModel, false, entry.node, false)
+                        entry.detail != null -> {
+                            val detail = entry.detail
+                            Column(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(8.dp)).padding(10.dp)) {
+                                Text(detail.summary.ifBlank { detail.name }, color = Ink, fontSize = 14.sp)
+                                if (detail.status.isNotBlank()) Text(if (detail.status == "CORTEX_STEP_STATUS_DONE") "已完成" else detail.status.removePrefix("CORTEX_STEP_STATUS_"), color = SecondaryInk, fontSize = 12.sp)
+                                if (detail.command.isNotBlank()) CodeBlock(detail.command, "")
+                            }
+                        }
+                        else -> Text(entry.message.toolNames?.joinToString(" · ") ?: entry.message.effectiveText,
+                            color = if (entry.message.isError) Color(0xFFB3261E) else SecondaryInk, fontSize = 14.sp)
                     }
-                } else Text(message.toolNames?.joinToString(" · ") ?: message.effectiveText, color = SecondaryInk)
+                }
             }
         }
     }
