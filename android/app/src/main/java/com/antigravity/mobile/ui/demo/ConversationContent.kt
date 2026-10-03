@@ -199,7 +199,11 @@ internal fun ConversationContent(
                     } else if (item.streaming) DisableSelection {
                         MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
                     } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
-                    if (item.canCopy) DisableSelection { CopyReplyButton(item.message.effectiveText) }
+                    if (item.canCopy) DisableSelection {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            CopyTextButton(item.message.effectiveText, "复制整条回复")
+                        }
+                    }
                 }
             }
             if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
@@ -228,9 +232,9 @@ internal data class ConversationRenderItem(
 }
 
 @Composable
-private fun CopyReplyButton(source: String) {
+private fun CopyTextButton(source: String, description: String) {
     val clipboard = LocalClipboardManager.current
-    Box(Modifier.size(44.dp).semantics { contentDescription = "复制整条回复"; role = Role.Button }
+    Box(Modifier.size(44.dp).semantics { contentDescription = description; role = Role.Button }
         .quietClickable { clipboard.setText(AnnotatedString(source)) }, contentAlignment = Alignment.Center) {
         Symbol("content_copy", size = 20, color = SecondaryInk)
     }
@@ -649,7 +653,11 @@ private fun MarkdownChildren(node: Node) {
 @Composable
 private fun CodeBlock(code: String, language: String) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(12.dp)) {
-        if (language.isNotBlank()) Text(language, color = SecondaryInk, fontSize = 12.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(language, color = SecondaryInk, fontSize = 12.sp)
+            DisableSelection { CopyTextButton(code, "复制代码") }
+        }
         Text(code.trimEnd(), color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
             fontFamily = FontFamily.Monospace, softWrap = false,
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()))

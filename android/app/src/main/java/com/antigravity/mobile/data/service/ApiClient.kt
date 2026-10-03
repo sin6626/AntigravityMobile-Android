@@ -861,10 +861,6 @@ class ApiClient(
             return "$baseUrl$clean"
         }
 
-        if (clean.startsWith("file://")) {
-            clean = clean.removePrefix("file://")
-        }
-
         if (baseUrl.isBlank()) return clean
 
         val unescaped = try {
