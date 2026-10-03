@@ -27,6 +27,13 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -103,6 +110,16 @@ internal fun ConversationContent(
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
     })
+    var stepAnchor by remember { mutableStateOf(0 to 0) }
+    var stepScrollTarget by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val onStepHeightChange: (Int, Boolean) -> Unit = { delta, starting ->
+        // Reverse layout anchors the bottom; compensate so the clicked header stays in place.
+        if (starting) stepAnchor = listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+        else stepScrollTarget = stepAnchor.first to stepAnchor.second + delta
+    }
+    LaunchedEffect(stepScrollTarget) {
+        stepScrollTarget?.let { (index, offset) -> listState.scrollToItem(index, offset) }
+    }
     var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
     val newestLocalId = messages.lastOrNull { it.id.startsWith("local:") }?.id
     var lastScrolledLocalId by remember { mutableStateOf<String?>(null) }
@@ -156,8 +173,8 @@ internal fun ConversationContent(
                     else -> 12.dp
                 }), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (item.streaming) DisableSelection {
-                        MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
-                    } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
+                        MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, onStepHeightChange)
+                    } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, onStepHeightChange)
                     if (item.canCopy) DisableSelection { CopyReplyButton(item.message.effectiveText) }
                 }
             }
@@ -229,7 +246,7 @@ internal fun buildConversationRenderItems(
 }
 
 @Composable
-private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true, onStepHeightChange: (Int, Boolean) -> Unit) {
     val text = message.effectiveText.trim()
     val scope = rememberCoroutineScope()
     var linkedFile by remember(message.id) { mutableStateOf<FileContentResponse?>(null) }
@@ -260,7 +277,7 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
             }
         }
     } else if (message.isTools || message.type == "thought") {
-        StepPanel(message)
+        StepPanel(message, onStepHeightChange)
     } else if (message.isError) {
         Text(text.ifBlank { "请求失败" }, color = Color(0xFFB3261E), fontSize = 16.sp)
     } else {
@@ -337,23 +354,45 @@ private val markdownCache = object {
 }
 
 @Composable
-private fun StepPanel(message: GatewayMessageItem) {
+private fun StepPanel(message: GatewayMessageItem, onHeightChange: (Int, Boolean) -> Unit) {
     var expanded by rememberSaveable(message.id) { mutableStateOf(false) }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val visibility = remember(message.id) { MutableTransitionState(expanded) }
+    visibility.targetState = expanded
+    var previousHeight by remember(message.id) { mutableStateOf<Int?>(null) }
+    var toggleHeight by remember(message.id) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(visibility.isIdle) {
+        if (visibility.isIdle) toggleHeight = null
+    }
+    Column(Modifier.onSizeChanged { size ->
+        val old = previousHeight
+        previousHeight = size.height
+        val initial = toggleHeight
+        if (initial != null && old != null && old != size.height) onHeightChange(size.height - initial, false)
+    }) {
         Text(
             text = "${message.title.ifBlank { if (message.type == "thought") "Thought" else "Worked" }}${message.duration.takeIf { it.isNotBlank() }?.let { " for $it" } ?: ""}  ${if (expanded) "⌄" else "›"}",
             color = SecondaryInk, fontSize = 15.sp,
-            modifier = Modifier.quietClickable { expanded = !expanded }
+            modifier = Modifier.quietClickable {
+                toggleHeight = previousHeight
+                onHeightChange(0, true)
+                expanded = !expanded
+            }
         )
-        if (expanded) {
-            if (message.type == "thought") MarkdownBody(message.effectiveText)
-            else if (message.details.isNotEmpty()) message.details.forEach { detail ->
-                Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(10.dp)) {
-                    val statusLabel = detail.status.removePrefix("CORTEX_STEP_STATUS_").lowercase()
-                    Text("${detail.summary.ifBlank { detail.name }}${statusLabel.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}", color = Ink, fontSize = 14.sp)
-                    if (detail.command.isNotBlank()) Text(detail.command, color = SecondaryInk, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
-                }
-            } else Text(message.toolNames?.joinToString(" · ") ?: message.effectiveText, color = SecondaryInk)
+        AnimatedVisibility(
+            visibleState = visibility,
+            enter = expandVertically(tween(220), expandFrom = Alignment.Top) + fadeIn(tween(180)),
+            exit = shrinkVertically(tween(220), shrinkTowards = Alignment.Top) + fadeOut(tween(150)),
+        ) {
+            Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (message.type == "thought") MarkdownBody(message.effectiveText)
+                else if (message.details.isNotEmpty()) message.details.forEach { detail ->
+                    Column(modifier = Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(10.dp)) {
+                        val statusLabel = detail.status.removePrefix("CORTEX_STEP_STATUS_").lowercase()
+                        Text("${detail.summary.ifBlank { detail.name }}${statusLabel.takeIf { it.isNotBlank() }?.let { " · $it" } ?: ""}", color = Ink, fontSize = 14.sp)
+                        if (detail.command.isNotBlank()) Text(detail.command, color = SecondaryInk, fontSize = 13.sp, fontFamily = FontFamily.Monospace)
+                    }
+                } else Text(message.toolNames?.joinToString(" · ") ?: message.effectiveText, color = SecondaryInk)
+            }
         }
     }
 }

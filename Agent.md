@@ -48,6 +48,13 @@ android/app/src/main/java/com/antigravity/mobile/
 - 2026-09-27：聊天消息列表改为固定在页面视口，输入栏叠加并跟随 IME Insets；列表底部按键盘高度增加可滚动空间，收起键盘时移除。使用 edge-to-edge；模拟器已验证键盘打开无黑色空隙、列表可继续滚动。验证图仍仅保存在忽略目录中。
 
 ## 5. 开发与规范准则
+### 2026-10-03 思考与工具区域展开方向和动画
+- 反向 LazyColumn 原先保留列表项底部位置，Thought/Worked 直接插入详情时标题被向上推；模拟器固定测试窗口展开后标题曾移出屏幕。
+- StepPanel 使用原生 AnimatedVisibility，从顶部向下展开/向上收起（220 ms），配合淡入淡出；点击时记录列表锚点与区域初始高度，动画期间按累计高度差补偿列表位置，保持标题可见。动画结束后停止补偿，保留原有懒加载、缓存与展开状态。
+- 定位操作通过 LaunchedEffect 在布局回调之后执行；直接在 onSizeChanged 中 requestScrollToItem 的尝试未通过坐标检查，已替换。最终模拟器 Thought 展开/收起标题偏移 0 px，Worked 展开 3 px、收起 0 px；USB vivo Thought 和 Worked 展开均为 5 px、收起 0 px，两次连续开合均通过。
+- 增加可运行真机检查 `android/scripts/check-step-expansion.py`，打开含步骤的会话后使用 `--serial`，可用 `--kind Thought` 和 `--toward-newer` 指定查找方向；验证点击后的折叠状态和标题屏幕坐标。现有单测与 Debug 构建通过，修复包已安装 USB 真机。mgy 未修改、未重启，健康检查 200。
+- 用户允许助手代点本项目开发包的系统安装授权；vivo 的“授权本次安装”链接可代点，但后续指纹/锁屏密码须用户本人确认，本轮最终包经用户指纹确认安装成功。
+
 ### 2026-10-03 聊天返回行为与统一输入栏
 - 用户确认普通聊天是主界面的当前会话，不应在系统返回时调用新建聊天。返回顺序现为收起键盘、关闭抽屉、项目会话回项目列表、项目页回聊天页，普通聊天/空白主页则由 Activity `moveTaskToBack(true)` 退到后台。原会话与草稿留在 ViewModel。
 - `MainActivity` 使用 `singleTask` 复用实例，重复启动和配对深链继续通过已有 `onNewIntent` 处理。实测标准启动模式曾在真机产生多个主 Activity，复用模式后仅一个；后台重新打开仍为原会话。进程死亡后的持久化不在此次范围内。
