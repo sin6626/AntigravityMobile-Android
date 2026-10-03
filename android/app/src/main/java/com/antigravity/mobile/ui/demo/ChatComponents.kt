@@ -52,7 +52,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.animation.Crossfade
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -164,8 +170,11 @@ internal fun ConversationTopBar(
     returnToProjects: Boolean,
     onLeading: () -> Unit,
     onNewChat: () -> Unit,
-    onMore: () -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    actionsEnabled: Boolean = true,
 ) {
+    var menuOpen by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -181,7 +190,15 @@ internal fun ConversationTopBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RoundIconButton("edit_square", "新建聊天", onNewChat)
-            RoundIconButton("more_vert", "更多选项", onMore)
+            Box {
+                RoundIconButton("more_vert", "更多选项", { menuOpen = true })
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(text = { Text("重命名") }, enabled = actionsEnabled,
+                        onClick = { menuOpen = false; onRename() })
+                    DropdownMenuItem(text = { Text("删除会话", color = Color(0xFFB3261E)) }, enabled = actionsEnabled,
+                        onClick = { menuOpen = false; onDelete() })
+                }
+            }
         }
     }
 }
@@ -198,8 +215,11 @@ internal fun Composer(
     onSend: () -> Unit,
     isSending: Boolean,
     onUnsupported: () -> Unit,
+    isRunning: Boolean = false,
+    isStopping: Boolean = false,
+    onStop: () -> Unit = {},
 ) {
-    val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending
+    val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isRunning && !isStopping
     var focused by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty()
     val horizontalPadding by animateDpAsState(
@@ -235,14 +255,14 @@ internal fun Composer(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 26)
                         Spacer(Modifier.width(15.dp))
-                        SendAction(canSend, onSend)
+                        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
                     }
                 }
             }
             AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(),
                 exit = shrinkVertically() + fadeOut()) {
                 Box(Modifier.padding(start = 20.dp, end = 12.dp, bottom = 9.dp, top = 3.dp)) {
-                    ComposerActions(canSend, onSend, onAddImage, onUnsupported)
+                    ComposerActions(canSend, onSend, onAddImage, onUnsupported, isRunning, isSending, isStopping, onStop)
                 }
             }
         }
@@ -250,13 +270,14 @@ internal fun Composer(
 }
 
 @Composable
-private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit) {
+private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit,
+    isRunning: Boolean, isSending: Boolean, isStopping: Boolean, onStop: () -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Symbol("add", modifier = Modifier.quietClickable(CircleShape, onClick = onAddImage), size = 32)
         Spacer(Modifier.weight(1f))
         Symbol("mic", modifier = Modifier.quietClickable(CircleShape, onClick = onUnsupported), size = 27)
         Spacer(Modifier.width(22.dp))
-        SendAction(canSend, onSend)
+        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
     }
 }
 
@@ -282,14 +303,28 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
 }
 
 @Composable
-private fun SendAction(canSend: Boolean, onSend: () -> Unit) {
+private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean, isSending: Boolean,
+    isStopping: Boolean, onStop: () -> Unit) {
+    val enabled = !isStopping && (if (isRunning) !isSending else canSend)
     Box(
-        modifier = Modifier.size(43.dp)
-            .background(if (canSend) AccentBlue else Color(0xFFD2D3D5), CircleShape)
-            .quietClickable(CircleShape, enabled = canSend, onClick = onSend)
-            .semantics { contentDescription = "发送消息" },
+        modifier = Modifier.size(44.dp)
+            .background(if (enabled || isStopping) AccentBlue else Color(0xFFD2D3D5), CircleShape)
+            .quietClickable(CircleShape, enabled = enabled, onClick = if (isRunning) onStop else onSend)
+            .semantics {
+                contentDescription = if (isRunning) "停止生成" else "发送消息"
+                stateDescription = if (isStopping) "正在停止" else if (isSending) "正在发送" else ""
+            },
         contentAlignment = Alignment.Center,
-    ) { Symbol("arrow_upward", size = 26, color = Color.White) }
+    ) {
+        Crossfade(targetState = if (isStopping || isSending) "busy" else if (isRunning) "stop" else "send",
+            animationSpec = androidx.compose.animation.core.tween(120), label = "send action") { action ->
+            when (action) {
+                "busy" -> CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                "stop" -> Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(23.dp))
+                else -> Symbol("arrow_upward", size = 26, color = Color.White)
+            }
+        }
+    }
 }
 
 @Composable

@@ -47,6 +47,12 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
@@ -117,6 +123,7 @@ internal fun ConversationContent(
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
     })
+    val scope = rememberCoroutineScope()
     var positioned by remember { mutableStateOf(false) }
     var expandedProcesses by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
@@ -132,6 +139,7 @@ internal fun ConversationContent(
         }
     }
     var followLatest by remember { mutableStateOf(true) }
+    var followAfterJump by remember { mutableStateOf(false) }
     var linkedFileUri by rememberSaveable { mutableStateOf<String?>(null) }
     val richImageRequest = remember(viewModel) { { target: String -> viewModel.linkedImageRequest(target) as Any } }
     val richLinkAction = remember(viewModel) {
@@ -147,7 +155,7 @@ internal fun ConversationContent(
         }
     }
     LaunchedEffect(messages, streamingMessageId, isRunning) {
-        followLatest = !positioned || (nearBottom && expandedProcesses.isEmpty())
+        followLatest = !positioned || (nearBottom && (expandedProcesses.isEmpty() || followAfterJump))
         val previous = renderItems
         val prepared = withContext(Dispatchers.Default) {
             buildConversationRenderItems(messages, streamingMessageId, previous, isRunning)
@@ -184,9 +192,10 @@ internal fun ConversationContent(
         LocalRichImageRequest provides richImageRequest,
         LocalRichImageLoader provides viewModel.mediaImageLoader,
     ) {
+        Box(modifier) {
         SelectionContainer {
             LazyColumn(
-                modifier = modifier.fillMaxWidth().alpha(if (positioned) 1f else 0f),
+                modifier = Modifier.fillMaxSize().alpha(if (positioned || messages.isEmpty()) 1f else 0f),
                 state = listState,
                 contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
             ) {
@@ -215,6 +224,7 @@ internal fun ConversationContent(
                         if (item.process.isNotEmpty()) {
                             val expanded = item.key in expandedProcesses
                             val toggle = {
+                                followAfterJump = false
                                 expandedProcesses = if (expanded) expandedProcesses - item.key else expandedProcesses + item.key
                             }
                             if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
@@ -236,6 +246,27 @@ internal fun ConversationContent(
                     }
                 }
             }
+        }
+        AnimatedVisibility(visible = positioned && !nearBottom,
+            modifier = Modifier.align(Alignment.BottomCenter).offset(y = -bottomSpace),
+            enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
+            Surface(shape = CircleShape, color = Color.White, shadowElevation = 3.dp) {
+                Box(Modifier.size(44.dp).semantics { contentDescription = "回到最新消息" }
+                    .quietClickable(CircleShape) {
+                        scope.launch {
+                            followLatest = true
+                            followAfterJump = true
+                            val lastIndex = listState.layoutInfo.totalItemsCount - 1
+                            if (lastIndex >= 0) {
+                                listState.animateScrollToItem(lastIndex)
+                                listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { listState.scrollBy(it.size.toFloat()) }
+                            }
+                        }
+                    }, contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.KeyboardArrowDown, contentDescription = null, tint = Ink)
+                }
+            }
+        }
         }
         linkedFileUri?.let { uri -> LinkedFilePreview(uri, viewModel) { linkedFileUri = null } }
     }

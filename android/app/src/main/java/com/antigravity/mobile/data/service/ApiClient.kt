@@ -450,10 +450,12 @@ class ApiClient(
      */
     suspend fun renameConversation(cascadeId: String, newTitle: String): Result<Unit> = withContext(Dispatchers.IO) {
         val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
-        val url = "$baseUrl/api/exa.language_server_pb.LanguageServerService/SetCascadeTrajectoryMetadata"
+        if (newTitle.isBlank()) return@withContext Result.failure(IllegalArgumentException("会话标题不能为空"))
+        val url = "$baseUrl/api/exa.language_server_pb.LanguageServerService/UpdateConversationAnnotations"
 
         val payload = buildJsonObject {
-            put("cascadeId", cascadeId)
+            put("cascadeIds", buildJsonArray { add(cascadeId) })
+            put("mergeAnnotations", true)
             put("annotations", buildJsonObject {
                 put("title", newTitle.trim())
             })

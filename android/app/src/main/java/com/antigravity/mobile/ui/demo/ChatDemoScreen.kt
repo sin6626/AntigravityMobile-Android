@@ -29,6 +29,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
@@ -85,6 +86,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val projectListState = rememberLazyListState()
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
+    var showRename by rememberSaveable { mutableStateOf(false) }
+    var renameTitle by rememberSaveable { mutableStateOf("") }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val imagePicker = rememberLauncherForActivityResult(
@@ -92,6 +95,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     ) { uris -> viewModel.addImages(uris) }
     val unsupported: () -> Unit = {
         scope.launch { snackbar.showSnackbar("当前版本先支持文字聊天") }
+    }
+    LaunchedEffect(state.selectedConversationId) {
+        showDeleteConfirm = false
+        showRename = false
     }
 
     LaunchedEffect(state.pairSuccessCount) {
@@ -191,7 +198,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         openedFromProject = false
                         viewModel.newConversation()
                     },
-                    onMore = { showDeleteConfirm = true },
+                    onRename = {
+                        renameTitle = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.title.orEmpty()
+                        showRename = true
+                    },
+                    onDelete = { showDeleteConfirm = true },
+                    actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
+                        !state.isDeleting && !state.isRenaming,
                 )
                 key(state.selectedConversationId) {
                 Box(Modifier.weight(1f)) {
@@ -333,6 +346,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         onRemoveImage = viewModel::removeImage,
                         onSend = viewModel::send,
                         isSending = state.isSending || state.isLoadingMessages,
+                        isRunning = state.isRunning,
+                        isStopping = state.isStopping,
+                        onStop = viewModel::stopGeneration,
                         onUnsupported = unsupported,
                     )
                     Spacer(Modifier.height(23.dp))
@@ -341,6 +357,25 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
+        if (showRename) {
+            AlertDialog(
+                onDismissRequest = { if (!state.isRenaming) showRename = false },
+                title = { Text("重命名会话") },
+                text = {
+                    OutlinedTextField(value = renameTitle, onValueChange = { renameTitle = it },
+                        label = { Text("会话标题") }, singleLine = true, enabled = !state.isRenaming)
+                },
+                confirmButton = {
+                    TextButton(enabled = renameTitle.isNotBlank() && !state.isRenaming,
+                        onClick = { viewModel.renameSelectedConversation(renameTitle) { showRename = false } }) {
+                        Text(if (state.isRenaming) "保存中…" else "保存")
+                    }
+                },
+                dismissButton = {
+                    TextButton(enabled = !state.isRenaming, onClick = { showRename = false }) { Text("取消") }
+                },
+            )
+        }
         if (showDeleteConfirm) {
             AlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },

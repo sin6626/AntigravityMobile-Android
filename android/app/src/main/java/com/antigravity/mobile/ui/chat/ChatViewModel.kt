@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -40,6 +41,9 @@ data class ChatUiState(
     val nextMessageOffset: Int = 0,
     val isSending: Boolean = false,
     val isRunning: Boolean = false,
+    val isStopping: Boolean = false,
+    val isRenaming: Boolean = false,
+    val isDeleting: Boolean = false,
     val streamingMessageId: String? = null,
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
@@ -93,7 +97,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val api = ApiClient(application, prefs, connectionManager)
     private val stream = StreamWebSocketClient(prefs, connectionManager)
 
-    private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired()))
+    private var draftKey = NEW_CHAT_DRAFT
+    private val draftAttachments = mutableMapOf<String, List<PendingImage>>()
+    private var conversationVisit = 0L
+    private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired(), draft = prefs.getDraftText(draftKey)))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
     fun mediaImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw)
@@ -134,18 +141,46 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setDraft(value: String) {
+        prefs.setDraftText(draftKey, value)
         _state.value = _state.value.copy(draft = value)
     }
 
+    private fun switchDraft(key: String) {
+        prefs.setDraftText(draftKey, _state.value.draft)
+        draftAttachments[draftKey] = _state.value.attachments
+        draftKey = key
+        _state.value = _state.value.copy(draft = prefs.getDraftText(key), attachments = draftAttachments[key].orEmpty())
+    }
+
+    private fun moveDraft(from: String, to: String) {
+        val active = draftKey == from
+        val sourceText = if (active) _state.value.draft else prefs.getDraftText(from)
+        val targetText = if (draftKey == to) _state.value.draft else prefs.getDraftText(to)
+        val text = listOf(sourceText, targetText).filter { it.isNotEmpty() }.joinToString("\n\n")
+        val sourceImages = if (active) _state.value.attachments else draftAttachments[from].orEmpty()
+        val targetImages = if (draftKey == to) _state.value.attachments else draftAttachments[to].orEmpty()
+        val images = (sourceImages + targetImages).distinctBy { it.uri }
+        prefs.setDraftText(to, text)
+        draftAttachments[to] = images
+        prefs.clearDraftText(from)
+        draftAttachments.remove(from)
+        if (active) draftKey = to
+        if (draftKey == to) _state.value = _state.value.copy(draft = text, attachments = images)
+    }
+
     fun addImages(uris: List<Uri>) {
+        val key = draftKey
         viewModelScope.launch {
             for (uri in uris.take(4)) {
+                if (draftKey != key) break
                 if (_state.value.attachments.size >= 4) break
                 if (_state.value.attachments.any { it.uri == uri }) continue
                 try {
                     val image = withContext(Dispatchers.IO) { readImage(uri) }
+                    if (draftKey != key) break
                     _state.value = _state.value.copy(attachments = _state.value.attachments + image)
                 } catch (error: Exception) {
+                    if (draftKey != key) break
                     _state.value = _state.value.copy(error = error.message ?: "读取图片失败")
                 }
             }
@@ -301,11 +336,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openConversation(id: String) {
+        conversationVisit++
+        switchDraft(id)
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = id,
             messages = emptyList(),
             isLoadingMessages = true,
+            isLoadingOlder = false,
+            isSubmittingInteraction = false,
+            isStopping = false, isRenaming = false, isDeleting = false,
             streamingMessageId = null,
             isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
@@ -320,16 +360,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun newConversation() {
         closeConversation()
+        switchDraft(NEW_CHAT_DRAFT)
+        prefs.clearDraftText(NEW_CHAT_DRAFT)
+        draftAttachments.remove(NEW_CHAT_DRAFT)
         _state.value = _state.value.copy(draft = "", attachments = emptyList())
     }
 
     fun closeConversation() {
+        conversationVisit++
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = null,
             messages = emptyList(),
             streamingMessageId = null,
             isLoadingMessages = false,
+            isLoadingOlder = false,
+            isSubmittingInteraction = false,
+            isStopping = false, isRenaming = false, isDeleting = false,
             isRunning = false,
             pendingInteraction = null,
             hasMoreMessages = false,
@@ -341,15 +388,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun send() {
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
-        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages) return
+        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping) return
         val id = _state.value.selectedConversationId
         val clientId = UUID.randomUUID().toString()
         var targetId = id ?: "local:$clientId"
+        val originalDraftKey = draftKey
         val pending = OutgoingMessage(targetId,
             GatewayMessageItem(id = "local:$clientId", text = text, imageDataList = images.map { it.bytes }),
             _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
             _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull())
         val wasRunning = _state.value.isRunning
+        setDraft("")
+        _state.value = _state.value.copy(attachments = emptyList())
+        if (id == null) moveDraft(originalDraftKey, targetId)
+        if (id == null) conversationVisit++
         _state.value = _state.value.copy(
             selectedConversationId = targetId, outgoing = _state.value.outgoing + pending,
             draft = "", attachments = emptyList(),
@@ -366,6 +418,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 api.createCascade("", "", model = DEFAULT_CHAT_MODEL, projectId = ProjectItem.PURE_CHAT.id)
                     .fold(
                         onSuccess = { createdId ->
+                            moveDraft(targetId, createdId)
                             _state.value = _state.value.copy(outgoing = _state.value.outgoing.map {
                                 if (it.message.id == pending.message.id) it.copy(conversationId = createdId) else it
                             })
@@ -387,6 +440,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             result.fold(
                 onSuccess = { conversationId ->
+                    if (targetId.startsWith("local:")) moveDraft(targetId, conversationId)
                     _state.value = _state.value.copy(isSending = false,
                         outgoing = _state.value.outgoing.map {
                             if (it.message.id == pending.message.id) it.copy(conversationId = conversationId) else it
@@ -399,17 +453,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     refreshConversations()
                 },
                 onFailure = { error ->
+                    val stillHere = _state.value.selectedConversationId == targetId
+                    val unconfirmed = _state.value.outgoing.any { it.message.id == pending.message.id }
+                    val restoreKey = if (targetId.startsWith("local:")) originalDraftKey else targetId
+                    if (targetId.startsWith("local:")) moveDraft(targetId, restoreKey)
                     val current = _state.value
-                    val stillHere = current.selectedConversationId == targetId
-                    val unconfirmed = current.outgoing.any { it.message.id == pending.message.id }
+                    val restoredDraft = if (unconfirmed) listOf(text, prefs.getDraftText(restoreKey))
+                        .filter { it.isNotBlank() }.joinToString("\n\n") else prefs.getDraftText(restoreKey)
+                    val restoredImages = if (unconfirmed) (images +
+                        (if (draftKey == restoreKey) current.attachments else draftAttachments[restoreKey].orEmpty()))
+                        .distinctBy { it.uri } else current.attachments
+                    if (unconfirmed) {
+                        prefs.setDraftText(restoreKey, restoredDraft)
+                        draftAttachments[restoreKey] = restoredImages
+                    }
                     _state.value = current.copy(
                         outgoing = current.outgoing.filterNot { it.message.id == pending.message.id },
                         selectedConversationId = if (stillHere && targetId.startsWith("local:")) null else current.selectedConversationId,
-                        draft = if (unconfirmed) listOf(text, current.draft).filter { it.isNotBlank() }.joinToString("\n\n") else current.draft,
-                        attachments = if (unconfirmed) (images + current.attachments).distinctBy { it.uri } else current.attachments,
+                        draft = if (draftKey == restoreKey && unconfirmed) restoredDraft else current.draft,
+                        attachments = if (draftKey == restoreKey && unconfirmed) restoredImages else current.attachments,
                         isSending = false,
                         isRunning = if (stillHere && unconfirmed) wasRunning else current.isRunning,
-                        error = if (unconfirmed) "${error.message ?: "消息发送失败"}（内容已恢复到输入框）" else null,
+                        error = if (unconfirmed) "${error.message ?: "消息发送失败"}（内容已恢复到原会话草稿）" else null,
                     )
                 },
             )
@@ -418,17 +483,63 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteSelectedConversation() {
         val id = _state.value.selectedConversationId ?: return
-        if (id.startsWith("local:")) return
+        if (id.startsWith("local:") || _state.value.isDeleting || _state.value.isRenaming) return
+        val visit = conversationVisit
+        _state.value = _state.value.copy(isDeleting = true)
         viewModelScope.launch {
             api.deleteConversation(id).fold(
                 onSuccess = {
-                    newConversation()
+                    prefs.clearDraftText(id)
+                    draftAttachments.remove(id)
+                    if (_state.value.selectedConversationId == id) {
+                        _state.value = _state.value.copy(draft = "", attachments = emptyList())
+                        closeConversation()
+                        switchDraft(NEW_CHAT_DRAFT)
+                    }
                     refreshConversations()
                 },
                 onFailure = { error ->
-                    _state.value = _state.value.copy(error = error.message ?: "删除会话失败")
+                    if (conversationVisit == visit) _state.value = _state.value.copy(isDeleting = false, error = error.message ?: "删除会话失败")
                 },
             )
+        }
+    }
+
+    fun renameSelectedConversation(title: String, onSuccess: () -> Unit) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        if (id.startsWith("local:") || title.isBlank() || current.isRenaming || current.isDeleting) return
+        val visit = conversationVisit
+        _state.value = current.copy(isRenaming = true)
+        viewModelScope.launch {
+            api.renameConversation(id, title).fold(onSuccess = {
+                _state.value = _state.value.copy(conversations = _state.value.conversations.map {
+                    if (it.id == id) it.copy(title = title.trim()) else it
+                })
+                if (conversationVisit == visit) {
+                    _state.value = _state.value.copy(isRenaming = false)
+                    onSuccess()
+                }
+                refreshConversations()
+            }, onFailure = {
+                if (conversationVisit == visit) _state.value = _state.value.copy(isRenaming = false, error = it.message ?: "重命名失败")
+            })
+        }
+    }
+
+    fun stopGeneration() {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        if (id.startsWith("local:") || !current.isRunning || current.isSending || current.isStopping) return
+        val visit = conversationVisit
+        _state.value = current.copy(isStopping = true)
+        viewModelScope.launch {
+            api.cancelInvocation(id).fold(onSuccess = {
+                if (conversationVisit == visit) loadMessages(id).join()
+            }, onFailure = {
+                if (conversationVisit == visit) _state.value = _state.value.copy(error = it.message ?: "停止生成失败")
+            })
+            if (conversationVisit == visit) _state.value = _state.value.copy(isStopping = false)
         }
     }
 
@@ -436,11 +547,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val id = current.selectedConversationId ?: return
         val interaction = current.pendingInteraction ?: return
+        val visit = conversationVisit
         if (interaction.isMultiSelect || current.isSubmittingInteraction) return
         _state.value = current.copy(isSubmittingInteraction = true, error = null)
         viewModelScope.launch {
             api.submitInteraction(id, interaction, option, writeInResponse).fold(
                 onSuccess = {
+                    if (conversationVisit != visit) return@fold
                     _state.value = _state.value.copy(
                         pendingInteraction = null,
                         isSubmittingInteraction = false,
@@ -448,6 +561,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     loadMessages(id)
                 },
                 onFailure = { error ->
+                    if (conversationVisit != visit) return@fold
                     _state.value = _state.value.copy(
                         isSubmittingInteraction = false,
                         error = error.message ?: "提交选择失败",
@@ -457,11 +571,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun loadMessages(id: String) {
-        viewModelScope.launch {
+    private fun loadMessages(id: String): Job {
+        val visit = conversationVisit
+        return viewModelScope.launch {
             api.fetchMessages(id, limit = 50).fold(
                 onSuccess = { payload ->
-                    if (_state.value.selectedConversationId == id) {
+                    if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         val outgoing = reconcileOutgoing(_state.value.outgoing, id, payload.messages.orEmpty())
                         _state.value = _state.value.copy(
                             messages = payload.messages ?: emptyList(),
@@ -477,7 +592,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 },
                 onFailure = { error ->
-                    if (_state.value.selectedConversationId == id) {
+                    if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         _state.value = _state.value.copy(
                             isLoadingMessages = false,
                             error = error.message ?: "获取消息失败",
@@ -489,6 +604,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadOlderMessages() {
+        val visit = conversationVisit
         val current = _state.value
         val id = current.selectedConversationId ?: return
         if (!current.hasMoreMessages || current.isLoadingOlder) return
@@ -496,7 +612,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             api.fetchMessages(id, limit = 50, offset = current.nextMessageOffset).fold(
                 onSuccess = { payload ->
-                    if (_state.value.selectedConversationId == id) {
+                    if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         val older = payload.messages ?: emptyList()
                         val existingIds = older.map { it.id }.toSet()
                         _state.value = _state.value.copy(
@@ -508,6 +624,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 },
                 onFailure = { error ->
+                    if (conversationVisit != visit) return@fold
                     _state.value = _state.value.copy(
                         isLoadingOlder = false,
                         error = error.message ?: "加载更早消息失败",
@@ -525,6 +642,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 }
 
 private const val DEFAULT_CHAT_MODEL = "gemini-3.8-flash-high"
+private const val NEW_CHAT_DRAFT = "android_new_chat"
 
 private fun mergeMessages(
     current: List<GatewayMessageItem>,
