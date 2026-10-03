@@ -47,7 +47,6 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.mutableStateOf
@@ -67,7 +66,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.GatewayMessageItem
-import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import org.commonmark.parser.Parser
 import org.commonmark.node.*
@@ -85,8 +83,6 @@ import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.window.Dialog
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -136,6 +132,20 @@ internal fun ConversationContent(
         }
     }
     var followLatest by remember { mutableStateOf(true) }
+    var linkedFileUri by rememberSaveable { mutableStateOf<String?>(null) }
+    val richImageRequest = remember(viewModel) { { target: String -> viewModel.linkedImageRequest(target) as Any } }
+    val richLinkAction = remember(viewModel) {
+        { target: String ->
+            val url = linkedFileUri?.let { resolveDocumentLink(it, target) } ?: target
+            when {
+                url.startsWith("conversation://") -> {
+                    linkedFileUri = null
+                    url.removePrefix("conversation://").substringBefore('/').takeIf(String::isNotBlank)?.let(viewModel::openConversation)
+                }
+                url.startsWith("file://") -> linkedFileUri = url
+            }
+        }
+    }
     LaunchedEffect(messages, streamingMessageId, isRunning) {
         followLatest = !positioned || (nearBottom && expandedProcesses.isEmpty())
         val previous = renderItems
@@ -169,58 +179,65 @@ internal fun ConversationContent(
             if (newLocal) lastScrolledLocalId = newestLocalId
         }
     }
-    SelectionContainer {
-        LazyColumn(
-            modifier = modifier.fillMaxWidth().alpha(if (positioned) 1f else 0f),
-            state = listState,
-            contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
-        ) {
-            if (hasMore) item(key = "load-older", contentType = "load-older") {
-                DisableSelection {
-                    Text(if (isLoadingOlder) "正在加载…" else "加载更早消息",
-                        modifier = Modifier.fillMaxWidth().quietClickable(enabled = !isLoadingOlder) {
-                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "load-older" }?.let {
-                                historyAnchor = it.key.toString() to -it.offset
+    CompositionLocalProvider(
+        LocalRichLinkAction provides richLinkAction,
+        LocalRichImageRequest provides richImageRequest,
+        LocalRichImageLoader provides viewModel.mediaImageLoader,
+    ) {
+        SelectionContainer {
+            LazyColumn(
+                modifier = modifier.fillMaxWidth().alpha(if (positioned) 1f else 0f),
+                state = listState,
+                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
+            ) {
+                if (hasMore) item(key = "load-older", contentType = "load-older") {
+                    DisableSelection {
+                        Text(if (isLoadingOlder) "正在加载…" else "加载更早消息",
+                            modifier = Modifier.fillMaxWidth().quietClickable(enabled = !isLoadingOlder) {
+                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key != "load-older" }?.let {
+                                    historyAnchor = it.key.toString() to -it.offset
+                                }
+                                onLoadOlder()
                             }
-                            onLoadOlder()
-                        }
-                            .padding(vertical = 10.dp), color = AccentBlue, fontSize = 15.sp)
+                                .padding(vertical = 10.dp), color = AccentBlue, fontSize = 15.sp)
+                    }
                 }
-            }
-            itemsIndexed(renderItems, key = { _, item -> item.key },
-                contentType = { _, item -> if (item.process.isNotEmpty()) "process" else item.node?.javaClass?.name ?: item.message.type }) { index, item ->
-                val entryModifier = if (item.message.id.startsWith("local:")) {
-                    var entered by rememberSaveable(item.key) { mutableStateOf(false) }
-                    LaunchedEffect(item.key) { entered = true }
-                    val alpha by animateFloatAsState(if (entered) 1f else 0f, tween(180), label = "sentMessage")
-                    Modifier.graphicsLayer { this.alpha = alpha }
-                } else Modifier
-                Column(entryModifier.padding(top = if (item.blockIndex == 0) 25.dp else 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (item.process.isNotEmpty()) {
-                        val expanded = item.key in expandedProcesses
-                        val toggle = {
-                            expandedProcesses = if (expanded) expandedProcesses - item.key else expandedProcesses + item.key
-                        }
-                        if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
-                        else ExecutionPanel(item, viewModel, expanded, toggle)
-                    } else if (item.streaming) DisableSelection {
-                        MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
-                    } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
-                    if (item.canCopy) DisableSelection {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            CopyTextButton(item.message.effectiveText, "复制整条回复")
+                itemsIndexed(renderItems, key = { _, item -> item.key },
+                    contentType = { _, item -> if (item.process.isNotEmpty()) "process" else item.node?.javaClass?.name ?: item.message.type }) { index, item ->
+                    val entryModifier = if (item.message.id.startsWith("local:")) {
+                        var entered by rememberSaveable(item.key) { mutableStateOf(false) }
+                        LaunchedEffect(item.key) { entered = true }
+                        val alpha by animateFloatAsState(if (entered) 1f else 0f, tween(180), label = "sentMessage")
+                        Modifier.graphicsLayer { this.alpha = alpha }
+                    } else Modifier
+                    Column(entryModifier.padding(top = if (item.blockIndex == 0) 25.dp else 12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (item.process.isNotEmpty()) {
+                            val expanded = item.key in expandedProcesses
+                            val toggle = {
+                                expandedProcesses = if (expanded) expandedProcesses - item.key else expandedProcesses + item.key
+                            }
+                            if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
+                            else ExecutionPanel(item, viewModel, expanded, toggle)
+                        } else if (item.streaming) DisableSelection {
+                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
+                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
+                        if (item.canCopy) DisableSelection {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                CopyTextButton(item.message.effectiveText, "复制整条回复")
+                            }
                         }
                     }
                 }
-            }
-            if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
-                DisableSelection {
-                    Text("正在回复…", color = SecondaryInk, fontSize = 14.sp,
-                        modifier = Modifier.padding(top = 12.dp))
+                if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
+                    DisableSelection {
+                        Text("正在回复…", color = SecondaryInk, fontSize = 14.sp,
+                            modifier = Modifier.padding(top = 12.dp))
+                    }
                 }
             }
         }
+        linkedFileUri?.let { uri -> LinkedFilePreview(uri, viewModel) { linkedFileUri = null } }
     }
 }
 
@@ -240,7 +257,7 @@ internal data class ConversationRenderItem(
 }
 
 @Composable
-private fun CopyTextButton(source: String, description: String) {
+internal fun CopyTextButton(source: String, description: String) {
     val clipboard = LocalClipboardManager.current
     var copies by remember { mutableIntStateOf(0) }
     LaunchedEffect(copies) {
@@ -318,21 +335,6 @@ internal fun buildConversationRenderItems(
 @Composable
 private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true) {
     val text = message.effectiveText.trim()
-    val scope = rememberCoroutineScope()
-    var linkedFile by remember(message.id) { mutableStateOf<FileContentResponse?>(null) }
-    var linkedFileError by remember(message.id) { mutableStateOf<String?>(null) }
-    var loadingFile by remember(message.id) { mutableStateOf(false) }
-    CompositionLocalProvider(LocalRichLinkAction provides { url ->
-        when {
-            url.startsWith("conversation://") -> url.removePrefix("conversation://").substringBefore('/').takeIf(String::isNotBlank)?.let(viewModel::openConversation)
-            url.startsWith("file://") -> scope.launch {
-                loadingFile = true
-                linkedFileError = null
-                viewModel.fetchLinkedFile(url).fold(onSuccess = { linkedFile = it }, onFailure = { linkedFileError = it.message ?: "文件读取失败" })
-                loadingFile = false
-            }
-        }
-    }) {
     if (message.isUser) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Column(
@@ -354,18 +356,6 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
             if (markdownNode != null) MarkdownBlock(markdownNode)
             else if (text.isNotBlank()) {
                 if (isStreaming) StreamingMessageText(message.id, text) else MarkdownBody(text)
-            }
-        }
-    }
-    }
-    if (linkedFile != null || linkedFileError != null || loadingFile) {
-        Dialog(onDismissRequest = { linkedFile = null; linkedFileError = null; loadingFile = false }) {
-            Column(modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp)).padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(linkedFile?.filename ?: "文件", color = Ink, fontWeight = FontWeight.Bold)
-                Text(linkedFileError ?: if (loadingFile) "加载中…" else linkedFile?.content.orEmpty(),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()),
-                    color = Ink, fontFamily = FontFamily.Monospace, fontSize = 13.sp)
-                Text("关闭", color = AccentBlue, modifier = Modifier.quietClickable { linkedFile = null; linkedFileError = null; loadingFile = false })
             }
         }
     }
@@ -391,7 +381,10 @@ private fun StreamingMessageText(id: String, source: String) {
     Text(shown, color = Ink, fontSize = 18.sp, lineHeight = 27.sp)
 }
 
-private val LocalRichLinkAction = staticCompositionLocalOf<(String) -> Unit> { {} }
+internal val LocalRichLinkAction = staticCompositionLocalOf<(String) -> Unit> { {} }
+
+internal fun parseMarkdownBlocks(source: String): List<Node> =
+    generateSequence(markdownCache.getOrParse(source).firstChild) { it.next }.toList()
 
 @Composable
 private fun MarkdownBody(source: String) {
@@ -508,7 +501,7 @@ private fun ExecutionPanel(item: ConversationRenderItem, viewModel: ChatViewMode
 }
 
 @Composable
-private fun MarkdownBlock(node: Node) {
+internal fun MarkdownBlock(node: Node) {
     when (node) {
         is Heading -> MarkdownText(node, (27 - node.level * 2).sp, FontWeight.SemiBold)
         is Paragraph -> {
@@ -516,7 +509,7 @@ private fun MarkdownBlock(node: Node) {
             if (inlineText(node).text.contains('$')) MathParagraph(node)
             else if (images.isNotEmpty()) {
                 if (node.firstChild !is Image || node.firstChild?.next != null) MarkdownText(node)
-                images.forEach { image -> AsyncImage(model = image.destination, contentDescription = image.title, modifier = Modifier.fillMaxWidth()) }
+                images.forEach { image -> MarkdownImage(image.destination, image.title) }
             } else MarkdownText(node)
         }
         is FencedCodeBlock -> when (node.info.trim().lowercase()) {
@@ -539,7 +532,15 @@ private fun MarkdownBlock(node: Node) {
         is ListItem -> MarkdownListItem(node)
         is org.commonmark.ext.gfm.tables.TableBlock -> Column(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) { MarkdownChildren(node) }
         is org.commonmark.ext.gfm.tables.TableHead, is org.commonmark.ext.gfm.tables.TableBody -> MarkdownChildren(node)
-        is org.commonmark.ext.gfm.tables.TableRow -> Row { var cell = node.firstChild; while (cell != null) { MarkdownAnnotatedText(inlineText(cell), size = 16.sp, modifier = Modifier.widthIn(min = 110.dp).padding(8.dp)); cell = cell.next } }
+        is org.commonmark.ext.gfm.tables.TableRow -> Row {
+            var cell = node.firstChild
+            while (cell != null) {
+                MarkdownAnnotatedText(inlineText(cell), size = 16.sp,
+                    weight = if (node.parent is org.commonmark.ext.gfm.tables.TableHead) FontWeight.SemiBold else FontWeight.Normal,
+                    modifier = Modifier.width(180.dp).padding(8.dp))
+                cell = cell.next
+            }
+        }
         is ThematicBreak -> Spacer(Modifier.fillMaxWidth().height(1.dp).background(SecondaryInk))
         else -> MarkdownChildren(node)
     }
@@ -672,14 +673,14 @@ private fun MarkdownChildren(node: Node) {
 }
 
 @Composable
-private fun CodeBlock(code: String, language: String) {
+internal fun CodeBlock(code: String, language: String) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically) {
             Text(language, color = SecondaryInk, fontSize = 12.sp)
             DisableSelection { CopyTextButton(code, "复制代码") }
         }
-        Text(code.trimEnd(), color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
+        Text(rememberHighlightedCode(code.trimEnd(), language), color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
             fontFamily = FontFamily.Monospace, softWrap = false,
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()))
     }

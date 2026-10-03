@@ -92,6 +92,7 @@ dependencies {
     implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.30.0")
     implementation("io.github.erweixin:ratex-android:0.1.14")
     implementation(project(":mermaidkotlin"))
+    implementation(project(":highlight"))
 
     // Security (Android Keystore / EncryptedSharedPreferences)
     implementation("androidx.security:security-crypto:1.1.0-alpha06")

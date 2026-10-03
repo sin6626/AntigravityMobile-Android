@@ -97,6 +97,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
     fun mediaImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw)
+    fun linkedImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw, _state.value.selectedConversationId)
     suspend fun fetchLinkedFile(uri: String): Result<FileContentResponse> =
         api.fetchFileContent(uri.substringBefore('#'), _state.value.selectedConversationId)
     val gatewayUrl: String? get() = prefs.gatewayBaseUrl

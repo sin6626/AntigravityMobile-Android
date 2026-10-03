@@ -1,0 +1,5 @@
+# Preserve upstream LF and significant token/source whitespace on Windows checkouts.
+* text eol=lf
+src/test/resources/hljs/** -whitespace
+src/test/resources/hljs/diff/* conflict-marker-size=32
+src/main/java/** whitespace=-blank-at-eof

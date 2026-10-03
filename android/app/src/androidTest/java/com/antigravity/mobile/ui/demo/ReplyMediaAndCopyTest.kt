@@ -26,17 +26,70 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.lifecycle.ViewModelProvider
+import androidx.test.platform.app.InstrumentationRegistry
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.PreferencesManager
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 
 class ReplyMediaAndCopyTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun actualFileLinksShowMarkdownAndLoadImageBytes() {
+        // Private real file paths are supplied at run time, never committed as fixtures.
+        val args = InstrumentationRegistry.getArguments()
+        val document = args.getString("documentUri")
+        val image = args.getString("imageUri")
+        assumeTrue(document != null && image != null)
+        val vm = ViewModelProvider(compose.activity)[ChatViewModel::class.java]
+        compose.setContent {
+            ConversationContent(vm, listOf(GatewayMessageItem(id = "file-links", type = "agent",
+                text = "[Markdown]($document)\n\n[Image]($image)")), null, false, false, false, false, {}, Modifier.fillMaxSize())
+        }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Markdown").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Markdown").performClick()
+        compose.waitUntil(15_000) { compose.onAllNodesWithText("1. 项目简介").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithContentDescription("复制文件原文").assertExists()
+        compose.onNodeWithText("关闭").performClick()
+        compose.onNodeWithText("Image").performClick()
+        compose.waitUntil(15_000) {
+            compose.onAllNodesWithContentDescription("文件图片预览").fetchSemanticsNodes().any {
+                it.config.getOrElse(SemanticsProperties.StateDescription) { "" } == "已加载"
+            }
+        }
+        compose.onNodeWithText("关闭").performClick()
+    }
+
+    @Test fun markdownFileUsesNativeBlocksAndHighlightedCodeRemainsCopyable() {
+        val code = "// 中文 🙂\nval message = \"hello\"\n"
+        compose.setContent {
+            FileTextPreview(FileContentResponse(filename = "Agent.md", content = "# File heading\n\n**Strong** paragraph\n\n```kotlin\n${code}```\n\n| Short | Header |\n| --- | --- |\n| Longer first cell | Value |"), Modifier.fillMaxSize())
+        }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("File heading").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("Strong paragraph").assertExists()
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(2)
+        compose.waitUntil(10_000) {
+            compose.onAllNodesWithText(code.trimEnd()).fetchSemanticsNodes().any { node ->
+                node.config[SemanticsProperties.Text].any { it.spanStyles.any { span -> span.item.color == Color(0xFF8250A6) } }
+            }
+        }
+        val codeNode = compose.onNodeWithText(code.trimEnd())
+        codeNode.performTouchInput { longClick(center) }
+        compose.onNodeWithContentDescription("复制代码").performClick()
+        val clipboard = compose.activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        compose.runOnIdle { assertEquals(code, clipboard.primaryClip?.getItemAt(0)?.text?.toString()) }
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(3)
+        assertEquals(compose.onNodeWithText("Short").fetchSemanticsNode().boundsInRoot.left,
+            compose.onNodeWithText("Longer first cell").fetchSemanticsNode().boundsInRoot.left, 0.5f)
+        assertEquals(compose.onNodeWithText("Header").fetchSemanticsNode().boundsInRoot.left,
+            compose.onNodeWithText("Value").fetchSemanticsNode().boundsInRoot.left, 0.5f)
+    }
 
     @Test fun fileUriReachesGatewayWithoutLosingItsScheme() {
         val api = ApiClient(compose.activity, PreferencesManager(compose.activity))

@@ -6,6 +6,7 @@ import android.util.Base64
 import android.util.Log
 import coil.ImageLoader
 import coil.request.ImageRequest
+import coil.decode.SvgDecoder
 import com.antigravity.mobile.data.model.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -79,12 +80,13 @@ class ApiClient(
 
     val mediaImageLoader: ImageLoader by lazy {
         ImageLoader.Builder(context.applicationContext)
+            .components { add(SvgDecoder.Factory()) }
             .okHttpClient(OkHttpClient.Builder().addInterceptor(ApiTraceInterceptor()).build())
             .build()
     }
 
-    fun mediaImageRequest(raw: String): ImageRequest {
-        val url = resolveMediaURL(raw)
+    fun mediaImageRequest(raw: String, cascadeId: String? = null): ImageRequest {
+        val url = resolveMediaURL(raw, cascadeId)
         val builder = ImageRequest.Builder(context.applicationContext).data(url)
         val gateway = currentBaseUrl?.toHttpUrlOrNull()
         val media = url.toHttpUrlOrNull()
@@ -844,7 +846,7 @@ class ApiClient(
      * Note: Image authentication is handled via Authorization Header (configured in Coil ImageLoader)
      * avoiding deprecated query tokens.
      */
-    fun resolveMediaURL(raw: String): String {
+    fun resolveMediaURL(raw: String, cascadeId: String? = null): String {
         var clean = raw.trim()
         if (clean.startsWith("MEDIA:", ignoreCase = true)) {
             clean = clean.substring(6).trim()
@@ -874,7 +876,8 @@ class ApiClient(
         } catch (_: Exception) {
             unescaped
         }
-        return "$baseUrl/api/v1/files/raw?uri=$encodedUri"
+        val cascadeParam = cascadeId?.let { "&cascade_id=${URLEncoder.encode(it, "UTF-8")}" }.orEmpty()
+        return "$baseUrl/api/v1/files/raw?uri=$encodedUri$cascadeParam"
     }
 
     suspend fun downloadFile(
