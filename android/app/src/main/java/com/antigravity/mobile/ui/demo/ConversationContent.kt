@@ -230,8 +230,8 @@ internal fun ConversationContent(
                             if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
                             else ExecutionPanel(item, viewModel, expanded, toggle)
                         } else if (item.streaming) DisableSelection {
-                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0)
-                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0)
+                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, !isRunning)
+                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, !isRunning)
                         if (item.canCopy) DisableSelection {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 CopyTextButton(item.message.effectiveText, "复制整条回复")
@@ -364,7 +364,7 @@ internal fun buildConversationRenderItems(
 }
 
 @Composable
-private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true, allowRevert: Boolean = true) {
     val text = message.effectiveText.trim()
     if (message.isUser) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -377,6 +377,17 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
                 MessageImages(message, viewModel)
                 if (text.isNotBlank()) Text(text, color = Color(0xFF163E63),
                     fontSize = 17.sp, lineHeight = 26.sp)
+                if (message.stepIndex != null && !message.id.startsWith("local:")) DisableSelection {
+                    Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                        CopyTextButton(message.effectiveText, "复制用户消息")
+                        Box(Modifier.size(44.dp).semantics { contentDescription = "回退到这条消息";
+                            stateDescription = if (message.canRevert && allowRevert) "可回退" else message.revertReason ?: "当前无法回退" }
+                            .quietClickable(enabled = message.canRevert && allowRevert) { viewModel.previewRevert(message) }
+                            .alpha(if (message.canRevert && allowRevert) 1f else 0.35f), contentAlignment = Alignment.Center) {
+                            Symbol("undo", size = 20, color = SecondaryInk)
+                        }
+                    }
+                }
             }
         }
     } else if (message.isError) {

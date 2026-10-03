@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -79,6 +80,12 @@ private val symbolCodepoints = mapOf(
     "folder" to "\uE2C7",
     "more_horiz" to "\uE5D3",
     "more_vert" to "\uE5D4",
+    "push_pin" to "\uF10D",
+    "archive" to "\uE149",
+    "unarchive" to "\uE169",
+    "undo" to "\uE166",
+    "delete" to "\uE872",
+    "edit" to "\uE3C9",
     "menu" to "\uE5D2",
     "mic" to "\uE029",
     "person" to "\uE7FD",
@@ -173,6 +180,12 @@ internal fun ConversationTopBar(
     onRename: () -> Unit,
     onDelete: () -> Unit,
     actionsEnabled: Boolean = true,
+    title: String = "未命名会话",
+    isPinned: Boolean = false,
+    isArchived: Boolean = false,
+    onPin: () -> Unit = {},
+    onArchive: () -> Unit = {},
+    leadingDescription: String = if (returnToProjects) "返回项目列表" else "打开菜单",
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -182,7 +195,7 @@ internal fun ConversationTopBar(
     ) {
         RoundIconButton(
             if (returnToProjects) "arrow_back" else "menu",
-            if (returnToProjects) "返回项目列表" else "打开菜单",
+            leadingDescription,
             onLeading,
         )
         Row(
@@ -192,12 +205,9 @@ internal fun ConversationTopBar(
             RoundIconButton("edit_square", "新建聊天", onNewChat)
             Box {
                 RoundIconButton("more_vert", "更多选项", { menuOpen = true })
-                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                    DropdownMenuItem(text = { Text("重命名") }, enabled = actionsEnabled,
-                        onClick = { menuOpen = false; onRename() })
-                    DropdownMenuItem(text = { Text("删除会话", color = Color(0xFFB3261E)) }, enabled = actionsEnabled,
-                        onClick = { menuOpen = false; onDelete() })
-                }
+                ConversationActionsMenu(menuOpen, { menuOpen = false }, title, isPinned, isArchived, actionsEnabled,
+                    { menuOpen = false; onRename() }, { menuOpen = false; onPin() },
+                    { menuOpen = false; onArchive() }, { menuOpen = false; onDelete() })
             }
         }
     }
@@ -287,7 +297,7 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
         images.forEach { image ->
             Box {
                 AsyncImage(
-                    model = image.uri,
+                    model = image.bytes,
                     contentDescription = "待发送图片",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.size(58.dp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)),
@@ -353,4 +363,38 @@ private fun ComposerTextField(
             }
         },
     )
+}
+
+@Composable
+internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, title: String,
+    pinned: Boolean, archived: Boolean, enabled: Boolean, onRename: () -> Unit,
+    onPin: () -> Unit, onArchive: () -> Unit, onDelete: () -> Unit) {
+    if (!expanded) return
+    androidx.compose.ui.window.Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true)) {
+        androidx.compose.material3.Surface(shape = RoundedCornerShape(28.dp), color = Color.White,
+            shadowElevation = 12.dp, modifier = Modifier.width(244.dp)) {
+            Column(Modifier.padding(vertical = 10.dp)) {
+                Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled, onClick = onRename)
+                    .semantics { contentDescription = "重命名" }.padding(horizontal = 22.dp, vertical = 15.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(title, color = Color(0xFF8A8A8A), fontSize = 16.sp, maxLines = 2,
+                        overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(12.dp)); Symbol("edit", size = 18, color = SecondaryInk)
+                }
+                if (!archived) ConversationMenuRow("push_pin", if (pinned) "取消置顶" else "置顶", enabled, onPin)
+                ConversationMenuRow(if (archived) "unarchive" else "archive", if (archived) "恢复会话" else "归档", enabled, onArchive)
+                ConversationMenuRow("delete", "删除会话", enabled, onDelete, Color(0xFFCC2332))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConversationMenuRow(icon: String, text: String, enabled: Boolean, onClick: () -> Unit, color: Color = Ink) {
+    Row(Modifier.fillMaxWidth().height(56.dp).quietClickable(enabled = enabled, onClick = onClick)
+        .alpha(if (enabled) 1f else 0.45f).padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
+        Symbol(icon, size = 25, color = color); Spacer(Modifier.width(20.dp))
+        Text(text, color = color, fontSize = 18.sp)
+    }
 }

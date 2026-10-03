@@ -17,6 +17,25 @@ type stubDiscoverer struct {
 	info *inspector.InstanceInfo
 }
 
+func TestRejectedRenamePreservesCachedTitle(t *testing.T) {
+	id := "rename-failure-test"
+	defaultTrajCache.cascadeTitlesMu.Lock()
+	defaultTrajCache.cascadeTitles[id] = "old title"
+	defaultTrajCache.cascadeTitlesMu.Unlock()
+	defer ClearTrajectoryCache(id)
+	p := &Proxy{}
+	w := httptest.NewRecorder()
+	p.handleUpdateConversationAnnotations(w, httptest.NewRequest("POST", "/", strings.NewReader(
+		`{"cascadeIds":["rename-failure-test"],"annotations":{"title":"new title"},"mergeAnnotations":true}`)),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "rejected", 500) }), "/UpdateConversationAnnotations")
+	defaultTrajCache.cascadeTitlesMu.RLock()
+	title := defaultTrajCache.cascadeTitles[id]
+	defaultTrajCache.cascadeTitlesMu.RUnlock()
+	if w.Code != 500 || title != "old title" {
+		t.Fatalf("failed rename changed cache: status=%d title=%s", w.Code, title)
+	}
+}
+
 func (s *stubDiscoverer) Current() *inspector.InstanceInfo { return s.info }
 func (s *stubDiscoverer) Scan() *inspector.InstanceInfo    { return s.info }
 func (s *stubDiscoverer) Start()                           {}
@@ -1037,8 +1056,3 @@ func TestGetAllCascadeTrajectoriesErrorStatus(t *testing.T) {
 		t.Errorf("expected ErrorMessage to contain 'checkpoint validation failed', got %q", sum.ErrorMessage)
 	}
 }
-
-
-
-
-

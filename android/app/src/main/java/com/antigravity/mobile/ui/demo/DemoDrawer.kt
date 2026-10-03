@@ -49,6 +49,7 @@ internal fun DemoDrawer(
     onOpenProjectConversation: (String) -> Unit,
     onNewChat: () -> Unit,
     onPairing: () -> Unit,
+    onArchived: () -> Unit,
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
@@ -81,6 +82,7 @@ internal fun DemoDrawer(
         }
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             DrawerMenuItem("chat_bubble", "聊天", onNewChat)
+            DrawerMenuItem("archive", "已归档", onArchived)
             DrawerMenuItem("folder", "项目") { projectsOpen = !projectsOpen }
             if (projectsOpen || searchText.isNotBlank()) {
                 val visibleProjects = projects.filter { project ->
@@ -122,8 +124,16 @@ internal fun DemoDrawer(
                 }
             }
             Spacer(Modifier.height(27.dp))
+            val pinned = conversations.filter { it.isPinned && it.displayTitle.contains(searchText, true) }
+            if (pinned.isNotEmpty()) {
+                DrawerSection("置顶")
+                pinned.forEach { item -> DrawerConversation(item.displayTitle) {
+                    if (item.isPureChat) onOpenConversation(item.id) else onOpenProjectConversation(item.id)
+                } }
+                Spacer(Modifier.height(20.dp))
+            }
             DrawerSection("最近")
-            val filtered = conversations.filter { it.isPureChat && !it.isSubagent &&
+            val filtered = conversations.filter { it.isPureChat && !it.isSubagent && !it.isPinned &&
                 it.displayTitle.contains(searchText, ignoreCase = true) }
             if (isLoading && filtered.isEmpty()) {
                 Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)

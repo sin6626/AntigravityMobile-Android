@@ -12,6 +12,7 @@ import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.data.model.PairingInfo
 import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
+import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
@@ -44,6 +45,12 @@ data class ChatUiState(
     val isStopping: Boolean = false,
     val isRenaming: Boolean = false,
     val isDeleting: Boolean = false,
+    val busyConversations: Set<String> = emptySet(),
+    val revertMessage: GatewayMessageItem? = null,
+    val revertPreview: RevertPreviewResponse? = null,
+    val isLoadingRevert: Boolean = false,
+    val isReverting: Boolean = false,
+    val revertError: String? = null,
     val streamingMessageId: String? = null,
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
@@ -346,6 +353,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isLoadingOlder = false,
             isSubmittingInteraction = false,
             isStopping = false, isRenaming = false, isDeleting = false,
+            revertMessage = null, revertPreview = null, revertError = null, isLoadingRevert = false, isReverting = false,
             streamingMessageId = null,
             isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
@@ -377,6 +385,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isLoadingOlder = false,
             isSubmittingInteraction = false,
             isStopping = false, isRenaming = false, isDeleting = false,
+            revertMessage = null, revertPreview = null, revertError = null, isLoadingRevert = false, isReverting = false,
             isRunning = false,
             pendingInteraction = null,
             hasMoreMessages = false,
@@ -388,7 +397,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun send() {
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
-        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping) return
+        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
         val id = _state.value.selectedConversationId
         val clientId = UUID.randomUUID().toString()
         var targetId = id ?: "local:$clientId"
@@ -481,49 +490,136 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun deleteSelectedConversation() {
-        val id = _state.value.selectedConversationId ?: return
-        if (id.startsWith("local:") || _state.value.isDeleting || _state.value.isRenaming) return
-        val visit = conversationVisit
-        _state.value = _state.value.copy(isDeleting = true)
+    private fun mutateConversation(id: String, operation: suspend () -> Result<Unit>, onSuccess: () -> Unit) {
+        if (id.startsWith("local:") || id in _state.value.busyConversations) return
+        _state.value = _state.value.copy(busyConversations = _state.value.busyConversations + id)
         viewModelScope.launch {
-            api.deleteConversation(id).fold(
-                onSuccess = {
-                    prefs.clearDraftText(id)
-                    draftAttachments.remove(id)
-                    if (_state.value.selectedConversationId == id) {
-                        _state.value = _state.value.copy(draft = "", attachments = emptyList())
-                        closeConversation()
-                        switchDraft(NEW_CHAT_DRAFT)
-                    }
-                    refreshConversations()
-                },
-                onFailure = { error ->
-                    if (conversationVisit == visit) _state.value = _state.value.copy(isDeleting = false, error = error.message ?: "删除会话失败")
-                },
-            )
+            val result = operation()
+            _state.value = _state.value.copy(busyConversations = _state.value.busyConversations - id)
+            result.fold(onSuccess = { onSuccess(); refreshConversations() }, onFailure = {
+                if (it is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(error = it.message ?: "会话操作失败")
+            })
+        }
+    }
+
+    fun deleteSelectedConversation() { _state.value.selectedConversationId?.let(::deleteConversation) }
+
+    fun deleteConversation(id: String) {
+        if (id in _state.value.busyConversations || id.startsWith("local:")) return
+        if (_state.value.selectedConversationId == id) _state.value = _state.value.copy(isDeleting = true)
+        mutateConversation(id, { api.deleteConversation(id).also {
+            if (_state.value.selectedConversationId == id) _state.value = _state.value.copy(isDeleting = false)
+        } }) {
+            prefs.clearDraftText(id)
+            draftAttachments.remove(id)
+            if (_state.value.selectedConversationId == id) {
+                _state.value = _state.value.copy(draft = "", attachments = emptyList())
+                closeConversation(); switchDraft(NEW_CHAT_DRAFT)
+            }
         }
     }
 
     fun renameSelectedConversation(title: String, onSuccess: () -> Unit) {
+        val id = _state.value.selectedConversationId ?: return
+        val visit = conversationVisit
+        renameConversation(id, title) { if (conversationVisit == visit) onSuccess() }
+    }
+
+    fun renameConversation(id: String, title: String, onSuccess: () -> Unit) {
+        if (title.isBlank() || id in _state.value.busyConversations || id.startsWith("local:")) return
+        if (_state.value.selectedConversationId == id) _state.value = _state.value.copy(isRenaming = true)
+        mutateConversation(id, { api.renameConversation(id, title).also {
+            if (_state.value.selectedConversationId == id) _state.value = _state.value.copy(isRenaming = false)
+        } }) {
+            _state.value = _state.value.copy(conversations = _state.value.conversations.map {
+                if (it.id == id) it.copy(title = title.trim()) else it
+            })
+            onSuccess()
+        }
+    }
+
+    fun setPinned(id: String, pinned: Boolean) = mutateConversation(id, { api.setConversationPinned(id, pinned) }) {
+        _state.value = _state.value.copy(conversations = _state.value.conversations.map {
+            if (it.id == id) it.copy(isPinned = pinned) else it
+        }.sortedWith(compareByDescending<ConversationItem> { it.isPinned }.thenByDescending { it.lastModifiedEpochMs }))
+    }
+
+    fun setArchived(id: String, archived: Boolean) {
+        if (archived && (_state.value.conversations.any { it.id == id && it.status.isRunning } ||
+                _state.value.selectedConversationId == id && _state.value.isRunning)) {
+            _state.value = _state.value.copy(error = "请先停止生成，再归档会话")
+            return
+        }
+        mutateConversation(id, { api.setConversationArchived(id, archived) }) {
+            _state.value = _state.value.copy(conversations = _state.value.conversations.map {
+                if (it.id == id) it.copy(isArchived = archived) else it
+            })
+            if (archived && _state.value.selectedConversationId == id) { closeConversation(); switchDraft(NEW_CHAT_DRAFT) }
+        }
+    }
+
+    fun dismissRevert() {
+        if (!_state.value.isReverting) _state.value = _state.value.copy(revertMessage = null, revertPreview = null,
+            isLoadingRevert = false, revertError = null)
+    }
+
+    fun previewRevert(message: GatewayMessageItem) {
         val current = _state.value
         val id = current.selectedConversationId ?: return
-        if (id.startsWith("local:") || title.isBlank() || current.isRenaming || current.isDeleting) return
+        val index = message.stepIndex ?: return
+        if (current.isRunning || current.isSending || current.isReverting || !message.canRevert) return
         val visit = conversationVisit
-        _state.value = current.copy(isRenaming = true)
+        _state.value = current.copy(revertMessage = message, revertPreview = null, revertError = null, isLoadingRevert = true)
         viewModelScope.launch {
-            api.renameConversation(id, title).fold(onSuccess = {
-                _state.value = _state.value.copy(conversations = _state.value.conversations.map {
-                    if (it.id == id) it.copy(title = title.trim()) else it
-                })
+            val result = api.getRevertPreview(id, index)
+            if (conversationVisit != visit || _state.value.revertMessage?.id != message.id) return@launch
+            result.fold(onSuccess = { _state.value = _state.value.copy(revertPreview = it, isLoadingRevert = false) },
+                onFailure = { _state.value = _state.value.copy(revertError = it.message ?: "预览失败", isLoadingRevert = false) })
+        }
+    }
+
+    fun executeRevert(conversationOnly: Boolean) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        val message = current.revertMessage ?: return
+        val index = message.stepIndex ?: return
+        if (current.revertPreview == null || current.isReverting || current.isRunning || current.isSending || id in current.busyConversations) return
+        val visit = conversationVisit
+        _state.value = current.copy(isReverting = true, revertError = null, busyConversations = current.busyConversations + id)
+        viewModelScope.launch {
+            try {
+                val urls = message.imageUrls.orEmpty().distinct()
+                check(urls.isNotEmpty() || message.media.isNullOrEmpty()) { "原图片不可恢复，请在电脑端回退" }
+                check(urls.size + _state.value.attachments.size <= 4) { "恢复后图片超过 4 张，请先保存当前草稿" }
+                val images = urls.map { url ->
+                    val (bytes, mime) = api.imageForDraft(url, id).getOrThrow()
+                    PendingImage(Uri.parse(url), bytes, mime)
+                }
+                if (conversationVisit != visit) return@launch
+                api.executeRevert(id, index, conversationOnly).getOrThrow()
+                // Restore to the original draft even when the user changes conversations during the request.
+                val text = listOf(message.effectiveText, if (draftKey == id) _state.value.draft else prefs.getDraftText(id))
+                    .filter { it.isNotEmpty() }.joinToString("\n\n")
+                prefs.setDraftText(id, text)
+                draftAttachments[id] = (images + if (draftKey == id) _state.value.attachments else draftAttachments[id].orEmpty()).distinctBy { it.uri }
                 if (conversationVisit == visit) {
-                    _state.value = _state.value.copy(isRenaming = false)
-                    onSuccess()
+                    conversationVisit++
+                    stream.disconnect()
+                    _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
+                        draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
+                        pendingInteraction = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
+                    stream.connect(id); loadMessages(id)
+                } else if (draftKey == id) {
+                    _state.value = _state.value.copy(draft = text, attachments = draftAttachments[id].orEmpty())
+                    if (_state.value.selectedConversationId == id) openConversation(id)
                 }
                 refreshConversations()
-            }, onFailure = {
-                if (conversationVisit == visit) _state.value = _state.value.copy(isRenaming = false, error = it.message ?: "重命名失败")
-            })
+            } catch (error: Exception) {
+                if (conversationVisit == visit) _state.value = _state.value.copy(isReverting = false, revertError = error.message ?: "回退失败")
+            } finally {
+                _state.value = _state.value.copy(busyConversations = _state.value.busyConversations - id)
+            }
         }
     }
 

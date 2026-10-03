@@ -4,6 +4,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.pager.HorizontalPager
@@ -65,6 +70,7 @@ import kotlin.math.abs
 @Composable
 fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val activeConversations = state.conversations.filterNot { it.isArchived }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
@@ -85,6 +91,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var openedFromProject by rememberSaveable { mutableStateOf(false) }
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val projectListState = rememberLazyListState()
+    var archivedOpen by rememberSaveable { mutableStateOf(false) }
+    var openedFromArchive by rememberSaveable { mutableStateOf(false) }
+    var renameConversationId by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteConversationId by rememberSaveable { mutableStateOf<String?>(null) }
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var showRename by rememberSaveable { mutableStateOf(false) }
     var renameTitle by rememberSaveable { mutableStateOf("") }
@@ -99,6 +109,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     LaunchedEffect(state.selectedConversationId) {
         showDeleteConfirm = false
         showRename = false
+        if (state.selectedConversationId == null && openedFromArchive) {
+            archivedOpen = true
+            openedFromArchive = false
+        }
     }
 
     LaunchedEffect(state.pairSuccessCount) {
@@ -155,26 +169,35 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             DemoDrawer(
                 modifier = Modifier.fillMaxWidth(0.80f).fillMaxHeight()
                     .statusBarsPadding().navigationBarsPadding(),
-                conversations = state.conversations,
+                conversations = activeConversations,
                 projects = state.projects,
                 isLoading = state.isLoadingConversations,
                 isLoadingProjects = state.isLoadingProjects,
                 onOpenConversation = { id ->
+                    archivedOpen = false; openedFromArchive = false
                     openedFromProject = false
                     projectsSelected = false
                     viewModel.openConversation(id)
                     scope.launch { drawerState.close() }
                 },
                 onOpenProjectConversation = { id ->
+                    archivedOpen = false; openedFromArchive = false
                     openedFromProject = true
                     projectsSelected = true
                     viewModel.openConversation(id)
                     scope.launch { drawerState.close() }
                 },
                 onNewChat = {
+                    archivedOpen = false; openedFromArchive = false
                     viewModel.newConversation()
                     projectsSelected = false
                     openedFromProject = false
+                    scope.launch { drawerState.close() }
+                },
+                onArchived = {
+                    viewModel.closeConversation()
+                    openedFromProject = false; openedFromArchive = false; archivedOpen = true
+                    viewModel.refreshConversations()
                     scope.launch { drawerState.close() }
                 },
                 onPairing = {
@@ -189,22 +212,38 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     ) {
     Box(modifier = Modifier.fillMaxSize().background(Color.White)) {
         Column(modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            if (state.selectedConversationId != null) {
+            if (archivedOpen) {
+                ArchivedConversations(state.conversations, state.isLoadingConversations, state.busyConversations,
+                    onBack = { archivedOpen = false }, onRefresh = viewModel::refreshConversations,
+                    onOpen = { id -> archivedOpen = false; openedFromArchive = true; viewModel.openConversation(id) },
+                    onRename = { item -> renameConversationId = item.id; renameTitle = item.title; showRename = true },
+                    onRestore = { viewModel.setArchived(it, false) },
+                    onDelete = { deleteConversationId = it; showDeleteConfirm = true })
+            } else if (state.selectedConversationId != null) {
                 ConversationTopBar(
-                    returnToProjects = openedFromProject,
-                    onLeading = if (openedFromProject) returnFromConversation else openDrawer,
+                    returnToProjects = openedFromProject || openedFromArchive,
+                    leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
+                    onLeading = if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
+                        else if (openedFromProject) returnFromConversation else openDrawer,
                     onNewChat = {
                         projectsSelected = false
                         openedFromProject = false
+                        archivedOpen = false; openedFromArchive = false
                         viewModel.newConversation()
                     },
                     onRename = {
+                        renameConversationId = state.selectedConversationId
                         renameTitle = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.title.orEmpty()
                         showRename = true
                     },
-                    onDelete = { showDeleteConfirm = true },
+                    onDelete = { deleteConversationId = state.selectedConversationId; showDeleteConfirm = true },
+                    title = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.displayTitle ?: "未命名会话",
+                    isPinned = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isPinned == true,
+                    isArchived = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isArchived == true,
+                    onPin = { state.selectedConversationId?.let { id -> viewModel.setPinned(id, state.conversations.firstOrNull { it.id == id }?.isPinned != true) } },
+                    onArchive = { state.selectedConversationId?.let { id -> viewModel.setArchived(id, state.conversations.firstOrNull { it.id == id }?.isArchived != true) } },
                     actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
-                        !state.isDeleting && !state.isRenaming,
+                        state.selectedConversationId !in state.busyConversations && !state.isReverting,
                 )
                 key(state.selectedConversationId) {
                 Box(Modifier.weight(1f)) {
@@ -253,9 +292,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 if (page == 1) {
                     ProjectOverview(
                         projects = state.projects,
-                        conversations = state.conversations,
+                        conversations = activeConversations,
                         isLoading = state.isLoadingProjects,
                         onOpenConversation = { id ->
+                            archivedOpen = false; openedFromArchive = false
                             openedFromProject = true
                             viewModel.openConversation(id)
                         },
@@ -303,7 +343,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     }) {
                     Spacer(Modifier.weight(1f))
                     Column(modifier = Modifier.padding(horizontal = 28.dp)) {
-                        val recent = state.conversations.filter { it.isPureChat && !it.isSubagent }.take(2)
+                        val recent = activeConversations.filter { it.isPureChat && !it.isSubagent }.take(2)
                         if (recent.isEmpty() && state.isLoadingConversations) {
                             Text("正在加载会话…", color = SecondaryInk, fontSize = 16.sp)
                         }
@@ -329,7 +369,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             }
         }
 
-        if (state.selectedConversationId != null || !projectsSelected) {
+        if (!archivedOpen && (state.selectedConversationId != null || !projectsSelected)) {
             Column(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()) {
                 Column(Modifier.onSizeChanged { composerHeightPx = it.height }) {
                     state.pendingInteraction?.let { interaction ->
@@ -345,7 +385,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         onRemoveImage = viewModel::removeImage,
                         onSend = viewModel::send,
-                        isSending = state.isSending || state.isLoadingMessages,
+                        isSending = state.isSending || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
                         isRunning = state.isRunning,
                         isStopping = state.isStopping,
                         onStop = viewModel::stopGeneration,
@@ -357,22 +397,53 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
+        state.revertMessage?.let { message ->
+            var conversationOnly by remember(message.id) { mutableStateOf(true) }
+            AlertDialog(onDismissRequest = viewModel::dismissRevert, title = { Text("回退到这条消息？") },
+                text = {
+                    Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("这条消息及之后的对话会被撤回，原消息将恢复到草稿。", color = SecondaryInk)
+                        Text(message.effectiveText, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        if (state.isLoadingRevert) CircularProgressIndicator(color = AccentBlue)
+                        state.revertPreview?.let { preview ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = !conversationOnly, enabled = !state.isReverting, onCheckedChange = { conversationOnly = !it })
+                                Text("同时回退工作区文件")
+                            }
+                            Text(if (conversationOnly) "仅回退对话，文件保持现状。" else "将恢复工作区到此前状态；影响可能不止下方预览文件。", color = SecondaryInk)
+                            if (!conversationOnly) preview.files.forEach { file ->
+                                Text("${file.fileName} · ${file.actionType} · +${file.additions} / −${file.deletions}", fontSize = 14.sp)
+                            }
+                        }
+                        state.revertError?.let { Text(it, color = Color(0xFFB3261E)) }
+                    }
+                }, confirmButton = {
+                    TextButton(enabled = state.revertPreview != null && !state.isReverting && !state.isRunning,
+                        onClick = { viewModel.executeRevert(conversationOnly) }) { Text(if (state.isReverting) "正在回退…" else "确认回退") }
+                }, dismissButton = {
+                    TextButton(enabled = !state.isReverting, onClick = viewModel::dismissRevert) { Text("取消") }
+                    if (state.revertError != null && state.revertPreview == null) TextButton(onClick = { viewModel.previewRevert(message) }) { Text("重试") }
+                })
+        }
         if (showRename) {
             AlertDialog(
-                onDismissRequest = { if (!state.isRenaming) showRename = false },
+                onDismissRequest = { if (renameConversationId !in state.busyConversations) showRename = false },
                 title = { Text("重命名会话") },
                 text = {
                     OutlinedTextField(value = renameTitle, onValueChange = { renameTitle = it },
-                        label = { Text("会话标题") }, singleLine = true, enabled = !state.isRenaming)
+                        label = { Text("会话标题") }, singleLine = true, enabled = renameConversationId !in state.busyConversations)
                 },
                 confirmButton = {
-                    TextButton(enabled = renameTitle.isNotBlank() && !state.isRenaming,
-                        onClick = { viewModel.renameSelectedConversation(renameTitle) { showRename = false } }) {
-                        Text(if (state.isRenaming) "保存中…" else "保存")
+                    TextButton(enabled = renameTitle.isNotBlank() && renameConversationId !in state.busyConversations,
+                        onClick = { renameConversationId?.let { id -> viewModel.renameConversation(id, renameTitle) {
+                            if (renameConversationId == id) showRename = false
+                        } } }) {
+                        Text(if (renameConversationId in state.busyConversations) "保存中…" else "保存")
                     }
                 },
                 dismissButton = {
-                    TextButton(enabled = !state.isRenaming, onClick = { showRename = false }) { Text("取消") }
+                    TextButton(enabled = renameConversationId !in state.busyConversations, onClick = { showRename = false }) { Text("取消") }
                 },
             )
         }
@@ -384,7 +455,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 confirmButton = {
                     TextButton(onClick = {
                         showDeleteConfirm = false
-                        viewModel.deleteSelectedConversation()
+                        deleteConversationId?.let(viewModel::deleteConversation)
                     }) { Text("删除", color = Color(0xFFB3261E)) }
                 },
                 dismissButton = {
@@ -400,6 +471,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 focusManager.clearFocus()
                 keyboardController?.hide()
             }
+            archivedOpen -> archivedOpen = false
+            state.selectedConversationId != null && openedFromArchive -> { viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false }
             drawerState.isOpen -> scope.launch { drawerState.close() }
             state.selectedConversationId != null && openedFromProject -> returnFromConversation()
             state.selectedConversationId == null && projectsSelected -> projectsSelected = false

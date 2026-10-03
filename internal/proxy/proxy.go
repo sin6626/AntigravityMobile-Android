@@ -1167,8 +1167,8 @@ func (p *Proxy) handleUpdateConversationAnnotations(w http.ResponseWriter, r *ht
 			Title string `json:"title"`
 		} `json:"annotations"`
 	}
+	var activeIDs []string
 	if err := json.Unmarshal(bodyBytes, &payload); err == nil {
-		var activeIDs []string
 		for _, cid := range payload.CascadeIDs {
 			if !IsDeletedCascade(cid) {
 				activeIDs = append(activeIDs, cid)
@@ -1181,18 +1181,6 @@ func (p *Proxy) handleUpdateConversationAnnotations(w http.ResponseWriter, r *ht
 			w.Write([]byte("{}"))
 			return
 		}
-
-		title := strings.TrimSpace(payload.Annotations.Title)
-		if title != "" && title != "未命名会话" {
-			defaultTrajCache.cascadeTitlesMu.Lock()
-			for _, cid := range activeIDs {
-				if cid != "" {
-					defaultTrajCache.cascadeTitles[cid] = title
-					writeAnnotationTitle(cid, title)
-				}
-			}
-			defaultTrajCache.cascadeTitlesMu.Unlock()
-		}
 	}
 
 	p.SuppressDesktopFocus(AntiReflectionDuration)
@@ -1200,7 +1188,25 @@ func (p *Proxy) handleUpdateConversationAnnotations(w http.ResponseWriter, r *ht
 	fwdReq := r.Clone(r.Context())
 	fwdReq.URL.Path = reqPath
 	fwdReq.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	rp.ServeHTTP(w, fwdReq)
+	rec := newBufferedResponseWriter()
+	defer rec.release()
+	rp.ServeHTTP(rec, fwdReq)
+	title := strings.TrimSpace(payload.Annotations.Title)
+	if rec.statusCode >= 200 && rec.statusCode < 300 && title != "" && title != "未命名会话" {
+		defaultTrajCache.cascadeTitlesMu.Lock()
+		for _, cid := range activeIDs {
+			if cid != "" {
+				defaultTrajCache.cascadeTitles[cid] = title
+				writeAnnotationTitle(cid, title)
+			}
+		}
+		defaultTrajCache.cascadeTitlesMu.Unlock()
+	}
+	for k, v := range rec.header {
+		w.Header()[k] = v
+	}
+	w.WriteHeader(rec.statusCode)
+	w.Write(rec.body.Bytes())
 }
 
 // InteractionSubmitRequest represents user decision submitted from mobile client.
@@ -1440,15 +1446,19 @@ func (p *Proxy) HandleCascadeRevertPreview(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if req.StepIndex == nil || *req.StepIndex < 0 || (req.TargetStepIndex != nil && *req.TargetStepIndex != *req.StepIndex-1) {
+		writeJSONError(w, "stepIndex is required and must identify a user message", http.StatusBadRequest)
+		return
+	}
 	port, token := p.ActiveUpstream()
 	if port == 0 {
 		writeJSONError(w, "No active Antigravity upstream", http.StatusServiceUnavailable)
 		return
 	}
 
-	res, err := p.GetRevertPreview(req.CascadeID, req.StepIndex, req.TargetStepIndex, port, token)
+	res, err := p.GetRevertPreview(req.CascadeID, *req.StepIndex, req.TargetStepIndex, port, token)
 	if err != nil {
-		log.Printf("[Proxy] Revert preview failed for cascade %s (step %d): %v", shortCascadeID(req.CascadeID), req.StepIndex, err)
+		log.Printf("[Proxy] Revert preview failed for cascade %s (step %d): %v", shortCascadeID(req.CascadeID), *req.StepIndex, err)
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1480,15 +1490,19 @@ func (p *Proxy) HandleCascadeRevertExecute(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if req.StepIndex == nil || *req.StepIndex < 0 || (req.TargetStepIndex != nil && *req.TargetStepIndex != *req.StepIndex-1) {
+		writeJSONError(w, "stepIndex is required and must identify a user message", http.StatusBadRequest)
+		return
+	}
 	port, token := p.ActiveUpstream()
 	if port == 0 {
 		writeJSONError(w, "No active Antigravity upstream", http.StatusServiceUnavailable)
 		return
 	}
 
-	targetIndex, err := p.ExecuteRevert(req.CascadeID, req.StepIndex, req.TargetStepIndex, req.ConversationOnly, port, token)
+	targetIndex, err := p.ExecuteRevert(req.CascadeID, *req.StepIndex, req.TargetStepIndex, req.ConversationOnly, port, token)
 	if err != nil {
-		log.Printf("[Proxy] Revert execute failed for cascade %s (step %d): %v", shortCascadeID(req.CascadeID), req.StepIndex, err)
+		log.Printf("[Proxy] Revert execute failed for cascade %s (step %d): %v", shortCascadeID(req.CascadeID), *req.StepIndex, err)
 		writeJSONError(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1593,6 +1607,12 @@ func (p *Proxy) handleGetAllCascadeTrajectories(w http.ResponseWriter, r *http.R
 			continue
 		}
 
+		// Retain the original annotation title for editing; list summaries remain compact.
+		if ann, ok := s["annotations"].(map[string]interface{}); ok {
+			if title, ok := ann["title"].(string); ok && strings.TrimSpace(title) != "" && title != "未命名会话" {
+				s["fullTitle"] = strings.TrimSpace(title)
+			}
+		}
 		// Enrich missing title
 		hasTitle := false
 		if ann, ok := s["annotations"].(map[string]interface{}); ok {
@@ -1606,6 +1626,7 @@ func (p *Proxy) handleGetAllCascadeTrajectories(w http.ResponseWriter, r *http.R
 		}
 		if !hasTitle {
 			if t := readAnnotationTitle(id); t != "" && t != "未命名会话" {
+				s["fullTitle"] = strings.TrimSpace(t)
 				cleanTitle := SanitizeTitle(t)
 				if cleanTitle != "" {
 					ann, _ := s["annotations"].(map[string]interface{})
@@ -1621,6 +1642,7 @@ func (p *Proxy) handleGetAllCascadeTrajectories(w http.ResponseWriter, r *http.R
 		}
 		if !hasTitle {
 			if t := p.lookupCascadeTitle(id, port, token); t != "" && t != "未命名会话" {
+				s["fullTitle"] = strings.TrimSpace(t)
 				cleanTitle := SanitizeTitle(t)
 				if cleanTitle != "" {
 					ann, _ := s["annotations"].(map[string]interface{})

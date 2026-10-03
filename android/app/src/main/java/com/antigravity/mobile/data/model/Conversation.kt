@@ -17,7 +17,8 @@ data class Annotations(
     val title: String? = null,
     val lastUserViewTime: String? = null,
     val markedAsUnread: Boolean? = null,
-    val archived: Boolean? = null
+    val archived: Boolean? = null,
+    val pinned: Boolean? = null
 )
 
 @Serializable
@@ -33,6 +34,7 @@ data class TrajectoryMetadata(
 
 @Serializable
 data class TrajectorySummary(
+    val fullTitle: String? = null,
     val summary: String? = null,
     val stepCount: Int? = null,
     val lastModifiedTime: String? = null,
@@ -84,7 +86,9 @@ data class ConversationItem(
     val lastModifiedTime: String? = null,
     val isSubagent: Boolean = false,
     val isUnread: Boolean = false,
-    val draftProject: ProjectItem? = null
+    val draftProject: ProjectItem? = null,
+    val isPinned: Boolean = false,
+    val isArchived: Boolean = false
 ) {
     val displayTitle: String
         get() = title.ifBlank { "未命名会话" }
@@ -123,11 +127,11 @@ data class ConversationItem(
         }
 
         fun fromSummary(id: String, summary: TrajectorySummary, localViewTime: Long = 0): ConversationItem {
-            val annotationTitle = summary.annotations?.title
+            val annotationTitle = summary.fullTitle?.takeIf { it.isNotBlank() } ?: summary.annotations?.title
             val summaryText = summary.summary
             val resolvedTitle = when {
                 !annotationTitle.isNullOrBlank() && annotationTitle != "未命名会话" ->
-                    sanitizeTitle(annotationTitle)
+                    annotationTitle.trim()
                 !summaryText.isNullOrBlank() && summaryText != "未命名会话" ->
                     sanitizeTitle(summaryText)
                 else -> "未命名会话"
@@ -180,7 +184,9 @@ data class ConversationItem(
                 projectId = summary.trajectoryMetadata?.projectId,
                 lastModifiedTime = resolvedTime,
                 isSubagent = summary.isSubagent,
-                isUnread = unread
+                isUnread = unread,
+                isPinned = summary.annotations?.pinned == true,
+                isArchived = summary.annotations?.archived == true
             )
         }
 

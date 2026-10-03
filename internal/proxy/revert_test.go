@@ -6,12 +6,19 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 func TestHandleCascadeRevertPreview_Success(t *testing.T) {
 	// Mock upstream language_server responding to GetRevertPreview
 	mockUpstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetCascadeTrajectory") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"IDLE","trajectory":{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE"},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE"},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE"},{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{}}],"executorMetadatas":[{"cascadeConfig":{"plannerConfig":{"planModel":"MODEL_PLACEHOLDER_M26","requestedModel":{"model":"MODEL_PLACEHOLDER_M26"},"modelName":"original"}}}]}}`))
+			return
+		}
+
 		if r.URL.Path == "/exa.language_server_pb.LanguageServerService/GetRevertPreview" {
 			w.Header().Set("Content-Type", "application/json")
 			resp := map[string]interface{}{
@@ -116,6 +123,12 @@ func TestHandleCascadeRevertPreview_Success(t *testing.T) {
 func TestHandleCascadeRevertExecute_Success(t *testing.T) {
 	revertCalled := false
 	mockUpstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/GetCascadeTrajectory") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"status":"IDLE","trajectory":{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{}},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE"},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE"},{"type":"CORTEX_STEP_TYPE_PLANNER_RESPONSE"},{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{}}],"executorMetadatas":[{"cascadeConfig":{"plannerConfig":{"planModel":"MODEL_PLACEHOLDER_M26","requestedModel":{"model":"MODEL_PLACEHOLDER_M26"},"modelName":"original"}}}]}}`))
+			return
+		}
+
 		if r.URL.Path == "/exa.language_server_pb.LanguageServerService/RevertToCascadeStep" {
 			revertCalled = true
 			var body map[string]interface{}

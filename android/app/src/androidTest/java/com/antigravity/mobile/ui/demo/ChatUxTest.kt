@@ -35,19 +35,124 @@ class ChatUxTest {
     @Test fun realGatewayRenamesOnlyADisposableConversation() {
         org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("uxRealGateway") == "true")
         val application = compose.activity.application
-        val prefs = PreferencesManager(application)
-        assertTrue("Device must already be paired", prefs.isPaired())
+        val original = PreferencesManager(application)
+        assertTrue("Device must already be paired", original.isPaired())
+        val override = InstrumentationRegistry.getArguments().getString("uxGatewayUrl")
+        val prefs = if (override == null) original else PreferencesManager(isolatedApplication()).apply {
+            gatewayBaseUrl = override; deviceToken = original.deviceToken
+        }
         val api = ApiClient(application, prefs)
         runBlocking {
             // An empty prompt creates a test session without sending a message or starting an Agent task.
             val id = api.createCascade("", "", "gemini-3.8-flash-high", ProjectItem.PURE_CHAT.id).getOrThrow()
             try {
-                val title = "UX 验收 ${UUID.randomUUID().toString().take(8)}"
+                val title = "UX 验收 ${UUID.randomUUID().toString().take(8)} " + "长标题原文".repeat(12)
                 api.renameConversation(id, title).getOrThrow()
                 assertEquals(title, api.fetchConversations().getOrThrow().first { it.id == id }.title)
+                api.setConversationPinned(id, true).getOrThrow()
+                api.setConversationArchived(id, true).getOrThrow()
+                val archived = api.fetchConversations().getOrThrow().first { it.id == id }
+                assertTrue(archived.isArchived)
+                assertTrue(archived.isPinned)
+                api.renameConversation(id, title + " archived").getOrThrow()
+                api.setConversationArchived(id, false).getOrThrow()
+                api.setConversationPinned(id, false).getOrThrow()
+                val restored = api.fetchConversations().getOrThrow().first { it.id == id }
+                assertFalse(restored.isArchived)
+                assertFalse(restored.isPinned)
+                assertEquals(title + " archived", restored.title)
             } finally {
                 api.deleteConversation(id).getOrThrow()
             }
+        }
+        if (override != null && InstrumentationRegistry.getArguments().getString("uxUseGateway") == "true")
+            original.updateEndpoints(lan = override, active = override)
+    }
+
+    @Test fun realGatewayRewindsADisposableConversation() {
+        org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("uxRealRevert") == "true")
+        val original = PreferencesManager(compose.activity.application)
+        val app = isolatedApplication()
+        val prefs = PreferencesManager(app).apply {
+            gatewayBaseUrl = InstrumentationRegistry.getArguments().getString("uxGatewayUrl") ?: original.gatewayBaseUrl
+            deviceToken = original.deviceToken
+        }
+        val api = ApiClient(app, prefs)
+        runBlocking {
+            suspend fun completed(id: String, text: String): com.antigravity.mobile.data.model.StreamUpdatePayload =
+                kotlinx.coroutines.withTimeout(90_000) {
+                    while (true) {
+                        val data = api.fetchMessages(id).getOrThrow()
+                        if (!data.status.contains("RUNNING", true) && data.messages.orEmpty().any { it.isUser && it.effectiveText == text } &&
+                            data.messages.orEmpty().any { it.isAgent }) return@withTimeout data
+                        kotlinx.coroutines.delay(500)
+                    }
+                    error("unreachable")
+                }
+            val first = "这是隔离的交互验收会话，只回复 FIRST_OK，不执行工具，不读写任何文件。"
+            val second = "第二轮验收，只回复 SECOND_OK，不执行工具，不读写任何文件。"
+            val id = api.createCascade("", first, "gemini-3.8-flash-high", ProjectItem.PURE_CHAT.id).getOrThrow()
+            try {
+                completed(id, first)
+                api.sendMessage(id, second).getOrThrow()
+                val before = completed(id, second)
+                val message = before.messages.orEmpty().first { it.isUser && it.effectiveText == second }
+                assertTrue(message.revertReason, message.canRevert)
+                val vm = ChatViewModel(app)
+                val store = ViewModelStore().apply { put("real-revert", vm) }
+                try {
+                    compose.runOnIdle { vm.openConversation(id) }
+                    compose.waitUntil(15_000) { !vm.state.value.isLoadingMessages }
+                    compose.runOnIdle { vm.previewRevert(message) }
+                    compose.waitUntil(15_000) { !vm.state.value.isLoadingRevert }
+                    assertNotNull(vm.state.value.revertPreview)
+                    compose.runOnIdle { vm.executeRevert(true) }
+                    compose.waitUntil(30_000) { !vm.state.value.isReverting && !vm.state.value.isLoadingMessages }
+                    assertNull(vm.state.value.revertError)
+                    assertEquals(second, vm.state.value.draft)
+                    assertTrue(vm.state.value.messages.any { it.isUser && it.effectiveText == first })
+                    assertFalse(vm.state.value.messages.any { it.isUser && it.effectiveText == second })
+                    val after = api.fetchMessages(id).getOrThrow()
+                    assertEquals(before.activeModel, after.activeModel)
+                } finally { compose.runOnIdle { store.clear() } }
+            } finally { api.deleteConversation(id).getOrThrow() }
+        }
+    }
+
+    @Test fun realGatewayRestoresAnIsolatedFile() {
+        val workspace = InstrumentationRegistry.getArguments().getString("uxRevertWorkspace")
+        org.junit.Assume.assumeTrue(!workspace.isNullOrBlank())
+        val original = PreferencesManager(compose.activity.application)
+        val app = isolatedApplication()
+        val prefs = PreferencesManager(app).apply {
+            gatewayBaseUrl = InstrumentationRegistry.getArguments().getString("uxGatewayUrl") ?: original.gatewayBaseUrl
+            deviceToken = original.deviceToken
+        }
+        val api = ApiClient(app, prefs)
+        runBlocking {
+            val file = "$workspace/probe.txt"
+            val prompt = "这是隔离的文件回退验收。只将 $file 中的 BEFORE 改为 AFTER，使用文件编辑工具，不创建计划或其他文件，不操作工作区之外的文件。完成后只回复 FILE_OK。"
+            val id = api.createCascade(workspace!!, prompt, "gemini-3.8-flash-high").getOrThrow()
+            try {
+                val before = kotlinx.coroutines.withTimeout(90_000) {
+                    var data = api.fetchMessages(id).getOrThrow()
+                    while (data.status.contains("RUNNING", true) || data.messages.orEmpty().none { it.isAgent }) {
+                        kotlinx.coroutines.delay(500)
+                        data = api.fetchMessages(id).getOrThrow()
+                    }
+                    data
+                }
+                assertEquals("AFTER", api.fetchFileContent(file, id).getOrThrow().content.trim())
+                val message = before.messages.orEmpty().first { it.isUser }
+                val preview = api.getRevertPreview(id, message.stepIndex!!).getOrThrow()
+                assertTrue(preview.hasCodeChanges)
+                assertTrue(preview.files.any { it.fileName == "probe.txt" })
+                api.executeRevert(id, message.stepIndex!!, false).getOrThrow()
+                assertEquals("BEFORE", api.fetchFileContent(file, id).getOrThrow().content.trim())
+                val after = api.fetchMessages(id).getOrThrow()
+                assertFalse(after.messages.orEmpty().any { it.isUser && it.effectiveText == prompt })
+                assertEquals(before.activeModel, after.activeModel)
+            } finally { api.deleteConversation(id).getOrThrow() }
         }
     }
 
@@ -60,7 +165,7 @@ class ChatUxTest {
         var sends = 0
         compose.setContent {
             androidx.compose.foundation.layout.Column {
-                ConversationTopBar(false, {}, {}, { renamed = true }, { deleted = true })
+                ConversationTopBar(false, {}, {}, { renamed = true }, { deleted = true }, title = "会话交互验收")
                 Composer(activeConversation = true, draft = "next message", attachments = emptyList(),
                     onDraftChange = {}, onAddImage = {}, onRemoveImage = {}, onSend = { sends++ },
                     isSending = false, onUnsupported = {}, isRunning = running.value,
@@ -68,7 +173,8 @@ class ChatUxTest {
             }
         }
         compose.onNodeWithContentDescription("更多选项").performClick()
-        compose.onNodeWithText("重命名").performClick()
+        saveScreenshot("management-menu.png")
+        compose.onNodeWithContentDescription("重命名").performClick()
         assertTrue(renamed)
         assertFalse(deleted)
         compose.onNodeWithContentDescription("更多选项").performClick()
@@ -110,14 +216,7 @@ class ChatUxTest {
     }
 
     @Test fun draftsPersistAndLateRenameStopDeleteCannotChangeAnotherConversation() {
-        // A unique preferences namespace keeps these checks away from real pairing and drafts.
-        val namespace = "ux_${UUID.randomUUID()}_"
-        val context = object : ContextWrapper(compose.activity.applicationContext) {
-            override fun getApplicationContext(): Context = this
-            override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences(namespace + name, mode)
-            override fun getCacheDir(): File = File(super.getCacheDir(), namespace).apply { mkdirs() }
-        }
-        val application = object : Application() { fun attach(context: Context) { attachBaseContext(context) } }.apply { attach(context) }
+        val application = isolatedApplication()
         FakeGateway().use { gateway ->
             val prefs = PreferencesManager(application)
             prefs.gatewayBaseUrl = gateway.url
@@ -235,12 +334,179 @@ class ChatUxTest {
         }
     }
 
+    private fun saveScreenshot(name: String) {
+        compose.waitForIdle()
+        val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        File(compose.activity.getExternalFilesDir(null), name).outputStream().use {
+            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
+        }
+        bitmap.recycle()
+    }
+
+    private fun isolatedApplication(): Application {
+        val namespace = "ux_${UUID.randomUUID()}_"
+        val context = object : ContextWrapper(compose.activity.applicationContext) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences(namespace + name, mode)
+            override fun getCacheDir(): File = File(super.getCacheDir(), namespace).apply { mkdirs() }
+        }
+        return object : Application() { fun attach(context: Context) { attachBaseContext(context) } }.apply { attach(context) }
+    }
+
+    @Test fun archiveScreenAndMenuUseOnlyTheRequestedActions() {
+        var restored = ""
+        var renamed = ""
+        var deleted = ""
+        val items = listOf(com.antigravity.mobile.data.model.ConversationItem("A", "Archived A", isArchived = true),
+            com.antigravity.mobile.data.model.ConversationItem("B", "Active B"))
+        compose.setContent { ArchivedConversations(items, false, emptySet(), {}, {}, {},
+            { renamed = it.id }, { restored = it }, { deleted = it }) }
+        compose.onNodeWithText("Archived A").assertExists()
+        compose.onNodeWithText("Active B").assertDoesNotExist()
+        compose.onNodeWithContentDescription("归档会话操作").performClick()
+        compose.onNodeWithText("恢复会话").assertExists()
+        saveScreenshot("management-archive.png")
+        compose.onNodeWithText("置顶").assertDoesNotExist()
+        compose.onNodeWithContentDescription("重命名").performClick()
+        assertEquals("A", renamed)
+        compose.onNodeWithContentDescription("归档会话操作").performClick()
+        compose.onNodeWithText("恢复会话").performClick()
+        assertEquals("A", restored)
+        compose.onNodeWithContentDescription("归档会话操作").performClick()
+        compose.onNodeWithText("删除会话").performClick()
+        assertEquals("A", deleted)
+        compose.onNode(hasSetTextAction()).performTextInput("missing")
+        compose.onNodeWithText("没有匹配的会话").assertExists()
+    }
+
+    @Test fun managementAndRevertKeepDraftsAndRollbackFailures() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("test", vm) }
+            fun onMain(action: () -> Unit) = compose.runOnIdle(action)
+            fun settled() = compose.waitUntil(10_000) { vm.state.value.busyConversations.isEmpty() && !vm.state.value.isLoadingConversations }
+            try {
+                compose.waitUntil(10_000) { vm.state.value.conversations.size == 2 }
+                onMain { vm.setPinned("B", true) }; settled()
+                assertEquals("B", vm.state.value.conversations.first().id)
+                onMain { vm.setArchived("B", true) }; settled()
+                assertTrue(vm.state.value.conversations.first { it.id == "B" }.isArchived)
+                var renamed = false
+                onMain { vm.renameConversation("B", "Archived title") { renamed = true } }; settled()
+                assertTrue(renamed)
+                onMain { vm.setArchived("B", false); vm.openConversation("A") }; settled()
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                onMain { vm.setDraft("unsent draft") }
+                val message = vm.state.value.messages.first()
+                onMain { vm.previewRevert(message) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingRevert }
+                assertNotNull(vm.state.value.revertPreview)
+                gateway.failurePath = "/revert/execute"
+                onMain { vm.executeRevert(true) }
+                compose.waitUntil(10_000) { !vm.state.value.isReverting }
+                assertEquals("unsent draft", vm.state.value.draft)
+                assertEquals(1, vm.state.value.messages.size)
+                assertNotNull(vm.state.value.revertError)
+                gateway.failurePath = null
+                onMain { vm.executeRevert(true) }
+                compose.waitUntil(10_000) { !vm.state.value.isReverting && !vm.state.value.isLoadingMessages }
+                assertEquals("original message\n\nunsent draft", vm.state.value.draft)
+                assertTrue(vm.state.value.messages.isEmpty())
+                val payload = gateway.requests.last { it.first.contains("/revert/execute") }.second
+                assertTrue(JSONObject(payload).getBoolean("conversationOnly"))
+                onMain { vm.setPinned("B", false) }; settled()
+                assertFalse(vm.state.value.conversations.first { it.id == "B" }.isPinned)
+                gateway.reverted = false
+                onMain { vm.openConversation("A"); vm.setDraft("A next") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                onMain { vm.previewRevert(vm.state.value.messages.first()) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingRevert }
+                val requested = CountDownLatch(1)
+                val release = CountDownLatch(1)
+                gateway.block = { path -> if (path.contains("/revert/execute")) { requested.countDown(); release.await(10, TimeUnit.SECONDS) } }
+                onMain { vm.executeRevert(true) }
+                assertTrue(requested.await(10, TimeUnit.SECONDS))
+                onMain { vm.openConversation("B"); vm.setDraft("B untouched") }
+                release.countDown()
+                settled()
+                assertEquals("B", vm.state.value.selectedConversationId)
+                assertEquals("B untouched", vm.state.value.draft)
+                onMain { vm.openConversation("A") }
+                assertEquals("original message\n\nA next", vm.state.value.draft)
+            } finally { onMain { store.clear() } }
+        }
+    }
+
+    @Test fun archiveNavigationReturnsToTheListAfterDeletingItsOpenConversation() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("archive-navigation", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingConversations }
+                compose.runOnIdle { vm.setArchived("B", true) }
+                compose.waitUntil(10_000) { vm.state.value.busyConversations.isEmpty() && !vm.state.value.isLoadingConversations }
+                compose.onNodeWithContentDescription("打开菜单").performClick()
+                compose.onNodeWithText("已归档").performClick()
+                compose.onNodeWithText("搜索归档会话").assertIsDisplayed()
+                compose.onNodeWithContentDescription("发送消息").assertDoesNotExist()
+                compose.onNodeWithText("B").performClick()
+                compose.onNodeWithContentDescription("返回归档列表").assertIsDisplayed()
+                compose.onNodeWithContentDescription("更多选项").performClick()
+                compose.onNodeWithText("删除会话").performClick()
+                compose.onNodeWithText("删除", useUnmergedTree = true).performClick()
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == null }
+                compose.onNodeWithText("搜索归档会话").assertIsDisplayed()
+                compose.onNodeWithContentDescription("发送消息").assertDoesNotExist()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun revertRestoresOriginalImagesAndPreservesMessagesWhenReadingThemFails() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true; gateway.userImage = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("image-revert", vm) }
+            try {
+                compose.runOnIdle { vm.openConversation("A") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                compose.runOnIdle { vm.previewRevert(vm.state.value.messages.first()) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingRevert }
+                gateway.failurePath = "/image.png"
+                compose.runOnIdle { vm.executeRevert(true) }
+                compose.waitUntil(10_000) { !vm.state.value.isReverting }
+                assertNotNull(vm.state.value.revertError)
+                assertEquals(1, vm.state.value.messages.size)
+                assertFalse(gateway.requests.any { it.first.contains("/revert/execute") })
+                gateway.failurePath = null
+                compose.runOnIdle { vm.executeRevert(true) }
+                compose.waitUntil(10_000) { !vm.state.value.isReverting && !vm.state.value.isLoadingMessages }
+                assertEquals("image/png", vm.state.value.attachments.single().mimeType)
+                assertArrayEquals(gateway.imageBytes, vm.state.value.attachments.single().bytes)
+                assertEquals("original message", vm.state.value.draft)
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
         val requests = CopyOnWriteArrayList<Pair<String, String>>()
         @Volatile var block: (String) -> Unit = {}
         @Volatile var failurePath: String? = null
+        @Volatile var management = false
+        @Volatile var reverted = false
+        @Volatile var userImage = false
+        val imageBytes = android.util.Base64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", android.util.Base64.DEFAULT)
+        private val annotations = java.util.concurrent.ConcurrentHashMap<String, JSONObject>()
         private val stopped = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         init {
             thread(isDaemon = true) {
@@ -263,13 +529,32 @@ class ChatUxTest {
                             block(path)
                             if (path.contains("CancelCascadeInvocation") && failurePath?.let(path::contains) != true)
                                 stopped += JSONObject(String(chars)).getString("cascadeId")
+                            if (management && failurePath?.let(path::contains) != true) {
+                                if (path.contains("UpdateConversationAnnotations")) {
+                                    val update = JSONObject(String(chars))
+                                    val key = update.getJSONArray("cascadeIds").getString(0)
+                                    val ann = annotations.getOrPut(key) { JSONObject() }
+                                    val changes = update.getJSONObject("annotations")
+                                    changes.keys().forEach { ann.put(it, changes.get(it)) }
+                                }
+                                if (path.contains("/revert/execute")) reverted = true
+                            }
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
                                 path.startsWith("/gateway/projects") -> "[]"
+                                management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"files":[]}"""
+                                management && path.startsWith("/gateway/cascade/messages") ->
+                                    """{"status":"IDLE","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"original message\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
+                                management && path.contains("GetAllCascadeTrajectories") -> {
+                                    val summaries = JSONObject()
+                                    for (key in listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
+                                        .put("status", "IDLE").put("annotations", annotations[key] ?: JSONObject()))
+                                    JSONObject().put("trajectorySummaries", summaries).toString()
+                                }
                                 path.startsWith("/gateway/cascade/messages") -> """{"status":"${if (id in stopped) "IDLE" else "RUNNING"}","messages":[],"cascadeId":"$id"}"""
                                 path.contains("GetAllCascadeTrajectories") -> """{"trajectorySummaries":{}}"""
                                 else -> "{}"
-                            }.toByteArray()
+                            }.toByteArray().let { if (path.startsWith("/image.png")) imageBytes else it }
                             val status = when {
                                 failurePath?.let(path::contains) == true -> "500 Failure"
                                 path.startsWith("/gateway/cascade/stream") -> "503 Unavailable"

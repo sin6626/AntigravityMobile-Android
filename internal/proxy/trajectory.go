@@ -22,20 +22,22 @@ import (
 )
 
 type CascadeMessageItem struct {
-	ID        string              `json:"id"`
-	Type      string              `json:"type"` // "user", "agent", "tools", "error"
-	Role      string              `json:"role"`
-	Text      string              `json:"text"`
-	Content   string              `json:"content"`
-	StepIndex *int                `json:"stepIndex,omitempty"`
-	ToolCount int                 `json:"toolCount,omitempty"`
-	ToolNames []string            `json:"toolNames,omitempty"`
-	Media     []string            `json:"media,omitempty"`     // Base64 thumbnails
-	ImageURLs []string            `json:"imageUrls,omitempty"` // Markdown image URLs
-	Title     string              `json:"title,omitempty"`
-	Duration  string              `json:"duration,omitempty"`
-	Status    string              `json:"status,omitempty"`
-	Details   []CascadeStepDetail `json:"details,omitempty"`
+	ID           string              `json:"id"`
+	Type         string              `json:"type"` // "user", "agent", "tools", "error"
+	Role         string              `json:"role"`
+	Text         string              `json:"text"`
+	Content      string              `json:"content"`
+	StepIndex    *int                `json:"stepIndex,omitempty"`
+	ToolCount    int                 `json:"toolCount,omitempty"`
+	ToolNames    []string            `json:"toolNames,omitempty"`
+	Media        []string            `json:"media,omitempty"`     // Base64 thumbnails
+	ImageURLs    []string            `json:"imageUrls,omitempty"` // Markdown image URLs
+	Title        string              `json:"title,omitempty"`
+	Duration     string              `json:"duration,omitempty"`
+	Status       string              `json:"status,omitempty"`
+	CanRevert    bool                `json:"canRevert"`
+	RevertReason string              `json:"revertReason,omitempty"`
+	Details      []CascadeStepDetail `json:"details,omitempty"`
 }
 
 type CascadeStepDetail struct {
@@ -73,14 +75,14 @@ type RevertPreviewResponse struct {
 // RevertPreviewRequest specifies the target cascade and step to preview reverting.
 type RevertPreviewRequest struct {
 	CascadeID       string `json:"cascadeId"`
-	StepIndex       int    `json:"stepIndex"`
+	StepIndex       *int   `json:"stepIndex"`
 	TargetStepIndex *int   `json:"targetStepIndex,omitempty"`
 }
 
 // RevertExecuteRequest specifies the target cascade and step to execute reverting.
 type RevertExecuteRequest struct {
 	CascadeID        string `json:"cascadeId"`
-	StepIndex        int    `json:"stepIndex"`
+	StepIndex        *int   `json:"stepIndex"`
 	TargetStepIndex  *int   `json:"targetStepIndex,omitempty"`
 	ConversationOnly bool   `json:"conversationOnly"`
 }
@@ -438,8 +440,13 @@ type TrajectoryMediaItem struct {
 }
 
 type TrajectoryUserInput struct {
-	UserResponse string `json:"userResponse"`
-	Items        []struct {
+	UserResponse     string            `json:"userResponse"`
+	ArtifactComments []json.RawMessage `json:"artifactComments"`
+	FileDiffComments []json.RawMessage `json:"fileDiffComments"`
+	FileComments     []json.RawMessage `json:"fileComments"`
+	UserConfig       json.RawMessage   `json:"userConfig"`
+	LastUserConfig   json.RawMessage   `json:"lastUserConfig"`
+	Items            []struct {
 		Text string `json:"text"`
 	} `json:"items"`
 	Images []struct {
@@ -587,11 +594,16 @@ type upstreamPendingAgentMessage struct {
 
 type upstreamTrajectoryResp struct {
 	Trajectory struct {
-		TrajectoryID  string           `json:"trajectoryId"`
-		CascadeID     string           `json:"cascadeId"`
-		WorkspaceUris []string         `json:"workspaceUris"`
-		Steps         []TrajectoryStep `json:"steps"`
-		Annotations   *struct {
+		TrajectoryID    string            `json:"trajectoryId"`
+		CascadeID       string            `json:"cascadeId"`
+		WorkspaceUris   []string          `json:"workspaceUris"`
+		Steps           []TrajectoryStep  `json:"steps"`
+		BattleModeInfos []json.RawMessage `json:"battleModeInfos"`
+		Metadata        struct {
+			IsBattleModeFork   bool            `json:"isBattleModeFork"`
+			BattleModeMetadata json.RawMessage `json:"battleModeMetadata"`
+		} `json:"metadata"`
+		Annotations *struct {
 			Title            string `json:"title"`
 			LastUserViewTime string `json:"lastUserViewTime"`
 		} `json:"annotations"`
@@ -989,14 +1001,17 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 			if (trimmed != "" && !isSystemApproval) || len(mediaList) > 0 || len(userImageURLs) > 0 {
 				stepIdx := idx
 				allMessages = append(allMessages, CascadeMessageItem{
-					ID:        fmt.Sprintf("step-%d", idx),
-					Type:      "user",
-					Role:      "user",
-					Text:      text,
-					Content:   text,
-					StepIndex: &stepIdx,
-					Media:     mediaList,
-					ImageURLs: userImageURLs,
+					ID:           fmt.Sprintf("step-%d", idx),
+					Type:         "user",
+					Role:         "user",
+					Text:         text,
+					Content:      text,
+					StepIndex:    &stepIdx,
+					Status:       s.Status,
+					CanRevert:    revertStepReason(rawResp, idx) == "",
+					RevertReason: revertStepReason(rawResp, idx),
+					Media:        mediaList,
+					ImageURLs:    userImageURLs,
 				})
 			}
 		} else if stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE" {
@@ -2311,12 +2326,9 @@ func (p *Proxy) GetRevertPreview(cascadeID string, messageStepIndex int, targetI
 		return nil, fmt.Errorf("no active Antigravity upstream")
 	}
 
-	targetIndex := messageStepIndex - 1
-	if messageStepIndex <= 0 {
-		targetIndex = -1
-	}
-	if targetIndexOverride != nil {
-		targetIndex = *targetIndexOverride
+	_, targetIndex, err := p.validateRevertTarget(cascadeID, messageStepIndex, targetIndexOverride, port, token)
+	if err != nil {
+		return nil, err
 	}
 
 	apiURL := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/GetRevertPreview", port)
@@ -2448,32 +2460,18 @@ func (p *Proxy) ExecuteRevert(cascadeID string, messageStepIndex int, targetInde
 		return 0, fmt.Errorf("no active Antigravity upstream")
 	}
 
-	targetIndex := messageStepIndex - 1
-	if messageStepIndex <= 0 {
-		targetIndex = -1
-	}
-	if targetIndexOverride != nil {
-		targetIndex = *targetIndexOverride
+	raw, targetIndex, err := p.validateRevertTarget(cascadeID, messageStepIndex, targetIndexOverride, port, token)
+	if err != nil {
+		return 0, err
 	}
 
 	apiURL := fmt.Sprintf("https://127.0.0.1:%d/exa.language_server_pb.LanguageServerService/RevertToCascadeStep", port)
 
-	// Build overrideConfig to supply plannerConfig.planModel and plannerConfig.requestedModel
-	// which upstream RevertToCascadeStep strictly requires.
-	var cfgObj interface{}
-	configBytes := p.GetCascadeConfig(cascadeID, port, token)
-	if len(configBytes) > 0 {
-		_ = json.Unmarshal(configBytes, &cfgObj)
+	// Keep the conversation's model/configuration instead of replacing it with a guessed default.
+	cfgObj, err := revertConfig(raw, cascadeID)
+	if err != nil {
+		return targetIndex, err
 	}
-	modelEnum := "MODEL_PLACEHOLDER_M318"
-	modelName := "gemini-2.5-flash"
-	if lastModel, _ := GetCascadeModel(cascadeID); lastModel != "" {
-		if enum := resolveModelEnum(lastModel); enum != "" {
-			modelEnum = enum
-			modelName = canonicalModelName(lastModel)
-		}
-	}
-	cfgObj = applyModelToCascadeConfig(cfgObj, modelEnum, modelName)
 
 	reqPayload, _ := json.Marshal(map[string]interface{}{
 		"cascadeId":        cascadeID,

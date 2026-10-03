@@ -247,7 +247,7 @@ class ApiClient(
                     if (item.isSubagent) return@mapNotNull null
                     item
                 }.sortedWith(
-                    compareByDescending<ConversationItem> { it.lastModifiedEpochMs }
+                    compareByDescending<ConversationItem> { it.isPinned }.thenByDescending { it.lastModifiedEpochMs }
                         .thenByDescending { it.id }
                 )
 
@@ -448,34 +448,33 @@ class ApiClient(
     /**
      * Rename conversation
      */
-    suspend fun renameConversation(cascadeId: String, newTitle: String): Result<Unit> = withContext(Dispatchers.IO) {
-        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
-        if (newTitle.isBlank()) return@withContext Result.failure(IllegalArgumentException("会话标题不能为空"))
-        val url = "$baseUrl/api/exa.language_server_pb.LanguageServerService/UpdateConversationAnnotations"
+    suspend fun renameConversation(cascadeId: String, newTitle: String): Result<Unit> {
+        if (newTitle.isBlank()) return Result.failure(IllegalArgumentException("会话标题不能为空"))
+        return updateConversationAnnotations(cascadeId, buildJsonObject { put("title", newTitle.trim()) })
+    }
 
+    suspend fun setConversationPinned(id: String, pinned: Boolean) =
+        updateConversationAnnotations(id, buildJsonObject { put("pinned", pinned) })
+
+    suspend fun setConversationArchived(id: String, archived: Boolean) =
+        updateConversationAnnotations(id, buildJsonObject { put("archived", archived) })
+
+    private suspend fun updateConversationAnnotations(id: String, annotations: JsonObject): Result<Unit> = withContext(Dispatchers.IO) {
+        val base = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
         val payload = buildJsonObject {
-            put("cascadeIds", buildJsonArray { add(cascadeId) })
+            put("cascadeIds", buildJsonArray { add(id) })
             put("mergeAnnotations", true)
-            put("annotations", buildJsonObject {
-                put("title", newTitle.trim())
-            })
+            put("annotations", annotations)
         }
-
         try {
-            val req = buildAuthorizedRequest(url)
-                .post(payload.toString().toRequestBody(jsonMediaType))
-                .build()
-
+            val req = buildAuthorizedRequest("$base/api/exa.language_server_pb.LanguageServerService/UpdateConversationAnnotations")
+                .post(payload.toString().toRequestBody(jsonMediaType)).build()
             client.newCall(req).await().use { response ->
-                if (response.isSuccessful) {
-                    Result.success(Unit)
-                } else {
-                    Result.failure(RuntimeException("重命名会话失败: HTTP ${response.code}"))
-                }
+                if (response.code == 401) Result.failure(GatewayAuthorizationException())
+                else if (response.isSuccessful) Result.success(Unit)
+                else Result.failure(RuntimeException("更新会话失败: HTTP ${response.code}"))
             }
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     /**
@@ -931,6 +930,41 @@ class ApiClient(
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    suspend fun imageForDraft(uri: String, cascadeId: String): Result<Pair<ByteArray, String>> = withContext(Dispatchers.IO) {
+        try {
+            val url = resolveMediaURL(uri, cascadeId)
+            val gateway = currentBaseUrl?.toHttpUrlOrNull()
+            val target = url.toHttpUrlOrNull() ?: error("无效的图片地址")
+            val request = Request.Builder().url(target).apply {
+                if (gateway != null && gateway.scheme == target.scheme && gateway.host == target.host && gateway.port == target.port)
+                    prefs.deviceToken?.let { header("Authorization", "Bearer $it") }
+            }.build()
+            client.newCall(request).await().use { response ->
+                check(response.isSuccessful) { "原图片读取失败: HTTP ${response.code}" }
+                val body = response.body ?: error("图片内容为空")
+                val output = java.io.ByteArrayOutputStream()
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(8192)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        check(output.size() + count <= 8 * 1024 * 1024) { "原图片超过 8 MB，请在电脑端回退" }
+                        output.write(buffer, 0, count)
+                    }
+                }
+                val bytes = output.toByteArray()
+                val mime = when {
+                    bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() -> "image/jpeg"
+                    bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(0x89.toByte(), 80, 78, 71, 13, 10, 26, 10)) -> "image/png"
+                    bytes.size >= 6 && String(bytes, 0, 6, Charsets.US_ASCII).startsWith("GIF8") -> "image/gif"
+                    bytes.size >= 12 && String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" && String(bytes, 8, 4, Charsets.US_ASCII) == "WEBP" -> "image/webp"
+                    else -> error("原图片格式无法恢复，请在电脑端回退")
+                }
+                Result.success(bytes to mime)
+            }
+        } catch (e: Exception) { Result.failure(e) }
     }
 
     /**
