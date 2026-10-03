@@ -318,13 +318,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun newConversation() {
+        closeConversation()
+        _state.value = _state.value.copy(draft = "", attachments = emptyList())
+    }
+
+    fun closeConversation() {
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = null,
             messages = emptyList(),
-            draft = "",
             streamingMessageId = null,
-            attachments = emptyList(),
             isLoadingMessages = false,
             isRunning = false,
             pendingInteraction = null,

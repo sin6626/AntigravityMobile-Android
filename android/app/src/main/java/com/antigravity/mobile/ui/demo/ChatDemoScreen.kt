@@ -47,6 +47,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.Color
@@ -61,11 +62,18 @@ import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ChatDemoScreen(viewModel: ChatViewModel) {
+fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
     val keyboardHeight = with(density) { WindowInsets.ime.getBottom(this).toDp() }
+    var keyboardWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(keyboardHeight) {
+        val visible = keyboardHeight > 0.dp
+        if (keyboardWasVisible && !visible) focusManager.clearFocus()
+        keyboardWasVisible = visible
+    }
     var composerHeightPx by remember { mutableStateOf(0) }
     val composerHeight = with(density) { composerHeightPx.toDp() }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -121,15 +129,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             viewModel.clearError()
         }
     }
-    BackHandler(drawerState.isOpen) { scope.launch { drawerState.close() } }
     val returnFromConversation: () -> Unit = {
-        viewModel.newConversation()
+        viewModel.closeConversation()
         projectsSelected = openedFromProject
         openedFromProject = false
-    }
-    BackHandler(!drawerState.isOpen && state.selectedConversationId != null) { returnFromConversation() }
-    BackHandler(!drawerState.isOpen && state.selectedConversationId == null && projectsSelected) {
-        projectsSelected = false
     }
 
     val openDrawer: () -> Unit = {
@@ -218,27 +221,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                             }
                         },
                     )
-                    Column(Modifier.align(Alignment.BottomCenter).imePadding()) {
-                    Column(Modifier.onSizeChanged { composerHeightPx = it.height }) {
-                        state.pendingInteraction?.let { interaction ->
-                            InteractionPanel(interaction = interaction,
-                                isSubmitting = state.isSubmittingInteraction,
-                                onChoose = viewModel::respondToInteraction)
-                        }
-                        Composer(
-                            activeConversation = true,
-                            draft = state.draft,
-                            attachments = state.attachments,
-                            onDraftChange = viewModel::setDraft,
-                            onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                            onRemoveImage = viewModel::removeImage,
-                            onSend = viewModel::send,
-                            isSending = state.isSending || state.isLoadingMessages,
-                            onUnsupported = unsupported,
-                        )
-                        Spacer(Modifier.height(23.dp))
-                    }
-                    }
                 }
                 }
             } else {
@@ -274,7 +256,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
-                    Column(Modifier.fillMaxSize().pointerInput(Unit) {
+                    Column(Modifier.fillMaxSize().padding(bottom = composerHeight + keyboardHeight).pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                             var horizontal = 0f
@@ -332,21 +314,29 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
                 }
                 }
             }
-            if (state.selectedConversationId == null) Column(Modifier.imePadding()) {
-                if (!projectsSelected) Composer(
-                    activeConversation = state.selectedConversationId != null,
-                    draft = state.draft,
-                    attachments = state.attachments,
-                    onDraftChange = viewModel::setDraft,
-                    onAddImage = {
-                        imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                    },
-                    onRemoveImage = viewModel::removeImage,
-                    onSend = viewModel::send,
-                    isSending = state.isSending,
-                    onUnsupported = unsupported,
-                )
-                Spacer(Modifier.height(23.dp))
+        }
+
+        if (state.selectedConversationId != null || !projectsSelected) {
+            Column(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()) {
+                Column(Modifier.onSizeChanged { composerHeightPx = it.height }) {
+                    state.pendingInteraction?.let { interaction ->
+                        InteractionPanel(interaction = interaction,
+                            isSubmitting = state.isSubmittingInteraction,
+                            onChoose = viewModel::respondToInteraction)
+                    }
+                    Composer(
+                        activeConversation = state.selectedConversationId != null,
+                        draft = state.draft,
+                        attachments = state.attachments,
+                        onDraftChange = viewModel::setDraft,
+                        onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                        onRemoveImage = viewModel::removeImage,
+                        onSend = viewModel::send,
+                        isSending = state.isSending || state.isLoadingMessages,
+                        onUnsupported = unsupported,
+                    )
+                    Spacer(Modifier.height(23.dp))
+                }
             }
         }
 
@@ -368,5 +358,17 @@ fun ChatDemoScreen(viewModel: ChatViewModel) {
             )
         }
     }
+    }
+    BackHandler {
+        when {
+            keyboardHeight > 0.dp -> {
+                focusManager.clearFocus()
+                keyboardController?.hide()
+            }
+            drawerState.isOpen -> scope.launch { drawerState.close() }
+            state.selectedConversationId != null && openedFromProject -> returnFromConversation()
+            state.selectedConversationId == null && projectsSelected -> projectsSelected = false
+            else -> onLeaveApp()
+        }
     }
 }

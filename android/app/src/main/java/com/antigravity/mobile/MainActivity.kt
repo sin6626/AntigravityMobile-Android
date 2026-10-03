@@ -21,7 +21,7 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = true
             isAppearanceLightNavigationBars = true
         }
-        setContent { ChatDemoScreen(chatViewModel) }
+        setContent { ChatDemoScreen(chatViewModel, onLeaveApp = { moveTaskToBack(true) }) }
         intent?.dataString?.let(chatViewModel::pair)
     }
 
