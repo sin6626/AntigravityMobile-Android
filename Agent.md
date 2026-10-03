@@ -48,6 +48,11 @@ android/app/src/main/java/com/antigravity/mobile/
 - 2026-09-27：聊天消息列表改为固定在页面视口，输入栏叠加并跟随 IME Insets；列表底部按键盘高度增加可滚动空间，收起键盘时移除。使用 edge-to-edge；模拟器已验证键盘打开无黑色空隙、列表可继续滚动。验证图仍仅保存在忽略目录中。
 
 ## 5. 开发与规范准则
+### 2026-10-03 原生代码高亮选型研究
+- 用户要求先对齐 Markdown 文件预览、PNG 文件链接乱码与代码高亮的方案，随后提出 Tree-sitter 候选，并强调 UI / UX 优先。本轮只读研究，没有修改应用或 Go 后端，也没有重启 mgy。
+- 核实 RikkaHub 固定提交 `2267943a32d9208769b1ee199f3186d26066d1a3`：普通代码使用 highlight.js 11.11.1 纯 Kotlin 移植，通过 AnnotatedString / Compose Text 显示。高亮在 remember 内同步执行；传入内容超过 4,096 字符退为纯文本，不能将它描述为 Tree-sitter 或后台增量高亮。HTML / SVG / Mermaid 的 WebView 预览不采用。
+- 官方 KTreeSitter 支持 Android，需独立 grammar、配套高亮查询与 ABI 核验；UTF-8 字节偏移必须转换为文本下标，正确增量更新需先编辑旧树。候选可接入原生文本，保持选择、原文复制和蓝色对钩；尚未核验发布依赖解析、构建原型或测量性能，不能承诺“轻量”。详见 `android/docs/tree-sitter-highlight-research-2026-10-03.md`。下一步待方案对齐后实施，不自行引入依赖。
+
 ### 2026-10-03 选区高亮与复制反馈
 - 用户截图中的行内代码与代码格式文件链接实际可以选中；在 USB vivo 同一条回复中“全选→复制→粘贴”得到 1,058 字符，包含截图里看似未选中的 `feat:` 代码与 `Agent.md`。根因是 Text 的 SpanStyle 背景在原生选区高亮之后绘制，灰底覆盖蓝色选区。
 - 行内代码改为范围注解，使用原生 TextLayoutResult 路径在 drawBehind 中绘制原有灰底，再由 Text 绘制原生选区；保留等宽字体、灰底和链接点击。表格与含行内公式段落复用同一个文本入口。无代码范围的文本不创建布局结果状态，未引入 WebView 或新依赖。
