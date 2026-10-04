@@ -15,8 +15,10 @@ import com.antigravity.mobile.data.model.ConversationItem
 @Composable
 internal fun ArchivedConversations(conversations: List<ConversationItem>, loading: Boolean,
     busy: Set<String>, onBack: () -> Unit, onRefresh: () -> Unit, onOpen: (String) -> Unit,
-    onRename: (ConversationItem) -> Unit, onRestore: (String) -> Unit, onDelete: (String) -> Unit) {
+    onRename: (ConversationItem) -> Unit, onRestore: (String) -> Unit, onDelete: (String) -> Unit,
+    entranceReady: Boolean = true) {
     var query by remember { mutableStateOf("") }
+    val entrance = contentEntrance("archive", (-10).dp, entranceReady)
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             RoundIconButton("arrow_back", "返回", onBack)
@@ -31,13 +33,13 @@ internal fun ArchivedConversations(conversations: List<ConversationItem>, loadin
                 focusedContainerColor = androidx.compose.ui.graphics.Color(0xFFF3F3F3)),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp))
         val filtered = conversations.filter { it.isArchived && it.displayTitle.contains(query, true) }
-        if (filtered.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+        if (filtered.isEmpty()) Box(Modifier.weight(1f).fillMaxWidth().then(entrance), contentAlignment = Alignment.Center) {
             if (loading) CircularProgressIndicator(color = AccentBlue)
             else Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(if (query.isBlank()) "暂无归档会话" else "没有匹配的会话", color = SecondaryInk)
                 TextButton(onClick = onRefresh) { Text("重新加载", color = AccentBlue) }
             }
-        } else LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(22.dp)) {
+        } else LazyColumn(Modifier.weight(1f).then(entrance), contentPadding = PaddingValues(22.dp)) {
             items(filtered, key = { it.id }) { item ->
                 var menuOpen by remember { mutableStateOf(false) }
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {

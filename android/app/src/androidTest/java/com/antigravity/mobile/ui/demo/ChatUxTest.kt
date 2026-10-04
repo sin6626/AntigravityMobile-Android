@@ -336,7 +336,10 @@ class ChatUxTest {
 
     private fun saveScreenshot(name: String) {
         compose.waitForIdle()
-        val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        var captured = automation.takeScreenshot()
+        if (captured == null) { Thread.sleep(200); captured = automation.takeScreenshot() }
+        val bitmap = checkNotNull(captured) { "系统截图未返回，未生成 $name" }
         File(compose.activity.getExternalFilesDir(null), name).outputStream().use {
             bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)
         }
@@ -622,6 +625,54 @@ class ChatUxTest {
         saveScreenshot("round2-search.png")
     }
 
+    @Test fun pageEntrancesPreserveProjectStateDraftAndKeyboardBack() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.projectFixture = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("motion-navigation", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingConversations }
+                compose.onNode(hasText("项目") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
+                compose.onNodeWithText("动效项目").performClick()
+                val headerY = compose.onNodeWithText("动效项目").fetchSemanticsNode().boundsInRoot.top
+                compose.onNodeWithText("B").performClick()
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "B" && !vm.state.value.isLoadingMessages }
+                compose.onNode(hasSetTextAction()).performClick().performTextReplacement("第一行\n第二行\n第三行\n第四行")
+                compose.waitForIdle()
+                compose.onNodeWithContentDescription("发送消息").assertIsDisplayed()
+                saveScreenshot("round3-screen-keyboard.png")
+                InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+                compose.waitForIdle()
+                compose.onNodeWithContentDescription("返回项目列表").assertIsDisplayed()
+                compose.onNodeWithContentDescription("返回项目列表").performClick()
+                compose.onNodeWithText("B").assertIsDisplayed()
+                assertEquals(headerY, compose.onNodeWithText("动效项目").fetchSemanticsNode().boundsInRoot.top, 1f)
+                compose.onNodeWithText("B").performClick()
+                compose.onNode(hasSetTextAction()).assertTextEquals("第一行\n第二行\n第三行\n第四行")
+                compose.onNodeWithContentDescription("更多选项").performClick()
+                compose.mainClock.autoAdvance = false
+                compose.runOnUiThread { vm.openConversation("A") }
+                compose.mainClock.advanceTimeBy(32)
+                compose.runOnUiThread { vm.openConversation("B") }
+                compose.mainClock.advanceTimeBy(32)
+                compose.runOnUiThread { vm.openConversation("A") }
+                compose.mainClock.advanceTimeBy(260)
+                compose.mainClock.autoAdvance = true
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "A" && !vm.state.value.isLoadingMessages }
+                compose.waitForIdle()
+                saveScreenshot("round3-rapid-navigation.png")
+                compose.onNodeWithText("置顶").assertDoesNotExist()
+                compose.onNodeWithText("original message").assertIsDisplayed()
+                compose.runOnIdle { vm.openConversation("B") }
+                compose.onNode(hasSetTextAction()).assertTextEquals("第一行\n第二行\n第三行\n第四行")
+            } finally { compose.mainClock.autoAdvance = true; compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun imagesZoomResetSwitchCloseAndRetry() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -769,6 +820,7 @@ class ChatUxTest {
             }
         }
         @Volatile var management = false
+        @Volatile var projectFixture = false
         @Volatile var reverted = false
         @Volatile var userImage = false
         private fun image(width: Int, height: Int) = java.io.ByteArrayOutputStream().let { output ->
@@ -826,14 +878,16 @@ class ChatUxTest {
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
                                 path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
-                                path.startsWith("/gateway/projects") -> "[]"
+                                path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"files":[]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
                                     """{"status":"IDLE","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
                                 management && path.contains("GetAllCascadeTrajectories") -> {
                                     val summaries = JSONObject()
                                     for (key in listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
-                                        .put("status", "IDLE").put("annotations", annotations[key] ?: JSONObject()))
+                                        .put("status", "IDLE").put("annotations", annotations[key] ?: JSONObject()).apply {
+                                            if (projectFixture && key == "B") put("trajectoryMetadata", JSONObject().put("projectId", "p"))
+                                        })
                                     JSONObject().put("trajectorySummaries", summaries).toString()
                                 }
                                 path.startsWith("/gateway/cascade/messages") -> """{"status":"${if (id in stopped) "IDLE" else "RUNNING"}","messages":[],"cascadeId":"$id"}"""

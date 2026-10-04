@@ -1,6 +1,7 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -76,7 +77,8 @@ internal fun ProjectOverview(
                         fontSize = 23.sp)
                 }
                 AnimatedVisibility(projectKey in expandedProjects,
-                    enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                    enter = expandVertically(tween(200), expandFrom = Alignment.Top) + fadeIn(tween(150)),
+                    exit = shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(120))) {
                     Column {
                     if (projectChats.isEmpty()) {
                         Text("暂无对话", modifier = Modifier.padding(start = 68.dp, bottom = 13.dp),

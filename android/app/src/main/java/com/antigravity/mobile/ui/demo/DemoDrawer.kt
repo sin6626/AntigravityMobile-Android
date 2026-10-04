@@ -1,6 +1,7 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -118,7 +119,8 @@ internal fun DemoDrawer(
                     }
                     AnimatedVisibility(projectKey in expandedProjects || searchText.isNotBlank() &&
                         projectChats.any { it.displayTitle.contains(searchText, ignoreCase = true) },
-                        enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                        enter = expandVertically(tween(200), expandFrom = Alignment.Top) + fadeIn(tween(150)),
+                        exit = shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(120))) {
                         Column {
                         val visibleChats = if (searchText.isBlank() || project.name.contains(searchText, ignoreCase = true))
                             projectChats else projectChats.filter { it.displayTitle.contains(searchText, ignoreCase = true) }

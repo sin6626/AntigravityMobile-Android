@@ -222,8 +222,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     onOpen = { id -> archivedOpen = false; openedFromArchive = true; viewModel.openConversation(id) },
                     onRename = { item -> renameConversationId = item.id; renameTitle = item.title; showRename = true },
                     onRestore = { viewModel.setArchived(it, false) },
-                    onDelete = { deleteConversationId = it; showDeleteConfirm = true })
+                    onDelete = { deleteConversationId = it; showDeleteConfirm = true }, entranceReady = !drawerState.isOpen)
             } else if (state.selectedConversationId != null) {
+                key(state.selectedConversationId) {
                 ConversationTopBar(
                     returnToProjects = openedFromProject || openedFromArchive,
                     leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
@@ -249,6 +250,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
                         state.selectedConversationId !in state.busyConversations && !state.isReverting,
                 )
+                }
                 state.messagesError?.let { LoadFailure(it, state.isLoadingMessages, viewModel::retryMessages) }
                 if (!state.selectedConversationId.orEmpty().startsWith("local:") && state.connectionStatus != com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED) {
                     LoadFailure(if (state.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTING)
@@ -268,6 +270,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         isLoadingOlder = state.isLoadingOlder,
                         onLoadOlder = viewModel::loadOlderMessages,
                         olderError = state.olderMessagesError,
+                        entranceOffset = if (openedFromProject || openedFromArchive) 10.dp else 0.dp,
+                        entranceReady = !drawerState.isOpen,
                         bottomSpace = composerHeight + keyboardHeight + 23.dp,
                         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {
@@ -298,7 +302,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     },
                     onUnsupported = unsupported,
                 )
-                HorizontalPager(state = pagerState, modifier = Modifier.weight(1f),
+                HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)
+                    .then(contentEntrance("home", if (projectsSelected) (-10).dp else 0.dp, !drawerState.isOpen)),
                     userScrollEnabled = pagerState.settledPage == 1,
                     beyondViewportPageCount = 1) { page ->
                 if (page == 1) {

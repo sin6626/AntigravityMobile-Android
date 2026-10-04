@@ -46,6 +46,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -93,10 +95,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.antigravity.mobile.data.service.MathSymbolProcessor
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.graphics.asImageBitmap
-import android.provider.Settings
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
@@ -120,6 +120,8 @@ internal fun ConversationContent(
     modifier: Modifier = Modifier,
     bottomSpace: androidx.compose.ui.unit.Dp = 24.dp,
     olderError: String? = null,
+    entranceOffset: androidx.compose.ui.unit.Dp = 0.dp,
+    entranceReady: Boolean = true,
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -141,6 +143,11 @@ internal fun ConversationContent(
     }
     var followLatest by remember { mutableStateOf(true) }
     var followAfterJump by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }.collect { scrolling ->
+            if (scrolling) { followLatest = false; followAfterJump = false }
+        }
+    }
     var linkedFileUri by rememberSaveable { mutableStateOf<String?>(null) }
     val richImageRequest = remember(viewModel) { { target: String -> viewModel.linkedImageRequest(target) as Any } }
     val richLinkAction = remember(viewModel) {
@@ -156,7 +163,8 @@ internal fun ConversationContent(
         }
     }
     LaunchedEffect(messages, streamingMessageId, isRunning) {
-        followLatest = !positioned || (nearBottom && (expandedProcesses.isEmpty() || followAfterJump))
+        followLatest = !positioned || (!listState.isScrollInProgress && (followLatest || nearBottom) &&
+            (expandedProcesses.isEmpty() || followAfterJump))
         val previous = renderItems
         val prepared = withContext(Dispatchers.Default) {
             buildConversationRenderItems(messages, streamingMessageId, previous, isRunning)
@@ -185,9 +193,11 @@ internal fun ConversationContent(
             listState.scrollToItem(lastIndex)
             listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { listState.scrollBy(it.size.toFloat()) }
             positioned = true
+            followLatest = true
             if (newLocal) lastScrolledLocalId = newestLocalId
         }
     }
+    val entrance = contentEntrance("conversation", entranceOffset, (positioned || messages.isEmpty()) && entranceReady)
     CompositionLocalProvider(
         LocalRichLinkAction provides richLinkAction,
         LocalRichImageRequest provides richImageRequest,
@@ -196,7 +206,7 @@ internal fun ConversationContent(
         Box(modifier) {
         SelectionContainer {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().alpha(if (positioned || messages.isEmpty()) 1f else 0f),
+                modifier = Modifier.fillMaxSize().then(entrance),
                 state = listState,
                 contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
             ) {
@@ -225,6 +235,7 @@ internal fun ConversationContent(
                         if (item.process.isNotEmpty()) {
                             val expanded = item.key in expandedProcesses
                             val toggle = {
+                                followLatest = false
                                 followAfterJump = false
                                 expandedProcesses = if (expanded) expandedProcesses - item.key else expandedProcesses + item.key
                             }
@@ -261,6 +272,8 @@ internal fun ConversationContent(
                             if (lastIndex >= 0) {
                                 listState.animateScrollToItem(lastIndex)
                                 listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { listState.scrollBy(it.size.toFloat()) }
+                                followLatest = true
+                                followAfterJump = true
                             }
                         }
                     }, contentAlignment = Alignment.Center) {
@@ -405,19 +418,17 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
 }
 
 @Composable
-private fun StreamingMessageText(id: String, source: String) {
-    val context = LocalContext.current
-    val animate = remember(context) {
-        Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f
-    }
+internal fun StreamingMessageText(id: String, source: String) {
     var shown by rememberSaveable(id) { mutableStateOf("") }
     val reveal = remember(id) { StreamingTextReveal(shown) }
-    LaunchedEffect(id, source, animate) {
-        reveal.receive(source, animate, System.nanoTime() / 1_000_000)
+    LaunchedEffect(id, source) {
+        val durationScale = coroutineContext[MotionDurationScale]
+        reveal.receive(source, durationScale?.scaleFactor != 0f, System.nanoTime() / 1_000_000)
         shown = reveal.shown
         while (reveal.hasPending) {
             delay(16)
-            reveal.advance(System.nanoTime() / 1_000_000)
+            if (durationScale?.scaleFactor == 0f) reveal.finish()
+            else reveal.advance(System.nanoTime() / 1_000_000)
             shown = reveal.shown
         }
     }
