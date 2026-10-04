@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -341,7 +342,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                     travel += abs(delta.x) + abs(delta.y)
                                     elapsed = change.uptimeMillis - down.uptimeMillis
                                     if (!draggingPage && horizontal < -viewConfiguration.touchSlop &&
-                                        abs(horizontal) > abs(vertical) * 1.2f) draggingPage = true
+                                        abs(horizontal) > abs(vertical) * 1.2f) {
+                                        draggingPage = true
+                                        focusManager.clearFocus()
+                                    }
                                     if (draggingPage) {
                                         pagerState.dispatchRawDelta(-delta.x)
                                         change.consume()
@@ -385,28 +389,67 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             }
         }
 
-        if (!archivedOpen && (state.selectedConversationId != null || !projectsSelected)) {
-            Column(Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding()) {
-                Column(Modifier.onSizeChanged { composerHeightPx = it.height }) {
+        val homeSwipeProgress = if (state.selectedConversationId == null) {
+            (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+        val isHome = state.selectedConversationId == null
+        val showComposer = !archivedOpen && (state.selectedConversationId != null || homeSwipeProgress < 1f || !projectsSelected)
+
+        if (showComposer) {
+            val widthFactor = if (isHome) {
+                (1f - homeSwipeProgress * 0.65f).coerceIn(0.35f, 1f)
+            } else 1f
+            val alphaFactor = if (isHome) {
+                (1f - homeSwipeProgress).coerceIn(0f, 1f)
+            } else 1f
+            val translationYPx = if (isHome) {
+                with(density) { (homeSwipeProgress * 16.dp).toPx() }
+            } else 0f
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .navigationBarsPadding()
+                    .imePadding(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Column(
+                    modifier = Modifier.onSizeChanged { composerHeightPx = it.height },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     state.pendingInteraction?.let { interaction ->
-                        InteractionPanel(interaction = interaction,
+                        InteractionPanel(
+                            interaction = interaction,
                             isSubmitting = state.isSubmittingInteraction,
-                            onChoose = viewModel::respondToInteraction)
+                            onChoose = viewModel::respondToInteraction,
+                        )
                     }
-                    Composer(
-                        activeConversation = state.selectedConversationId != null,
-                        draft = state.draft,
-                        attachments = state.attachments,
-                        onDraftChange = viewModel::setDraft,
-                        onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                        onRemoveImage = viewModel::removeImage,
-                        onSend = viewModel::send,
-                        isSending = state.isSending || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
-                        isRunning = state.isRunning,
-                        isStopping = state.isStopping,
-                        onStop = viewModel::stopGeneration,
-                        onUnsupported = unsupported,
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(widthFactor)
+                            .graphicsLayer {
+                                alpha = alphaFactor
+                                translationY = translationYPx
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Composer(
+                            activeConversation = state.selectedConversationId != null,
+                            draft = state.draft,
+                            attachments = state.attachments,
+                            onDraftChange = viewModel::setDraft,
+                            onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onRemoveImage = viewModel::removeImage,
+                            onSend = viewModel::send,
+                            isSending = state.isSending || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
+                            isRunning = state.isRunning,
+                            isStopping = state.isStopping,
+                            onStop = viewModel::stopGeneration,
+                            onUnsupported = unsupported,
+                        )
+                    }
                     Spacer(Modifier.height(23.dp))
                 }
             }
