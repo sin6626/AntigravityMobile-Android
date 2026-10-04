@@ -405,7 +405,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 (1f - homeSwipeProgress).coerceIn(0f, 1f)
             } else 1f
             val translationYPx = if (isHome) {
-                with(density) { (homeSwipeProgress * 16.dp).toPx() }
+                homeSwipeProgress * with(density) { 16.dp.toPx() }
             } else 0f
 
             Column(
