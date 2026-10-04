@@ -13,6 +13,11 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,6 +30,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
@@ -45,6 +52,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -234,43 +243,43 @@ internal fun Composer(
     val expanded = focused || attachments.isNotEmpty()
     val horizontalPadding by animateDpAsState(
         if (activeConversation || expanded) 14.dp else 34.dp,
-        animationSpec = spring(stiffness = 350f), label = "composer width")
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer width")
     val corner by animateDpAsState(if (expanded) 30.dp else 36.dp,
-        animationSpec = spring(stiffness = 350f), label = "composer corner")
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer corner")
     Surface(
         modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
         shape = RoundedCornerShape(corner),
         color = Color.White,
         shadowElevation = 8.dp,
     ) {
-        Column(Modifier.fillMaxWidth().animateContentSize(animationSpec = spring(stiffness = 350f))) {
-            AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()) {
-                Box(Modifier.padding(start = 20.dp, top = 12.dp)) { AttachmentTray(attachments, onRemoveImage) }
+        Column(Modifier.fillMaxWidth()) {
+            AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
+                Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) { AttachmentTray(attachments, onRemoveImage) }
             }
-            Row(Modifier.fillMaxWidth().height(58.dp).padding(horizontal = 12.dp),
+            Row(Modifier.fillMaxWidth().animateContentSize(tween(180)).heightIn(min = 58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                AnimatedVisibility(!expanded, enter = expandHorizontally() + fadeIn(),
-                    exit = shrinkHorizontally() + fadeOut()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        ComposerIcon("add", "添加图片", 32, onAddImage)
+                AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
+                    exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
+                    Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {
+                        ComposerIcon("add", "添加图片", 32, onAddImage, enabled = !expanded)
                     }
                 }
                 ComposerTextField(draft, onDraftChange, onSend, canSend,
                     if (activeConversation) "回复 Multigravity" else "询问 Multigravity",
-                    Modifier.weight(1f).onFocusChanged { focused = it.isFocused }, expanded)
-                AnimatedVisibility(!expanded, enter = expandHorizontally() + fadeIn(),
-                    exit = shrinkHorizontally() + fadeOut()) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        ComposerIcon("mic", "语音输入，暂不可用", 26, onUnsupported)
-                        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
+                    Modifier.weight(1f).padding(vertical = 12.dp).onFocusChanged { focused = it.isFocused }, expanded)
+                AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
+                    exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
+                    Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {
+                        ComposerIcon("mic", "语音输入，暂不可用", 26, onUnsupported, enabled = !expanded)
+                        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active = !expanded)
                     }
                 }
             }
-            AnimatedVisibility(expanded, enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()) {
-                Box(Modifier.padding(start = 20.dp, end = 12.dp, bottom = 9.dp, top = 3.dp)) {
-                    ComposerActions(canSend, onSend, onAddImage, onUnsupported, isRunning, isSending, isStopping, onStop)
+            AnimatedVisibility(expanded, enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
+                Box((if (!expanded) Modifier.clearAndSetSemantics {} else Modifier).padding(start = 20.dp, end = 12.dp, bottom = 9.dp, top = 3.dp)) {
+                    ComposerActions(canSend, onSend, onAddImage, onUnsupported, isRunning, isSending, isStopping, onStop, expanded)
                 }
             }
         }
@@ -279,20 +288,20 @@ internal fun Composer(
 
 @Composable
 private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit,
-    isRunning: Boolean, isSending: Boolean, isStopping: Boolean, onStop: () -> Unit) {
+    isRunning: Boolean, isSending: Boolean, isStopping: Boolean, onStop: () -> Unit, active: Boolean) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ComposerIcon("add", "添加图片", 32, onAddImage)
+        ComposerIcon("add", "添加图片", 32, onAddImage, active)
         Spacer(Modifier.weight(1f))
-        ComposerIcon("mic", "语音输入，暂不可用", 27, onUnsupported)
-        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
+        ComposerIcon("mic", "语音输入，暂不可用", 27, onUnsupported, active)
+        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active)
     }
 }
 
 @Composable
 private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        images.forEach { image ->
-            Box {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        items(images, key = { it.uri.toString() }) { image ->
+            Box(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(180), fadeOutSpec = null)) {
                 AsyncImage(
                     model = image.bytes,
                     contentDescription = "待发送图片",
@@ -307,13 +316,12 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
             }
         }
     }
-    Spacer(Modifier.height(10.dp))
 }
 
 @Composable
 private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean, isSending: Boolean,
-    isStopping: Boolean, onStop: () -> Unit) {
-    val enabled = !isStopping && (if (isRunning) !isSending else canSend)
+    isStopping: Boolean, onStop: () -> Unit, active: Boolean = true) {
+    val enabled = active && !isStopping && (if (isRunning) !isSending else canSend)
     Box(
         modifier = Modifier.size(48.dp)
             .quietClickable(CircleShape, enabled = enabled, onClick = if (isRunning) onStop else onSend)
@@ -337,8 +345,8 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean,
 }
 
 @Composable
-private fun ComposerIcon(icon: String, label: String, size: Int, action: () -> Unit) {
-    Box(Modifier.size(48.dp).semantics { contentDescription = label }.quietClickable(CircleShape, onClick = action),
+private fun ComposerIcon(icon: String, label: String, size: Int, action: () -> Unit, enabled: Boolean = true) {
+    Box(Modifier.size(48.dp).semantics { contentDescription = label }.quietClickable(CircleShape, enabled = enabled, onClick = action),
         contentAlignment = Alignment.Center) { Symbol(icon, size = size) }
 }
 
@@ -382,23 +390,29 @@ private fun ComposerTextField(
 internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, title: String,
     pinned: Boolean, archived: Boolean, enabled: Boolean, onRename: () -> Unit,
     onPin: () -> Unit, onArchive: () -> Unit, onDelete: () -> Unit) {
-    if (!expanded) return
+    val visibility = remember { MutableTransitionState(false) }
+    visibility.targetState = expanded
+    if (!expanded && visibility.isIdle && !visibility.currentState) return
     androidx.compose.ui.window.Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.PopupProperties(focusable = true)) {
+        properties = androidx.compose.ui.window.PopupProperties(focusable = expanded)) {
+        AnimatedVisibility(visibility,
+            enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.96f, transformOrigin = TransformOrigin(1f, 0f)),
+            exit = fadeOut(tween(110)) + scaleOut(tween(110), targetScale = 0.96f, transformOrigin = TransformOrigin(1f, 0f))) {
         androidx.compose.material3.Surface(shape = RoundedCornerShape(28.dp), color = Color.White,
-            shadowElevation = 12.dp, modifier = Modifier.width(244.dp)) {
+            shadowElevation = 12.dp, modifier = Modifier.width(244.dp).then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier)) {
             Column(Modifier.padding(vertical = 10.dp)) {
-                Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled, onClick = onRename)
+                Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled && expanded, onClick = onRename)
                     .semantics { contentDescription = "重命名" }.padding(horizontal = 22.dp, vertical = 15.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Text(title, color = Color(0xFF8A8A8A), fontSize = 16.sp, maxLines = 2,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp)); Symbol("edit", size = 18, color = SecondaryInk)
                 }
-                if (!archived) ConversationMenuRow("push_pin", if (pinned) "取消置顶" else "置顶", enabled, onPin)
-                ConversationMenuRow(if (archived) "unarchive" else "archive", if (archived) "恢复会话" else "归档", enabled, onArchive)
-                ConversationMenuRow("delete", "删除会话", enabled, onDelete, Color(0xFFCC2332))
+                if (!archived) ConversationMenuRow("push_pin", if (pinned) "取消置顶" else "置顶", enabled && expanded, onPin)
+                ConversationMenuRow(if (archived) "unarchive" else "archive", if (archived) "恢复会话" else "归档", enabled && expanded, onArchive)
+                ConversationMenuRow("delete", "删除会话", enabled && expanded, onDelete, Color(0xFFCC2332))
             }
+        }
         }
     }
 }
