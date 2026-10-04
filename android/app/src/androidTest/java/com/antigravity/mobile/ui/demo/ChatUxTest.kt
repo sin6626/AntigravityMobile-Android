@@ -988,26 +988,80 @@ class ChatUxTest {
                 compose.onNodeWithContentDescription("清除搜索").assertIsDisplayed().performClick()
                 assertEquals(title, compose.onNodeWithText("Multigravity").fetchSemanticsNode().boundsInRoot)
                 compose.runOnIdle { drawerOnly.value = false; vm.newConversation() }
+                fun shadowDarkness(): Int {
+                    compose.waitForIdle()
+                    Thread.sleep(200) // Wait for the native renderer to present the held gesture.
+                    val send = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInWindow
+                    val field = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInWindow
+                    val density = compose.activity.resources.displayMetrics.density
+                    val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+                    val darkness = (1..5).maxOf { gap -> 255 - android.graphics.Color.red(bitmap.getPixel(
+                        field.center.x.toInt(), (send.center.y + (29 + gap) * density).toInt())) }
+                    bitmap.recycle()
+                    return darkness
+                }
+                val restingShadow = shadowDarkness()
+                assertTrue("Resting composer must have a shadow", restingShadow > 4)
                 saveScreenshot("composer-home-resting.png")
                 val restingWidth = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot.width
                 compose.mainClock.autoAdvance = false
                 try {
                     compose.onRoot().performTouchInput {
                         down(androidx.compose.ui.geometry.Offset(width * .8f, height * .35f))
-                        moveTo(androidx.compose.ui.geometry.Offset(width * .5f, height * .35f), 300)
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .65f, height * .35f), 150)
                     }
                     compose.mainClock.advanceTimeBy(96)
-                    compose.waitForIdle()
+                    val earlyShadow = shadowDarkness()
+                    assertTrue("Shadow must fade gradually at the start of the drag: $restingShadow -> $earlyShadow",
+                        earlyShadow in 2 until restingShadow)
+                    saveScreenshot("composer-home-shadow-early.png")
+                    compose.onRoot().performTouchInput {
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .5f, height * .35f), 150)
+                    }
+                    compose.mainClock.advanceTimeBy(96)
+                    val laterShadow = shadowDarkness()
+                    assertTrue("Shadow must keep fading with the composer: $earlyShadow -> $laterShadow",
+                        laterShadow in 1 until earlyShadow)
                     assertTrue("Composer must shrink during the actual home drag",
                         compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot.width < restingWidth * .9f)
-                    Thread.sleep(200) // Let the native renderer present the held gesture frame.
                     saveScreenshot("composer-home-morphing.png")
+                    compose.onRoot().performTouchInput {
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .7f, height * .35f), 150)
+                    }
+                    compose.mainClock.advanceTimeBy(96)
+                    val returningShadow = shadowDarkness()
+                    assertTrue("Shadow must recover progressively during the reverse drag: $laterShadow -> $returningShadow",
+                        returningShadow in (laterShadow + 1) until restingShadow)
+                    saveScreenshot("composer-home-shadow-returning.png")
                     compose.onRoot().performTouchInput { up() }
                     compose.mainClock.advanceTimeBy(1_000)
                 } finally { compose.mainClock.autoAdvance = true }
                 compose.onNode(hasSetTextAction()).assertIsDisplayed()
-                Thread.sleep(200)
+                assertTrue("Shadow must return to its resting appearance", kotlin.math.abs(shadowDarkness() - restingShadow) <= 2)
                 saveScreenshot("composer-home-restored.png")
+                compose.onNode(hasText("项目") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
+                compose.onNode(hasSetTextAction()).assertDoesNotExist()
+                compose.mainClock.autoAdvance = false
+                try {
+                    compose.onRoot().performTouchInput {
+                        down(androidx.compose.ui.geometry.Offset(width * .15f, height * .35f))
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .6f, height * .35f), 300)
+                    }
+                    compose.mainClock.advanceTimeBy(96)
+                    val reappearingShadow = shadowDarkness()
+                    assertTrue("Remounted composer must start with a partial shadow", reappearingShadow in 1 until restingShadow)
+                    saveScreenshot("composer-home-shadow-reappearing.png")
+                    compose.onRoot().performTouchInput {
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .8f, height * .35f), 300)
+                    }
+                    compose.mainClock.advanceTimeBy(96)
+                    val growingShadow = shadowDarkness()
+                    assertTrue("Shadow must grow with the returning composer: $reappearingShadow -> $growingShadow",
+                        growingShadow in (reappearingShadow + 1) until restingShadow)
+                    compose.onRoot().performTouchInput { up() }
+                    compose.mainClock.advanceTimeBy(1_000)
+                } finally { compose.mainClock.autoAdvance = true }
+                assertTrue("Completed return must restore the resting shadow", kotlin.math.abs(shadowDarkness() - restingShadow) <= 2)
             } finally { compose.runOnIdle { store.clear() } }
         }
     }

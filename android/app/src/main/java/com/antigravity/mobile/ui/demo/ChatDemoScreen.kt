@@ -67,6 +67,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -451,6 +452,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         modifier = Modifier
                             .fillMaxWidth(widthFactor)
                             .graphicsLayer {
+                                // Keep the changing native shadow outside the rectangular bounds of this layer.
+                                compositingStrategy = CompositingStrategy.ModulateAlpha
                                 alpha = alphaFactor
                                 translationY = translationYPx
                             },
@@ -469,7 +472,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             isStopping = state.isStopping,
                             onStop = viewModel::stopGeneration,
                             onUnsupported = unsupported,
-                            suppressShadow = homeSwipeProgress > 0f,
+                            shadowAlpha = alphaFactor,
                         )
                     }
                     Spacer(Modifier.height(23.dp))

@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.Modifier
@@ -84,8 +85,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.layout.onSizeChanged
 
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
@@ -288,33 +287,31 @@ internal fun Composer(
     isRunning: Boolean = false,
     isStopping: Boolean = false,
     onStop: () -> Unit = {},
-    suppressShadow: Boolean = false,
+    shadowAlpha: Float = 1f,
 ) {
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isRunning && !isStopping
     var focused by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty()
     val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
     val targetCorner = if (expanded) 30.dp else 36.dp
-    var rowSize by remember { mutableStateOf(IntSize.Zero) }
-    var rowResizing by remember { mutableStateOf(false) }
     val horizontalPadding by animateDpAsState(
         targetHorizontalPadding,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer width")
     val corner by animateDpAsState(targetCorner,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer corner")
     Surface(
-        modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
+        modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding)
+            .shadow(8.dp * shadowAlpha, RoundedCornerShape(corner), clip = false,
+                ambientColor = Color.Black.copy(alpha = shadowAlpha), spotColor = Color.Black.copy(alpha = shadowAlpha)),
         shape = RoundedCornerShape(corner),
         color = Color.White,
-        shadowElevation = if (suppressShadow || rowResizing || horizontalPadding != targetHorizontalPadding || corner != targetCorner) 0.dp else 8.dp,
     ) {
         Column(Modifier.fillMaxWidth()) {
             AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                 exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
                 Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) { AttachmentTray(attachments, onRemoveImage) }
             }
-            Row(Modifier.fillMaxWidth().animateContentSize(tween(180), finishedListener = { _, _ -> rowResizing = false })
-                .onSizeChanged { if (rowSize != IntSize.Zero && rowSize != it) rowResizing = true; rowSize = it }
+            Row(Modifier.fillMaxWidth().animateContentSize(tween(180))
                 .heightIn(min = 58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),

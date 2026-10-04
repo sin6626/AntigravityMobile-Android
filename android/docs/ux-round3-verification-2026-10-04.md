@@ -179,3 +179,20 @@ Undo 的设备问题通过只读对照确认：同一闲置会话在运行中的
 另外补充首页真实触摸中间帧：手指左拖30%屏宽并保持，断言输入文字区域宽度小于静止的90%，核对缩小/淡出中的输入栏无阴影；松手回原位后原阴影恢复。最终该项通过12.966秒（`frosted-drag.log`）。首次系统截图没有等待原生渲染提交，拍到旧帧；修正夹具在保持手势与松手后各等待200ms，再截取画面，没有因此修改应用手势或动画逻辑。
 
 人工核对 `frosted-conversation-final.png`、`frosted-drawer-final.png`、`composer-home-morphing.png`、`composer-home-restored.png`；合成截图只留忽略目录 `android/design/.verification/`。原生像素回归另检查静止阴影存在、关闭时消失、恢复后存在。仅模拟器验收，font_scale恢复1.0，未改网关/接口日志、配对或系统动画比例；不宣称性能专项、TalkBack或旧API设备模糊效果已验证。APK仍为 `android/app/build/outputs/apk/debug/app-debug.apk`。
+
+
+## 输入栏阴影连续过渡修正（2026-10-04）
+
+用户指出上一轮在形变开始关闭阴影、结束打开阴影显得突兀，要求输入框与阴影作为整体一起变化。本轮只修改这条动画路径和验收，保留原静止立体效果、顶部渐变与 Gemini 的首页形变/骨架屏。
+
+- 删除阴影布尔开关、文字行尺寸跟踪和动画完成回调。首页输入框宽度、透明度、下沉与阴影都取同一 Pager 进度；`shadowAlpha = 1 - homeSwipeProgress` 直接控制原生阴影高度及环境/投射阴影颜色透明度，正向减弱、反向增强，不额外启动会滞后的动画。静止仍是8dp、原黑色阴影；聚焦/宽度/圆角/行高变化时阴影随 Surface 本身的形状变化，不再突然关闭。
+- 首页父层使用 `CompositingStrategy.ModulateAlpha`，让原生阴影能绘制到输入框矩形边界外，避免淡化期间被离屏矩形裁出阴角。采用既有 Compose 原生 `Modifier.shadow`，没有新增依赖或自绘阴影。原生阴影透明度的支持依据见 [Android RenderNode 阴影文档](https://developer.android.com/reference/android/graphics/RenderNode#setSpotShadowColor(int))；旧API设备自定义阴影色效果未实测。
+
+检查覆盖实际 ChatDemoScreen 手势路径，使用合成会话与隔离偏好。静止→小幅拖动→继续拖动的原生截图像素阴影强度严格递减且中间值大于零；反向拖动严格增强；松手恢复后与静止差异不超过2级灰度。另完全进入项目页并断言输入栏不存在，右拖返回时检查重新组合出的输入栏已有部分阴影，再继续右拖阴影增强，最后恢复原静止效果。共享 Composer 的会话/首页宽度动画中间帧与反向动画也检查阴影持续存在。
+
+- 主包/测试包构建与8项既有应用单测通过，`composer-shadow-continuity-build.log`。
+- 普通字体3项通过26.656秒：实际正反向手势阴影像素、共享宽度形变、四行输入，`composer-shadow-continuity-target.log`。
+- 补充完整项目页返回与项目/草稿/键盘导航2项通过24.663秒，`composer-shadow-reentry.log`。
+- 最终1.5倍字体3项通过28.651秒，涵盖完整返回的像素检查、共享形变及导航，`composer-shadow-continuity-font15.log`。
+
+人工核对早期/中间/反向/静止及项目页返回中的合成截图，证据只留忽略目录 `android/design/.verification/`：`composer-home-shadow-early.png`、`composer-home-morphing.png`、`composer-home-shadow-returning.png`、`composer-home-restored.png`、`composer-home-shadow-reappearing.png`。只操作 emulator-5554，font_scale恢复1.0，未触碰USB真机、网关、配对或真实用户对话；不将虚拟时钟中间帧检查描述为真机帧率/性能验收。APK为 `android/app/build/outputs/apk/debug/app-debug.apk`。

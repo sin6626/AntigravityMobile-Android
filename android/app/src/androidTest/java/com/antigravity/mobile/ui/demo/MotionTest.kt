@@ -28,15 +28,15 @@ class MotionTest {
     })
     private val baseline get() = InstrumentationRegistry.getArguments().getString("motionBaseline") == "true"
 
-    @Test fun composerKeepsRestingShadowAndRestoresItAfterMorphing() {
-        val suppressed = mutableStateOf(false)
+    @Test fun composerShadowStaysAttachedDuringWidthMorphing() {
+        val active = mutableStateOf(false)
         var bounds = androidx.compose.ui.geometry.Rect.Zero
         val density = compose.activity.resources.displayMetrics.density
         compose.setContent {
             Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White),
                 contentAlignment = Alignment.Center) {
                 Composer(Modifier.onGloballyPositioned { bounds = it.boundsInWindow() },
-                    false, "", emptyList(), {}, {}, {}, {}, false, {}, suppressShadow = suppressed.value)
+                    active.value, "", emptyList(), {}, {}, {}, {}, false, {})
             }
         }
         fun shadowDarkness(): Int {
@@ -49,12 +49,21 @@ class MotionTest {
             return darkness
         }
         assertTrue("Resting composer must keep its shadow", shadowDarkness() > 4)
-        screenshot("composer-shadow-resting.png")
-        compose.runOnIdle { suppressed.value = true }
-        assertTrue("Morphing composer must not draw a shadow", shadowDarkness() <= 1)
-        screenshot("composer-shadow-morphing.png")
-        compose.runOnIdle { suppressed.value = false }
-        assertTrue("Shadow must return after morphing", shadowDarkness() > 4)
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread { active.value = true }
+            compose.mainClock.advanceTimeBy(64)
+            Thread.sleep(200)
+            assertTrue("Native shadow must follow the changing width without disappearing", shadowDarkness() > 4)
+            screenshot("composer-shadow-width-morphing.png")
+            compose.runOnUiThread { active.value = false }
+            compose.mainClock.advanceTimeBy(64)
+            Thread.sleep(200)
+            assertTrue("Reverse morph must retain the shadow", shadowDarkness() > 4)
+            compose.mainClock.advanceTimeBy(1_000)
+            Thread.sleep(200)
+            assertTrue("Restored composer must keep its shadow", shadowDarkness() > 4)
+        } finally { compose.mainClock.autoAdvance = true }
     }
 
     @Test fun enteredContentRemainsVisibleWhenDrawerDelaysAnotherEntrance() {
