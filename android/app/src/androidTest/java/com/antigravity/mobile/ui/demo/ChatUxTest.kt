@@ -949,6 +949,69 @@ class ChatUxTest {
         }
     }
 
+    @Test fun frostedHeadersKeepControlsFixedWhileListsScroll() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.liveStream = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("frosted-header", vm) }
+            val drawerOnly = mutableStateOf(false)
+            val chats = (1..35).map { com.antigravity.mobile.data.model.ConversationItem("$it", "历史会话 $it") }
+            try {
+                compose.setContent {
+                    if (drawerOnly.value) DemoDrawer(Modifier.fillMaxSize(), chats, emptyList(), false, false, {}, {}, {}, {}, {})
+                    else ChatDemoScreen(vm, {})
+                }
+                compose.runOnIdle { vm.openConversation("A") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.connectionStatus ==
+                    com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                val messages = org.json.JSONArray((1..30).map { JSONObject().put("id", "message-$it").put("type", if (it % 2 == 1) "user" else "agent")
+                    .put("text", "## 阅读段落 $it\n\n这是顶部渐变的滚动验收内容。文字应在进入顶部时柔和模糊，按钮保持清晰。") })
+                gateway.emit("A", JSONObject().put("type", "init").put("cascadeId", "A").put("status", "IDLE")
+                    .put("isFullSnapshot", true).put("messages", messages).toString())
+                compose.waitUntil(10_000) { vm.state.value.messages.size == 30 }
+                val header = compose.onNodeWithContentDescription("打开菜单").fetchSemanticsNode().boundsInRoot
+                compose.onNode(hasScrollToIndexAction()).performScrollToIndex(6)
+                assertEquals(header, compose.onNodeWithContentDescription("打开菜单").fetchSemanticsNode().boundsInRoot)
+                saveScreenshot("frosted-conversation.png")
+                compose.onNodeWithContentDescription("更多选项").performClick()
+                compose.onNodeWithText("置顶").assertIsDisplayed()
+                compose.onNodeWithText("置顶").performClick()
+                compose.runOnIdle { drawerOnly.value = true }
+                val title = compose.onNodeWithText("Multigravity").fetchSemanticsNode().boundsInRoot
+                compose.onNode(hasScrollAction()).performTouchInput { swipeUp() }
+                assertEquals(title, compose.onNodeWithText("Multigravity").fetchSemanticsNode().boundsInRoot)
+                saveScreenshot("frosted-drawer.png")
+                compose.onNodeWithContentDescription("搜索").performClick()
+                compose.onNode(hasSetTextAction()).performTextInput("历史会话 2")
+                compose.onNodeWithContentDescription("清除搜索").assertIsDisplayed().performClick()
+                assertEquals(title, compose.onNodeWithText("Multigravity").fetchSemanticsNode().boundsInRoot)
+                compose.runOnIdle { drawerOnly.value = false; vm.newConversation() }
+                saveScreenshot("composer-home-resting.png")
+                val restingWidth = compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot.width
+                compose.mainClock.autoAdvance = false
+                try {
+                    compose.onRoot().performTouchInput {
+                        down(androidx.compose.ui.geometry.Offset(width * .8f, height * .35f))
+                        moveTo(androidx.compose.ui.geometry.Offset(width * .5f, height * .35f), 300)
+                    }
+                    compose.mainClock.advanceTimeBy(96)
+                    compose.waitForIdle()
+                    assertTrue("Composer must shrink during the actual home drag",
+                        compose.onNode(hasSetTextAction()).fetchSemanticsNode().boundsInRoot.width < restingWidth * .9f)
+                    Thread.sleep(200) // Let the native renderer present the held gesture frame.
+                    saveScreenshot("composer-home-morphing.png")
+                    compose.onRoot().performTouchInput { up() }
+                    compose.mainClock.advanceTimeBy(1_000)
+                } finally { compose.mainClock.autoAdvance = true }
+                compose.onNode(hasSetTextAction()).assertIsDisplayed()
+                Thread.sleep(200)
+                saveScreenshot("composer-home-restored.png")
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun conversationPullRetriesWithoutStatusTextAndActionsStayOutsideBubble() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->

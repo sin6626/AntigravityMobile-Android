@@ -45,8 +45,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.layer.GraphicsLayer
+import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.onFocusChanged
@@ -72,9 +84,48 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.layout.onSizeChanged
+
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
 import com.antigravity.mobile.R
+
+internal fun Modifier.recordBackdrop(layer: GraphicsLayer, headerHeight: Dp) = drawWithContent {
+    layer.record { this@drawWithContent.drawContent() }
+    val edge = (headerHeight + 24.dp).toPx()
+    // Mask only the top strip so sharp source text cannot show through the blurred overlay.
+    clipRect(bottom = edge) {
+        drawContext.canvas.saveLayer(Rect(0f, 0f, size.width, edge), Paint())
+        drawLayer(layer)
+        drawRect(Brush.verticalGradient(0f to Color.Transparent, .65f to Color.Transparent, 1f to Color.White,
+            endY = edge), blendMode = BlendMode.DstIn)
+        drawContext.canvas.restore()
+    }
+    clipRect(top = edge) { drawLayer(layer) }
+}
+
+@Composable
+internal fun FrostedTopBar(backdrop: GraphicsLayer, height: Dp, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().height(height + 24.dp)) {
+        Box(Modifier.matchParentSize().graphicsLayer {
+            compositingStrategy = CompositingStrategy.Offscreen
+        }.drawWithCache {
+            val fade = Brush.verticalGradient(0f to Color.White, .65f to Color.White, 1f to Color.Transparent)
+            onDrawWithContent {
+                drawContent()
+                drawRect(fade, blendMode = BlendMode.DstIn)
+            }
+        }) {
+            Box(Modifier.matchParentSize().graphicsLayer {
+                renderEffect = BlurEffect(12.dp.toPx(), 12.dp.toPx(), TileMode.Clamp)
+            }.drawWithContent { drawLayer(backdrop) })
+            Box(Modifier.matchParentSize().background(Brush.verticalGradient(
+                0f to Color.White.copy(alpha = .98f), .6f to Color.White.copy(alpha = .86f), 1f to Color.White.copy(alpha = .45f))))
+        }
+        content()
+    }
+}
 
 internal val Ink = Color(0xFF111111)
 internal val SecondaryInk = Color(0xFF666666)
@@ -237,27 +288,34 @@ internal fun Composer(
     isRunning: Boolean = false,
     isStopping: Boolean = false,
     onStop: () -> Unit = {},
+    suppressShadow: Boolean = false,
 ) {
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isRunning && !isStopping
     var focused by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty()
+    val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
+    val targetCorner = if (expanded) 30.dp else 36.dp
+    var rowSize by remember { mutableStateOf(IntSize.Zero) }
+    var rowResizing by remember { mutableStateOf(false) }
     val horizontalPadding by animateDpAsState(
-        if (activeConversation || expanded) 14.dp else 34.dp,
+        targetHorizontalPadding,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer width")
-    val corner by animateDpAsState(if (expanded) 30.dp else 36.dp,
+    val corner by animateDpAsState(targetCorner,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer corner")
     Surface(
         modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding),
         shape = RoundedCornerShape(corner),
         color = Color.White,
-        shadowElevation = 8.dp,
+        shadowElevation = if (suppressShadow || rowResizing || horizontalPadding != targetHorizontalPadding || corner != targetCorner) 0.dp else 8.dp,
     ) {
         Column(Modifier.fillMaxWidth()) {
             AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                 exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
                 Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) { AttachmentTray(attachments, onRemoveImage) }
             }
-            Row(Modifier.fillMaxWidth().animateContentSize(tween(180)).heightIn(min = 58.dp).padding(horizontal = 12.dp),
+            Row(Modifier.fillMaxWidth().animateContentSize(tween(180), finishedListener = { _, _ -> rowResizing = false })
+                .onSizeChanged { if (rowSize != IntSize.Zero && rowSize != it) rowResizing = true; rowSize = it }
+                .heightIn(min = 58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
                     exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {

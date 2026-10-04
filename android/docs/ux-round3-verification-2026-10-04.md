@@ -164,3 +164,18 @@ Undo 的设备问题通过只读对照确认：同一闲置会话在运行中的
 - font_scale已恢复1.0，58900/58901本地健康、原公网健康和原58900隧道ready均200，活动进程仅原58900/PID35724、原隧道19856及更新后58901/PID54264；记录 `revert-compact-gateway-deploy.json`。旧58901备份 `mgy-management-before-compact.exe` 保留在忽略目录。
 
 日志和合成截图仍只放忽略目录：`revert-compact-baseline.log`、`revert-compact-final-build.log`、`revert-compact-native-final.log`、`revert-compact-font15.log`，`revert-compact-ready-final.png`、`revert-compact-ready-font15.png`、`revert-compact-running-button-final.png`。测试只创建并清理自有会话；未操作真实用户会话或USB真机，Gemini 的骨架屏/输入栏滑动动画未改，本轮不宣称性能或TalkBack验收。
+
+
+## 顶部渐变模糊与输入栏形变阴影（2026-10-04）
+
+从 `3919c52` 继续。用户希望抽屉标题/搜索区与会话菜单/新建/更多区柔和模糊渐变；随后明确输入栏原有立体阴影仍要保留，只在形变动画期间隐藏。按最新澄清实施，无新增说明文字、文件列表或第三方依赖。
+
+- 两处顶部在既有文件内共用 GraphicsLayer 绘制记录、原生 BlurEffect 和渐变遮罩。正文保持单份组合与语义，顶端原始清晰文字遮掉后显示模糊内容，控件独立清晰绘制；不使用周期性截图/位图。顶部高度实际测量，适应搜索框和大字体。
+- 会话列表初始留白仍为原顶部高度加18dp，滚动时内容可以经过顶部；下拉刷新圈避让顶部。骨架屏沿用 Gemini 组件，只加顶部布局避让，未改 Shimmer。
+- Composer 静止8dp阴影保留，首页滑动进度非零及宽度/圆角/文字行尺寸动画期间关闭，动画完成恢复。原收缩、淡出和下沉实现保留。
+
+验证使用合成会话与独立偏好，不操作真实用户聊天或USB设备。最终主包/测试包构建及已有8项单测通过；普通字体6项针对性界面检查通过（44.832秒，`frosted-header-final.log`），大字体3项通过（28.653秒，`frosted-header-font15.log`）。覆盖顶部控件位置固定、会话/抽屉滚动、更多菜单、搜索/清除、下拉重试、抽屉遮罩下正文保留、项目返回/草稿/键盘以及原生阴影像素和四行输入。
+
+另外补充首页真实触摸中间帧：手指左拖30%屏宽并保持，断言输入文字区域宽度小于静止的90%，核对缩小/淡出中的输入栏无阴影；松手回原位后原阴影恢复。最终该项通过12.966秒（`frosted-drag.log`）。首次系统截图没有等待原生渲染提交，拍到旧帧；修正夹具在保持手势与松手后各等待200ms，再截取画面，没有因此修改应用手势或动画逻辑。
+
+人工核对 `frosted-conversation-final.png`、`frosted-drawer-final.png`、`composer-home-morphing.png`、`composer-home-restored.png`；合成截图只留忽略目录 `android/design/.verification/`。原生像素回归另检查静止阴影存在、关闭时消失、恢复后存在。仅模拟器验收，font_scale恢复1.0，未改网关/接口日志、配对或系统动画比例；不宣称性能专项、TalkBack或旧API设备模糊效果已验证。APK仍为 `android/app/build/outputs/apk/debug/app-debug.apk`。

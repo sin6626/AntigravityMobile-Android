@@ -13,6 +13,9 @@ import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.pager.HorizontalPager
@@ -232,66 +235,80 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     onDelete = { deleteConversationId = it; showDeleteConfirm = true }, entranceReady = !drawerState.isOpen)
             } else if (state.selectedConversationId != null) {
                 key(state.selectedConversationId) {
-                ConversationTopBar(
-                    returnToProjects = openedFromProject || openedFromArchive,
-                    leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
-                    onLeading = if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
-                        else if (openedFromProject) returnFromConversation else openDrawer,
-                    onNewChat = {
-                        projectsSelected = false
-                        openedFromProject = false
-                        archivedOpen = false; openedFromArchive = false
-                        viewModel.newConversation()
-                    },
-                    onRename = {
-                        renameConversationId = state.selectedConversationId
-                        renameTitle = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.title.orEmpty()
-                        showRename = true
-                    },
-                    onDelete = { deleteConversationId = state.selectedConversationId; showDeleteConfirm = true },
-                    title = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.displayTitle ?: "未命名会话",
-                    isPinned = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isPinned == true,
-                    isArchived = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isArchived == true,
-                    onPin = { state.selectedConversationId?.let { id -> viewModel.setPinned(id, state.conversations.firstOrNull { it.id == id }?.isPinned != true) } },
-                    onArchive = { state.selectedConversationId?.let { id -> viewModel.setArchived(id, state.conversations.firstOrNull { it.id == id }?.isArchived != true) } },
-                    actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
-                        state.selectedConversationId !in state.busyConversations && !state.isReverting,
-                )
-                }
-                key(state.selectedConversationId) {
-                PullToRefreshBox(isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
-                    onRefresh = viewModel::retryMessages, modifier = Modifier.weight(1f)) {
-                    ConversationContent(
-                        viewModel = viewModel,
-                        messages = state.messages + state.outgoing.filter { it.conversationId == state.selectedConversationId }.map { it.message },
-                        streamingMessageId = state.streamingMessageId,
-                        isRunning = state.isRunning,
-                        isLoading = state.isLoadingMessages,
-                        hasMore = state.hasMoreMessages,
-                        isLoadingOlder = state.isLoadingOlder,
-                        onLoadOlder = viewModel::loadOlderMessages,
-                        olderError = state.olderMessagesError,
-                        entranceOffset = if (openedFromProject || openedFromArchive) 10.dp else 0.dp,
-                        entranceReady = !drawerState.isOpen,
-                        allowRevert = !state.isSending && !state.isReverting && state.selectedConversationId !in state.busyConversations,
-                        bottomSpace = composerHeight + keyboardHeight + 23.dp,
-                        modifier = Modifier.fillMaxSize().pointerInput(Unit) {
-                            awaitEachGesture {
-                                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                                var travel = 0f
-                                var elapsed = 0L
-                                do {
-                                    val event = awaitPointerEvent(PointerEventPass.Initial)
-                                    event.changes.forEach { change ->
-                                        travel += abs(change.positionChange().x) + abs(change.positionChange().y)
-                                        elapsed = change.uptimeMillis - down.uptimeMillis
+                    val backdrop = rememberGraphicsLayer()
+                    var topBarHeight by remember { mutableStateOf(68.dp) }
+                    val refreshState = rememberPullToRefreshState()
+                    Box(Modifier.weight(1f)) {
+                        PullToRefreshBox(isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
+                            onRefresh = viewModel::retryMessages, state = refreshState,
+                            modifier = Modifier.fillMaxSize().recordBackdrop(backdrop, topBarHeight),
+                            indicator = {
+                                PullToRefreshDefaults.Indicator(state = refreshState,
+                                    isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
+                                    modifier = Modifier.align(Alignment.TopCenter).padding(top = topBarHeight))
+                            }) {
+                            ConversationContent(
+                                viewModel = viewModel,
+                                messages = state.messages + state.outgoing.filter { it.conversationId == state.selectedConversationId }.map { it.message },
+                                streamingMessageId = state.streamingMessageId,
+                                isRunning = state.isRunning,
+                                isLoading = state.isLoadingMessages,
+                                hasMore = state.hasMoreMessages,
+                                isLoadingOlder = state.isLoadingOlder,
+                                onLoadOlder = viewModel::loadOlderMessages,
+                                olderError = state.olderMessagesError,
+                                entranceOffset = if (openedFromProject || openedFromArchive) 10.dp else 0.dp,
+                                entranceReady = !drawerState.isOpen,
+                                allowRevert = !state.isSending && !state.isReverting && state.selectedConversationId !in state.busyConversations,
+                                topSpace = topBarHeight,
+                                bottomSpace = composerHeight + keyboardHeight + 23.dp,
+                                modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                                    awaitEachGesture {
+                                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                                        var travel = 0f
+                                        var elapsed = 0L
+                                        do {
+                                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                                            event.changes.forEach { change ->
+                                                travel += abs(change.positionChange().x) + abs(change.positionChange().y)
+                                                elapsed = change.uptimeMillis - down.uptimeMillis
+                                            }
+                                        } while (event.changes.any { it.pressed })
+                                        if (travel < viewConfiguration.touchSlop && elapsed < viewConfiguration.longPressTimeoutMillis) focusManager.clearFocus()
                                     }
-                                } while (event.changes.any { it.pressed })
-                                if (travel < viewConfiguration.touchSlop && elapsed < viewConfiguration.longPressTimeoutMillis) focusManager.clearFocus()
+                                },
+                            )
+                        }
+                        FrostedTopBar(backdrop, topBarHeight) {
+                            Box(Modifier.onSizeChanged { topBarHeight = with(density) { it.height.toDp() } }) {
+                                ConversationTopBar(
+                                    returnToProjects = openedFromProject || openedFromArchive,
+                                    leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
+                                    onLeading = if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
+                                        else if (openedFromProject) returnFromConversation else openDrawer,
+                                    onNewChat = {
+                                        projectsSelected = false
+                                        openedFromProject = false
+                                        archivedOpen = false; openedFromArchive = false
+                                        viewModel.newConversation()
+                                    },
+                                    onRename = {
+                                        renameConversationId = state.selectedConversationId
+                                        renameTitle = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.title.orEmpty()
+                                        showRename = true
+                                    },
+                                    onDelete = { deleteConversationId = state.selectedConversationId; showDeleteConfirm = true },
+                                    title = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.displayTitle ?: "未命名会话",
+                                    isPinned = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isPinned == true,
+                                    isArchived = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isArchived == true,
+                                    onPin = { state.selectedConversationId?.let { id -> viewModel.setPinned(id, state.conversations.firstOrNull { it.id == id }?.isPinned != true) } },
+                                    onArchive = { state.selectedConversationId?.let { id -> viewModel.setArchived(id, state.conversations.firstOrNull { it.id == id }?.isArchived != true) } },
+                                    actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
+                                        state.selectedConversationId !in state.busyConversations && !state.isReverting,
+                                )
                             }
-                        },
-                    )
-                }
+                        }
+                    }
                 }
             } else {
                 EmptyTopBar(
@@ -452,6 +469,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             isStopping = state.isStopping,
                             onStop = viewModel::stopGeneration,
                             onUnsupported = unsupported,
+                            suppressShadow = homeSwipeProgress > 0f,
                         )
                     }
                     Spacer(Modifier.height(23.dp))

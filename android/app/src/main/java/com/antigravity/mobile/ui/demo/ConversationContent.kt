@@ -123,6 +123,7 @@ internal fun ConversationContent(
     entranceOffset: androidx.compose.ui.unit.Dp = 0.dp,
     entranceReady: Boolean = true,
     allowRevert: Boolean = true,
+    topSpace: androidx.compose.ui.unit.Dp = 0.dp,
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -182,7 +183,7 @@ internal fun ConversationContent(
     }
     if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         ConversationSkeleton(
-            modifier = modifier,
+            modifier = modifier.padding(top = topSpace),
             bottomSpace = bottomSpace,
         )
         return
@@ -210,7 +211,7 @@ internal fun ConversationContent(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().then(entrance),
                 state = listState,
-                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 18.dp, bottom = bottomSpace),
+                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = topSpace + 18.dp, bottom = bottomSpace),
             ) {
                 if (hasMore) item(key = "load-older", contentType = "load-older") {
                     DisableSelection {
