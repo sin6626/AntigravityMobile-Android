@@ -181,10 +181,10 @@ internal fun ConversationContent(
         renderItems = prepared
     }
     if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
-        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
-            CircularProgressIndicator(color = AccentBlue)
-        }
+        ConversationSkeleton(
+            modifier = modifier,
+            bottomSpace = bottomSpace,
+        )
         return
     }
     LaunchedEffect(renderItems, isRunning) {
