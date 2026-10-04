@@ -130,21 +130,40 @@ class ChatUxTest {
         val api = ApiClient(app, prefs)
         runBlocking {
             val prompt = "隔离回退验收：不使用工具、不读写文件，请逐行列出1到10000，不要省略。"
-            val id = api.createCascade("", prompt, "gemini-3.8-flash-high", ProjectItem.PURE_CHAT.id).getOrThrow()
+            val id = api.createCascade("", "只回复 READY，不使用工具、不读写文件。", "gemini-3.8-flash-high", ProjectItem.PURE_CHAT.id).getOrThrow()
             try {
-                val message = kotlinx.coroutines.withTimeout(30_000) {
+                kotlinx.coroutines.withTimeout(60_000) {
                     while (true) {
                         val data = api.fetchMessages(id).getOrThrow()
-                        val user = data.messages.orEmpty().firstOrNull { it.isUser && it.effectiveText == prompt }
-                        if (user != null && data.status.contains("RUNNING", true)) return@withTimeout user
-                        kotlinx.coroutines.delay(200)
+                        check(!data.hasError) { data.errorMessage ?: "测试会话初始化失败" }
+                        if (!data.status.contains("RUNNING", true) && data.messages.orEmpty().any { it.isAgent }) break
+                        kotlinx.coroutines.delay(250)
                     }
-                    error("unreachable")
                 }
-                assertTrue(message.revertReason, message.canRevert == true)
-                api.getRevertPreview(id, message.stepIndex!!).getOrThrow()
-                assertTrue("Native execution must be tested while running", api.fetchMessages(id).getOrThrow().status.contains("RUNNING", true))
-                api.executeRevert(id, message.stepIndex!!, true).getOrThrow()
+                val vm = ChatViewModel(app)
+                val store = ViewModelStore().apply { put("real-running-ui", vm) }
+                try {
+                    compose.setContent { ChatDemoScreen(vm, {}) }
+                    compose.runOnIdle { vm.openConversation(id) }
+                    compose.waitUntil(15_000) { !vm.state.value.isLoadingMessages }
+                    compose.runOnIdle { vm.setDraft(prompt); vm.send() }
+                    compose.waitUntil(30_000) { vm.state.value.isRunning && !vm.state.value.isSending &&
+                        vm.state.value.messages.any { it.isUser && it.effectiveText == prompt } }
+                    val message = vm.state.value.messages.first { it.isUser && it.effectiveText == prompt }
+                    assertTrue("${prefs.gatewayBaseUrl}: ${message.revertReason}", message.canRevert == true)
+                    compose.onAllNodesWithContentDescription("回退到这条消息").onLast().assertIsDisplayed()
+                    saveScreenshot("revert-running-button.png")
+                    compose.onAllNodesWithContentDescription("回退到这条消息").onLast().performClick()
+                    compose.waitUntil(15_000) { vm.state.value.revertPreview != null || vm.state.value.revertError != null }
+                    assertNull(vm.state.value.revertError)
+                    compose.onNode(isToggleable()).assertIsOn().performClick()
+                    saveScreenshot("revert-running-real.png")
+                    assertTrue("Native UI confirmation must be tested while running", vm.state.value.isRunning)
+                    compose.onNodeWithText("确认回退").assertIsEnabled().performClick()
+                    compose.waitUntil(20_000) { !vm.state.value.isReverting && !vm.state.value.isLoadingMessages }
+                    assertNull(vm.state.value.revertError)
+                    assertEquals(prompt, vm.state.value.draft)
+                } finally { compose.runOnIdle { store.clear() } }
                 kotlinx.coroutines.withTimeout(20_000) {
                     while (true) {
                         val data = api.fetchMessages(id).getOrThrow()
@@ -829,6 +848,7 @@ class ChatUxTest {
                 compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
                 compose.onNodeWithContentDescription("回退到这条消息").performClick()
                 assertTrue(requested.await(5, TimeUnit.SECONDS))
+                Thread.sleep(350) // Let the native dialog entrance finish before measuring its layout.
                 val loading = compose.onNode(isDialog()).fetchSemanticsNode().boundsInRoot
                 saveScreenshot("revert-modes-loading.png")
                 release.countDown()
@@ -837,15 +857,17 @@ class ChatUxTest {
                 assertEquals("Preview must not resize dialog height", loading.height, ready.height, 1f)
                 assertEquals("Preview must not resize dialog width", loading.width, ready.width, 1f)
                 compose.onNode(isToggleable()).assertIsOn()
-                compose.onNodeWithText("Agent.md").assertIsDisplayed()
-                compose.onNodeWithText("file-2.kt").assertIsDisplayed()
+                compose.onNodeWithText("Agent.md").assertDoesNotExist()
+                compose.onNodeWithText("没有文件改动").assertDoesNotExist()
+                assertTrue("Confirmation must stay compact", ready.height < 200 * compose.activity.resources.displayMetrics.density *
+                    compose.activity.resources.configuration.fontScale)
                 saveScreenshot("revert-modes-ready.png")
                 gateway.failurePath = "/revert/execute"
                 compose.onNodeWithText("确认回退").performClick()
                 compose.waitUntil(10_000) { !vm.state.value.isReverting && vm.state.value.revertError != null }
                 assertFalse(JSONObject(gateway.requests.last { it.first.contains("/revert/execute") }.second).getBoolean("conversationOnly"))
                 assertEquals("preserved", vm.state.value.draft)
-                assertEquals(ready.height, compose.onNode(isDialog()).fetchSemanticsNode().boundsInRoot.height, 1f)
+                assertNotNull(vm.state.value.revertError)
                 compose.onNode(isToggleable()).performClick()
                 compose.onNode(isToggleable()).assertIsOff()
                 gateway.failurePath = null
