@@ -97,7 +97,7 @@ class ChatUxTest {
                 api.sendMessage(id, second).getOrThrow()
                 val before = completed(id, second)
                 val message = before.messages.orEmpty().first { it.isUser && it.effectiveText == second }
-                assertTrue(message.revertReason, message.canRevert)
+                assertTrue(message.revertReason, message.canRevert == true)
                 val vm = ChatViewModel(app)
                 val store = ViewModelStore().apply { put("real-revert", vm) }
                 try {
@@ -380,6 +380,10 @@ class ChatUxTest {
         assertEquals("A", deleted)
         compose.onNode(hasSetTextAction()).performTextInput("missing")
         compose.onNodeWithText("没有匹配的会话").assertExists()
+        compose.onNodeWithText("清空").assertDoesNotExist()
+        compose.onNodeWithContentDescription("清除搜索").performClick()
+        compose.onNodeWithText("Archived A").assertIsDisplayed()
+        compose.onNodeWithContentDescription("清除搜索").assertDoesNotExist()
     }
 
     @Test fun managementAndRevertKeepDraftsAndRollbackFailures() {
@@ -611,6 +615,10 @@ class ChatUxTest {
             com.antigravity.mobile.data.model.ConversationItem("P", "项目对话", projectId = "p", workspaceName = "Project 1"))
         compose.setContent { DemoDrawer(Modifier.fillMaxSize(), chats, projects.value, false, false, {}, {}, {}, {}, {}, selectedConversationId = "A") }
         compose.onNodeWithText("中文会话").assertIsSelected()
+        val row = compose.onNode(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.Selected, true)).fetchSemanticsNode().boundsInRoot
+        val label = compose.onNodeWithText("中文会话", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        assertEquals(row.center.y, label.center.y, 1f)
+        assertTrue(label.left > row.left)
         compose.onNodeWithText("项目").performClick()
         compose.onNodeWithText("Project 1").performClick()
         compose.onNodeWithText("项目对话").assertIsDisplayed()
@@ -618,7 +626,8 @@ class ChatUxTest {
         compose.onNode(hasSetTextAction()).performTextInput("missing")
         compose.onNodeWithText("没有匹配的最近会话").assertIsDisplayed()
         compose.onNodeWithText("没有匹配的项目").assertIsDisplayed()
-        compose.onNodeWithText("清空").performClick()
+        compose.onNodeWithText("清空").assertDoesNotExist()
+        compose.onNodeWithContentDescription("清除搜索").performClick()
         compose.runOnIdle { projects.value = projects.value.reversed() }
         compose.onNodeWithText("项目对话").assertIsDisplayed()
         compose.onNodeWithText("中文会话").assertIsSelected()
@@ -680,44 +689,114 @@ class ChatUxTest {
             val vm = ChatViewModel(app)
             val store = ViewModelStore().apply { put("image-viewer", vm) }
             val index = mutableStateOf(0); val showing = mutableStateOf(true)
+            val linked = mutableStateOf(false)
             try {
                 gateway.failurePath = "/image.png"
                 val files = listOf("image.png", "wide.png", "long.png")
-                compose.setContent { if (showing.value) ImageViewer(vm.mediaImageRequest("${gateway.url}/${files[index.value]}"), vm.mediaImageLoader,
-                    "图片验收", { showing.value = false }, index.value, files.size, { index.value = it }) }
-                compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败").fetchSemanticsNodes().isNotEmpty() }
+                compose.setContent { if (showing.value) {
+                    if (linked.value) LinkedFilePreview("${gateway.url}/image.png", vm) { showing.value = false }
+                    else ImageViewer(vm.mediaImageRequest("${gateway.url}/image.png"), vm.mediaImageLoader,
+                        "图片验收", { showing.value = false }, index.value, files.size, { index.value = it },
+                        modelAt = { vm.mediaImageRequest("${gateway.url}/${files[it]}") })
+                } }
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("重试加载图片").fetchSemanticsNodes().isNotEmpty() }
                 gateway.failurePath = null
-                compose.onNodeWithText("重试").performClick()
-                compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败").fetchSemanticsNodes().isEmpty() &&
-                    compose.onNodeWithText("放大").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled).not() }
-                compose.onNodeWithText("放大").performClick()
-                compose.onNodeWithText("200%").assertExists()
-                compose.onNodeWithContentDescription("图片验收").performTouchInput {
-                    val center = androidx.compose.ui.geometry.Offset(width / 2f, height / 2f)
-                    down(0, center - androidx.compose.ui.geometry.Offset(30f, 0f)); down(1, center + androidx.compose.ui.geometry.Offset(30f, 0f))
-                    moveTo(0, center - androidx.compose.ui.geometry.Offset(150f, 0f)); moveTo(1, center + androidx.compose.ui.geometry.Offset(150f, 0f))
+                compose.onNodeWithContentDescription("重试加载图片").performClick()
+                fun loaded(page: Int) {
+                    compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("图片验收 ${page + 1}/3").fetchSemanticsNodes().any {
+                        it.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) { "" }.startsWith("已加载") } }
+                }
+                fun imageNode() = compose.onNodeWithContentDescription("图片验收 ${index.value + 1}/3")
+                fun assertScale(expected: String) {
+                    imageNode().assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "已加载，缩放 $expected%"))
+                }
+                loaded(0)
+                listOf("图片验收", "关闭", "放大", "缩小", "重置", "上一张", "下一张", "100%").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+                imageNode().performTouchInput { doubleClick(center) }
+                assertScale("250")
+                imageNode().performTouchInput {
+                    val mid = center
+                    down(0, mid - androidx.compose.ui.geometry.Offset(40f, 0f)); down(1, mid + androidx.compose.ui.geometry.Offset(40f, 0f))
+                    moveTo(0, mid - androidx.compose.ui.geometry.Offset(120f, 0f)); moveTo(1, mid + androidx.compose.ui.geometry.Offset(120f, 0f))
                     up(0); up(1)
                 }
-                compose.onNodeWithText("200%").assertDoesNotExist()
-                compose.onNodeWithContentDescription("图片验收").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(0f, -200f)) }
-                compose.onNodeWithText("重置").performClick()
-                compose.onNodeWithText("100%").assertExists()
-                compose.onNodeWithText("放大").performClick()
-                compose.onNodeWithText("下一张").performClick()
-                compose.onNodeWithText("100%").assertExists()
-                compose.waitUntil(10_000) { compose.onNodeWithText("放大").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled).not() }
-                compose.onNodeWithText("放大").performClick()
-                compose.onNodeWithText("200%").assertExists()
-                compose.onNodeWithText("下一张").performClick()
-                compose.waitUntil(10_000) { compose.onNodeWithText("放大").fetchSemanticsNode().config.contains(androidx.compose.ui.semantics.SemanticsProperties.Disabled).not() }
-                repeat(4) { compose.onNodeWithText("放大").performClick() }
-                compose.onNodeWithText("1600%").assertExists()
-                compose.onNodeWithContentDescription("图片验收").performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(0f, -200f)) }
-                compose.onNodeWithText("重置").performClick()
-                compose.onNodeWithText("100%").assertExists()
-                saveScreenshot("round2-image.png")
-                compose.onNodeWithText("关闭").performClick()
-                assertFalse(showing.value)
+                imageNode().assert(SemanticsMatcher("pinch changed scale") {
+                    it.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) { "" } != "已加载，缩放 250%" })
+                imageNode().performTouchInput { swipe(center, center + androidx.compose.ui.geometry.Offset(0f, -200f)) }
+                assertEquals(0, index.value)
+                imageNode().performTouchInput { doubleClick(center) }
+                assertScale("100")
+                imageNode().performTouchInput { swipeLeft() }
+                compose.waitUntil(10_000) { index.value == 1 }; loaded(1); assertScale("100")
+                imageNode().performTouchInput { doubleClick(center) }
+                assertScale("250")
+                // A wide image pans first, then a second drag beyond its edge changes page.
+                imageNode().performTouchInput { swipeLeft() }
+                compose.waitForIdle()
+                if (index.value == 1) imageNode().performTouchInput { swipeLeft() }
+                compose.waitUntil(10_000) { index.value == 2 }; loaded(2); assertScale("100")
+                imageNode().performTouchInput { swipeLeft() }
+                assertEquals(2, index.value)
+                imageNode().performTouchInput { swipeRight() }
+                compose.waitUntil(10_000) { index.value == 1 }; loaded(1)
+                saveScreenshot("ui-fix-image.png")
+                InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+                compose.waitUntil(5_000) { !showing.value }
+                compose.runOnIdle { linked.value = true; showing.value = true }
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("文件图片预览").fetchSemanticsNodes().any {
+                    it.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) { "" }.startsWith("已加载") } }
+                compose.onNodeWithText("关闭").assertDoesNotExist()
+                InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+                compose.waitUntil(5_000) { !showing.value }
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun conversationPullRetriesWithoutStatusTextAndActionsStayOutsideBubble() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.failurePath = "/gateway/cascade/messages"
+            val initialRead = CountDownLatch(1)
+            val finishRead = CountDownLatch(1)
+            gateway.block = { path -> if (path.startsWith("/gateway/cascade/messages")) {
+                initialRead.countDown(); finishRead.await(5, TimeUnit.SECONDS)
+            } }
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("pull-retry", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.runOnIdle { vm.openConversation("A"); vm.setDraft("preserved draft") }
+                assertTrue(initialRead.await(5, TimeUnit.SECONDS))
+                val viewportHeight = compose.onRoot().fetchSemanticsNode().size.height
+                assertTrue(compose.onAllNodes(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.ProgressBarRangeInfo))
+                    .fetchSemanticsNodes().any { it.boundsInRoot.center.y in (viewportHeight * .35f)..(viewportHeight * .8f) })
+                gateway.block = {}; finishRead.countDown()
+                compose.waitUntil(10_000) { vm.state.value.messagesError != null && !vm.state.value.isLoadingMessages }
+                listOf("正在连接，生成状态待同步…", "连接已断开，正在自动重连…", "重试", "重试中…").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+                gateway.failurePath = null
+                val height = compose.onRoot().fetchSemanticsNode().size.height.toFloat()
+                compose.onRoot().performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width / 2f, height * .25f),
+                    androidx.compose.ui.geometry.Offset(width / 2f, height * .70f), 700) }
+                compose.waitUntil(10_000) { vm.state.value.messagesError == null && !vm.state.value.isLoadingMessages }
+                compose.onNodeWithText("original message").assertIsDisplayed()
+                assertEquals("preserved draft", vm.state.value.draft)
+                val text = compose.onNodeWithText("original message").fetchSemanticsNode().boundsInRoot
+                val copy = compose.onNodeWithContentDescription("复制用户消息").fetchSemanticsNode().boundsInRoot
+                val undo = compose.onNodeWithContentDescription("回退到这条消息").fetchSemanticsNode().boundsInRoot
+                assertTrue(copy.top > text.bottom); assertTrue(undo.top > text.bottom)
+                saveScreenshot("ui-fix-message.png")
+                compose.onNodeWithContentDescription("回退到这条消息").performClick()
+                compose.waitUntil(10_000) { vm.state.value.revertPreview != null }
+                compose.onNodeWithText("确认回退").performClick()
+                compose.waitUntil(10_000) { gateway.reverted && !vm.state.value.isReverting }
+                assertEquals("original message\n\npreserved draft", vm.state.value.draft)
+                // A legacy gateway gets an actionable error, never a disabled decorative Undo.
+                compose.runOnIdle { vm.previewRevert(GatewayMessageItem(id = "step-0", stepIndex = 0, text = "legacy")) }
+                compose.waitForIdle()
+                assertTrue(vm.state.value.revertError.orEmpty().contains("网关版本较旧"))
+                assertNull(vm.state.value.revertPreview)
             } finally { compose.runOnIdle { store.clear() } }
         }
     }

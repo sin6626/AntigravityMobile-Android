@@ -122,6 +122,7 @@ internal fun ConversationContent(
     olderError: String? = null,
     entranceOffset: androidx.compose.ui.unit.Dp = 0.dp,
     entranceReady: Boolean = true,
+    allowRevert: Boolean = true,
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -181,6 +182,7 @@ internal fun ConversationContent(
     }
     if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()))
             CircularProgressIndicator(color = AccentBlue)
         }
         return
@@ -242,8 +244,8 @@ internal fun ConversationContent(
                             if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
                             else ExecutionPanel(item, viewModel, expanded, toggle)
                         } else if (item.streaming) DisableSelection {
-                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, !isRunning)
-                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, !isRunning)
+                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, allowRevert && !isRunning)
+                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, allowRevert && !isRunning)
                         if (item.canCopy) DisableSelection {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 CopyTextButton(item.message.effectiveText, "复制整条回复")
@@ -381,7 +383,7 @@ internal fun buildConversationRenderItems(
 private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true, allowRevert: Boolean = true) {
     val text = message.effectiveText.trim()
     if (message.isUser) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
             Column(
                 modifier = Modifier.background(Color(0xFFE5F2FF), RoundedCornerShape(23.dp))
                     .padding(horizontal = 17.dp, vertical = 13.dp),
@@ -391,13 +393,14 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
                 MessageImages(message, viewModel)
                 if (text.isNotBlank()) Text(text, color = Color(0xFF163E63),
                     fontSize = 17.sp, lineHeight = 26.sp)
-                if (message.stepIndex != null && !message.id.startsWith("local:")) DisableSelection {
-                    Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
-                        CopyTextButton(message.effectiveText, "复制用户消息")
+            }
+            DisableSelection {
+                Row(horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    if (text.isNotBlank()) CopyTextButton(message.effectiveText, "复制用户消息")
+                    if (message.stepIndex != null && !message.id.startsWith("local:") && message.canRevert != false && allowRevert) {
                         Box(Modifier.size(48.dp).semantics { contentDescription = "回退到这条消息";
-                            stateDescription = if (message.canRevert && allowRevert) "可回退" else message.revertReason ?: "当前无法回退" }
-                            .quietClickable(enabled = message.canRevert && allowRevert) { viewModel.previewRevert(message) }
-                            .alpha(if (message.canRevert && allowRevert) 1f else 0.35f), contentAlignment = Alignment.Center) {
+                            stateDescription = if (message.canRevert == true) "可回退" else "需更新电脑网关" }
+                            .quietClickable { viewModel.previewRevert(message) }, contentAlignment = Alignment.Center) {
                             Symbol("undo", size = 20, color = SecondaryInk)
                         }
                     }

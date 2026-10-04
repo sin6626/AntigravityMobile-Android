@@ -160,7 +160,9 @@ class ReplyMediaAndCopyTest {
         }
         compose.waitUntil(10_000) { compose.onAllNodesWithText("图片加载失败").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithContentDescription("聊天图片，点击放大").performTouchInput { click(center) }
-        compose.waitUntil(10_000) { compose.onAllNodesWithText("关闭").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("关闭").performClick()
+        compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("重试加载图片").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("关闭").assertDoesNotExist()
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.waitUntil(5_000) { compose.onAllNodesWithContentDescription("重试加载图片").fetchSemanticsNodes().isEmpty() }
     }
 }

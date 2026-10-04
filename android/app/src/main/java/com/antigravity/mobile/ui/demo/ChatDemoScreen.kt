@@ -9,6 +9,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.pager.HorizontalPager
@@ -251,15 +252,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         state.selectedConversationId !in state.busyConversations && !state.isReverting,
                 )
                 }
-                state.messagesError?.let { LoadFailure(it, state.isLoadingMessages, viewModel::retryMessages) }
-                if (!state.selectedConversationId.orEmpty().startsWith("local:") && state.connectionStatus != com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED) {
-                    LoadFailure(if (state.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTING)
-                        "正在连接，生成状态待同步…" else "连接已断开，正在自动重连…", state.isLoadingMessages, viewModel::retryMessages)
-                } else if (state.pendingInteraction != null) {
-                    Text("等待你的操作", color = SecondaryInk, modifier = Modifier.padding(horizontal = 22.dp))
-                }
                 key(state.selectedConversationId) {
-                Box(Modifier.weight(1f)) {
+                PullToRefreshBox(isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
+                    onRefresh = viewModel::retryMessages, modifier = Modifier.weight(1f)) {
                     ConversationContent(
                         viewModel = viewModel,
                         messages = state.messages + state.outgoing.filter { it.conversationId == state.selectedConversationId }.map { it.message },
@@ -272,6 +267,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         olderError = state.olderMessagesError,
                         entranceOffset = if (openedFromProject || openedFromArchive) 10.dp else 0.dp,
                         entranceReady = !drawerState.isOpen,
+                        allowRevert = !state.isSending && !state.isReverting && state.selectedConversationId !in state.busyConversations,
                         bottomSpace = composerHeight + keyboardHeight + 23.dp,
                         modifier = Modifier.fillMaxSize().pointerInput(Unit) {
                             awaitEachGesture {

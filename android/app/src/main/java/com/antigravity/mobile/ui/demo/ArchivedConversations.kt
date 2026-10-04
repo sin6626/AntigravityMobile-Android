@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -26,7 +28,9 @@ internal fun ArchivedConversations(conversations: List<ConversationItem>, loadin
             TextButton(onClick = onRefresh, enabled = !loading) { Text("刷新", color = AccentBlue) }
         }
         OutlinedTextField(query, { query = it }, placeholder = { Text("搜索归档会话") }, singleLine = true,
-            trailingIcon = { if (query.isNotEmpty()) TextButton(onClick = { query = "" }) { Text("清空", color = AccentBlue) } },
+            trailingIcon = { if (query.isNotEmpty()) IconButton(onClick = { query = "" }) {
+                Icon(Icons.Default.Close, contentDescription = "清除搜索", tint = SecondaryInk, modifier = Modifier.size(18.dp))
+            } },
             shape = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
             colors = OutlinedTextFieldDefaults.colors(unfocusedBorderColor = androidx.compose.ui.graphics.Color.Transparent,
                 focusedBorderColor = AccentBlue, unfocusedContainerColor = androidx.compose.ui.graphics.Color(0xFFF3F3F3),

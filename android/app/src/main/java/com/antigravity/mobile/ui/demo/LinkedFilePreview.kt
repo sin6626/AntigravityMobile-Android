@@ -118,6 +118,11 @@ internal fun MarkdownImage(uri: String, title: String?) {
 @Composable
 internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss: () -> Unit) {
     val kind = remember(uri) { filePreviewKind(uri) }
+    if (kind == FilePreviewKind.IMAGE) {
+        ImageViewer(viewModel.linkedImageRequest(uri.substringBefore('#')), viewModel.mediaImageLoader,
+            "文件图片预览", onDismiss)
+        return
+    }
     val imageRequest = remember(uri, viewModel) { { target: String -> viewModel.linkedImageRequest(resolveDocumentLink(uri, target)) as Any } }
     var file by remember(uri) { mutableStateOf<FileContentResponse?>(null) }
     var error by remember(uri) { mutableStateOf<String?>(null) }
@@ -178,10 +183,13 @@ internal fun FileTextPreview(file: FileContentResponse, modifier: Modifier = Mod
     LaunchedEffect(file.content, kind) {
         if (kind == FilePreviewKind.MARKDOWN) blocks = withContext(Dispatchers.Default) { parseMarkdownBlocks(file.content) }
     }
+    if (kind == FilePreviewKind.MARKDOWN && blocks == null) {
+        Box(modifier, contentAlignment = Alignment.Center) { CircularProgressIndicator(color = AccentBlue) }
+        return
+    }
     SelectionContainer(modifier) {
         LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             when {
-                kind == FilePreviewKind.MARKDOWN && blocks == null -> item { CircularProgressIndicator(Modifier.padding(20.dp)) }
                 kind == FilePreviewKind.MARKDOWN -> itemsIndexed(blocks.orEmpty()) { _, block -> MarkdownBlock(block) }
                 kind == FilePreviewKind.CODE -> item { CodeBlock(file.content, fileCodeLanguage(file.filename)) }
                 file.content.any { it == '\u0000' } -> item { Text("此文件不是可预览的文本", color = SecondaryInk) }

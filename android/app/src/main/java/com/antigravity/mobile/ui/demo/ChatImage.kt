@@ -2,31 +2,48 @@ package com.antigravity.mobile.ui.demo
 
 import android.util.Base64
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.WindowInsetsCompat
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -35,6 +52,8 @@ import com.antigravity.mobile.data.model.GatewayMessageItem
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 @Composable
 internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel) {
@@ -72,32 +91,49 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
     }
     selected?.let { index ->
         ImageViewer(originals.getOrNull(index) ?: thumbnails.getOrNull(index), viewModel.mediaImageLoader,
-            "聊天图片", { selected = null }, index, count, { selected = it })
+            "聊天图片", { selected = null }, index, count, { selected = it },
+            modelAt = { originals.getOrNull(it) ?: thumbnails.getOrNull(it) })
     }
 }
 
 @Composable
 internal fun ImageViewer(model: Any?, loader: ImageLoader, title: String, onClose: () -> Unit,
-    index: Int = 0, count: Int = 1, onSelect: (Int) -> Unit = {}) {
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.padding(horizontal = 16.dp).fillMaxWidth()
-            .height((LocalConfiguration.current.screenHeightDp * 0.85f).dp)
-            .background(androidx.compose.ui.graphics.Color.White, RoundedCornerShape(20.dp)).padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(if (count > 1) "$title · ${index + 1}/$count" else title, color = Ink, modifier = Modifier.weight(1f))
-                TextButton(onClick = onClose) { Text("关闭", color = AccentBlue) }
+    index: Int = 0, count: Int = 1, onSelect: (Int) -> Unit = {}, modelAt: (Int) -> Any? = { model }) {
+    val pager = rememberPagerState(initialPage = index, pageCount = { count })
+    val scope = rememberCoroutineScope()
+    var zoomed by remember { mutableStateOf(false) }
+    fun select(page: Int) {
+        if (page in 0 until count) scope.launch { pager.animateScrollToPage(page) }
+    }
+    LaunchedEffect(pager.settledPage) { zoomed = false; onSelect(pager.settledPage) }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        val window = (LocalView.current.parent as DialogWindowProvider).window
+        SideEffect {
+            WindowInsetsControllerCompat(window, window.decorView).apply {
+                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                hide(WindowInsetsCompat.Type.systemBars())
             }
-            key(index, model) { ZoomableImage(model, loader, title, Modifier.weight(1f)) }
-            if (count > 1) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(enabled = index > 0, onClick = { onSelect(index - 1) }, colors = ButtonDefaults.textButtonColors(contentColor = AccentBlue)) { Text("上一张") }
-                TextButton(enabled = index + 1 < count, onClick = { onSelect(index + 1) }, colors = ButtonDefaults.textButtonColors(contentColor = AccentBlue)) { Text("下一张") }
+        }
+        HorizontalPager(pager, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.Black).semantics {
+                customActions = buildList {
+                    add(CustomAccessibilityAction("关闭图片") { onClose(); true })
+                    if (pager.currentPage > 0) add(CustomAccessibilityAction("上一张图片") { select(pager.currentPage - 1); true })
+                    if (pager.currentPage + 1 < count) add(CustomAccessibilityAction("下一张图片") { select(pager.currentPage + 1); true })
+                }
+            }) { page ->
+            key(page, page == pager.settledPage) {
+                ZoomableImage(modelAt(page), loader, if (count == 1) title else "$title ${page + 1}/$count", Modifier.fillMaxSize(),
+                    onZoom = { if (page == pager.currentPage) zoomed = it },
+                    onEdgeSwipe = { direction -> select(page + direction) })
             }
         }
     }
 }
 
 @Composable
-internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String, modifier: Modifier = Modifier) {
+internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String, modifier: Modifier = Modifier,
+    onZoom: (Boolean) -> Unit = {}, onEdgeSwipe: (Int) -> Unit = {}) {
     val context = LocalContext.current
     val fullSizeRequest = remember(model, context) {
         (if (model is ImageRequest) model.newBuilder() else ImageRequest.Builder(context).data(model))
@@ -118,34 +154,62 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
         val x = max(0f, (imageSize.width * fit * next - viewport.width) / 2)
         val y = max(0f, (imageSize.height * fit * next - viewport.height) / 2)
         offset = Offset(moved.x.coerceIn(-x, x), moved.y.coerceIn(-y, y)); scale = next
+        onZoom(scale > 1.01f)
     }
-    Column(modifier.fillMaxWidth()) {
-        Box(Modifier.weight(1f).fillMaxWidth().clip(RoundedCornerShape(8.dp)).onSizeChanged { viewport = it }
+        Box(modifier.clipToBounds().onSizeChanged { viewport = it }
+            .pointerInput(model, attempt) {
+                detectTapGestures(onDoubleTap = { point ->
+                    if (!loading && !failed) transform(if (scale > 1.01f) 1f / scale else 2.5f,
+                        focus = point - Offset(viewport.width / 2f, viewport.height / 2f))
+                })
+            }
             .pointerInput(model, attempt, viewport, imageSize) {
-                detectTransformGestures { centroid, pan, zoom, _ ->
-                    if (!loading && !failed) transform(zoom, pan, centroid - Offset(viewport.width / 2f, viewport.height / 2f))
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    var edgeDrag = 0f
+                    var totalPan = Offset.Zero
+                    var totalZoom = 1f
+                    var transforming = false
+                    var multiple = false
+                    do {
+                        val event = awaitPointerEvent()
+                        multiple = multiple || event.changes.count { it.pressed } > 1
+                        val pan = event.calculatePan()
+                        val zoom = event.calculateZoom()
+                        totalPan += pan; totalZoom *= zoom
+                        val centroid = event.calculateCentroid(useCurrent = false)
+                        if (!transforming) transforming = (scale > 1.01f || multiple) &&
+                            (totalPan.getDistance() > viewConfiguration.touchSlop || abs(1 - totalZoom) * viewport.width > viewConfiguration.touchSlop)
+                        if (event.changes.any { it.pressed } && transforming && !loading && !failed && event.changes.none { it.isConsumed }) {
+                            val previousX = offset.x
+                            transform(zoom, pan, centroid - Offset(viewport.width / 2f, viewport.height / 2f))
+                            if (!multiple && abs(pan.x) > abs(pan.y)) {
+                                val overflow = pan.x - (offset.x - previousX)
+                                edgeDrag = if (overflow * edgeDrag < 0) overflow else edgeDrag + overflow
+                            } else edgeDrag = 0f
+                            event.changes.forEach { if (it.positionChanged()) it.consume() }
+                        }
+                    } while (event.changes.any { it.pressed })
+                    if (!multiple && abs(edgeDrag) > max(viewConfiguration.touchSlop * 4, viewport.width * 0.15f))
+                        onEdgeSwipe(if (edgeDrag < 0) 1 else -1)
                 }
             }, contentAlignment = Alignment.Center) {
             key(model, attempt) {
                 AsyncImage(model = fullSizeRequest, imageLoader = loader, contentDescription = description, contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
-                        .semantics { stateDescription = if (failed) "加载失败" else if (loading) "加载中" else "已加载" },
+                        .semantics {
+                            stateDescription = if (failed) "加载失败" else if (loading) "加载中" else "已加载，缩放 ${(scale * 100).toInt()}%"
+                            customActions = listOf(CustomAccessibilityAction("放大图片") { transform(2f); true },
+                                CustomAccessibilityAction("恢复图片大小") { transform(1f / scale); true })
+                        },
                     onLoading = { loading = true; failed = false }, onSuccess = {
                         loading = false; failed = false
                         imageSize = IntSize(it.result.drawable.intrinsicWidth.coerceAtLeast(1), it.result.drawable.intrinsicHeight.coerceAtLeast(1))
                     }, onError = { loading = false; failed = true })
             }
             if (loading) CircularProgressIndicator(Modifier.size(28.dp), color = AccentBlue, strokeWidth = 2.dp)
-            if (failed) Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("图片加载失败", color = SecondaryInk)
-                TextButton(onClick = { scale = 1f; offset = Offset.Zero; attempt++ }) { Text("重试", color = AccentBlue) }
+            if (failed) IconButton(onClick = { transform(1f / scale); attempt++ }) {
+                Icon(Icons.Default.Refresh, contentDescription = "重试加载图片", tint = AccentBlue)
             }
         }
-        FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-            TextButton(enabled = !loading && !failed && scale > 1f, onClick = { transform(0.5f) }, colors = ButtonDefaults.textButtonColors(contentColor = AccentBlue)) { Text("缩小") }
-            Text("${(scale * 100).toInt()}%", color = SecondaryInk, modifier = Modifier.heightIn(min = 48.dp).wrapContentHeight(Alignment.CenterVertically))
-            TextButton(enabled = !loading && !failed && scale < maxScale, onClick = { transform(2f) }, colors = ButtonDefaults.textButtonColors(contentColor = AccentBlue)) { Text("放大") }
-            TextButton(onClick = { scale = 1f; offset = Offset.Zero }, enabled = scale > 1f, colors = ButtonDefaults.textButtonColors(contentColor = AccentBlue)) { Text("重置") }
-        }
-    }
 }

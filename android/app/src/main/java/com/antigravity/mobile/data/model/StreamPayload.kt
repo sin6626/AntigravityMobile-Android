@@ -36,7 +36,7 @@ data class GatewayMessageItem(
     val timestamp: String? = null,
     val status: String? = null,
     val stepIndex: Int? = null,
-    val canRevert: Boolean = false,
+    val canRevert: Boolean? = null,
     val revertReason: String? = null,
     val title: String = "",
     val duration: String = "",

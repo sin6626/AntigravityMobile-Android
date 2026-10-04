@@ -41,7 +41,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import com.antigravity.mobile.data.model.ConversationItem
 import com.antigravity.mobile.data.model.ProjectItem
 
@@ -74,22 +77,25 @@ internal fun DemoDrawer(
                 fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             RoundIconButton("search", "搜索", { searchOpen = !searchOpen }, size = 50.dp)
         }
-        if (searchOpen) Row(verticalAlignment = Alignment.CenterVertically) {
+        if (searchOpen) {
             BasicTextField(
                 value = searchText,
                 onValueChange = { searchText = it },
-                modifier = Modifier.weight(1f).padding(bottom = 16.dp)
-                    .background(Color(0xFFF3F3F3), RoundedCornerShape(20.dp))
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp),
                 singleLine = true,
                 decorationBox = { inner ->
-                    Box {
-                        if (searchText.isBlank()) Text("搜索会话", color = SecondaryInk, fontSize = 16.sp)
-                        inner()
+                    Row(Modifier.background(Color(0xFFF3F3F3), RoundedCornerShape(20.dp))
+                        .heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.weight(1f).padding(vertical = 12.dp)) {
+                            if (searchText.isEmpty()) Text("搜索会话", color = SecondaryInk, fontSize = 16.sp)
+                            inner()
+                        }
+                        if (searchText.isNotEmpty()) IconButton(onClick = { searchText = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "清除搜索", tint = SecondaryInk, modifier = Modifier.size(18.dp))
+                        }
                     }
                 },
             )
-            TextButton(onClick = { searchText = "" }, enabled = searchText.isNotEmpty()) { Text("清空", color = AccentBlue) }
         }
         Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
             DrawerMenuItem("chat_bubble", "聊天", onNewChat)
@@ -217,16 +223,17 @@ private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit)
 
 @Composable
 private fun DrawerConversation(title: String, indent: androidx.compose.ui.unit.Dp = 0.dp, current: Boolean = false, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { selected = current }
+            .background(if (current) Color(0xFFF1F1F1) else Color.Transparent, RoundedCornerShape(14.dp)).quietClickable(onClick = onClick)
+            .padding(start = indent + 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), contentAlignment = Alignment.CenterStart) {
     Text(
         title,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { selected = current }
-            .background(if (current) Color(0xFFF1F1F1) else Color.Transparent, RoundedCornerShape(14.dp)).quietClickable(onClick = onClick)
-            .padding(start = indent, top = 12.dp),
         color = Ink,
         fontSize = 17.sp,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
     )
+    }
 }
 
 // ponytail: rows without ID/URI/path use their name; identical names need stable backend IDs to distinguish them.

@@ -611,7 +611,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val id = current.selectedConversationId ?: return
         val index = message.stepIndex ?: return
-        if (current.isRunning || current.isSending || current.isReverting || !message.canRevert) return
+        if (current.isRunning || current.isSending || current.isReverting || id in current.busyConversations || message.canRevert == false) return
+        if (message.canRevert == null) {
+            _state.value = current.copy(revertMessage = message, revertPreview = null, isLoadingRevert = false,
+                revertError = "电脑网关版本较旧，请更新并重启 mgy 后下拉刷新会话，再使用回退。")
+            return
+        }
         val visit = conversationVisit
         _state.value = current.copy(revertMessage = message, revertPreview = null, revertError = null, isLoadingRevert = true)
         viewModelScope.launch {
