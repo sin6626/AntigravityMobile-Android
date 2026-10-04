@@ -7,7 +7,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Checkbox
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.foundation.background
@@ -413,32 +414,30 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
         state.revertMessage?.let { message ->
-            var conversationOnly by remember(message.id) { mutableStateOf(true) }
-            AlertDialog(onDismissRequest = viewModel::dismissRevert, title = { Text("回退到这条消息？") },
+            AlertDialog(onDismissRequest = viewModel::dismissRevert,
+                modifier = Modifier.widthIn(max = 320.dp), shape = RoundedCornerShape(24.dp),
+                containerColor = Color.White, tonalElevation = 0.dp,
+                title = { Text("确认回退吗？", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.Medium) },
                 text = {
                     Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("这条消息及之后的对话会被撤回，原消息将恢复到草稿。", color = SecondaryInk)
-                        Text(message.effectiveText, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                        if (state.isLoadingRevert) CircularProgressIndicator(color = AccentBlue)
-                        state.revertPreview?.let { preview ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(checked = !conversationOnly, enabled = !state.isReverting, onCheckedChange = { conversationOnly = !it })
-                                Text("同时回退工作区文件")
-                            }
-                            Text(if (conversationOnly) "仅回退对话，文件保持现状。" else "将恢复工作区到此前状态；影响可能不止下方预览文件。", color = SecondaryInk)
-                            if (!conversationOnly) preview.files.forEach { file ->
-                                Text("${file.fileName} · ${file.actionType} · +${file.additions} / −${file.deletions}", fontSize = 14.sp)
+                        Text("回退不影响已经修改的文件", color = SecondaryInk, fontSize = 14.sp, lineHeight = 20.sp)
+                        if (state.isLoadingRevert) {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(Modifier.size(20.dp), color = AccentBlue, strokeWidth = 2.dp)
                             }
                         }
-                        state.revertError?.let { Text(it, color = Color(0xFFB3261E)) }
+                        state.revertError?.let { Text(it, color = Color(0xFFB3261E), fontSize = 14.sp) }
                     }
                 }, confirmButton = {
                     TextButton(enabled = state.revertPreview != null && !state.isReverting && !state.isRunning,
-                        onClick = { viewModel.executeRevert(conversationOnly) }) { Text(if (state.isReverting) "正在回退…" else "确认回退") }
+                        onClick = { viewModel.executeRevert(true) }) {
+                        if (state.isReverting) CircularProgressIndicator(Modifier.size(18.dp), color = AccentBlue, strokeWidth = 2.dp)
+                        else Text("确认回退", color = if (state.revertPreview != null && !state.isRunning) AccentBlue else SecondaryInk.copy(alpha = 0.4f), fontSize = 14.sp)
+                    }
                 }, dismissButton = {
-                    TextButton(enabled = !state.isReverting, onClick = viewModel::dismissRevert) { Text("取消") }
-                    if (state.revertError != null && state.revertPreview == null) TextButton(onClick = { viewModel.previewRevert(message) }) { Text("重试") }
+                    TextButton(enabled = !state.isReverting, onClick = viewModel::dismissRevert) { Text("取消", color = SecondaryInk, fontSize = 14.sp) }
+                    if (state.revertError != null && state.revertPreview == null) TextButton(onClick = { viewModel.previewRevert(message) }) { Text("重试", color = AccentBlue, fontSize = 14.sp) }
                 })
         }
         if (showRename) {

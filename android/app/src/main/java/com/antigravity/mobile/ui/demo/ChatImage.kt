@@ -31,7 +31,7 @@ import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.CustomAccessibilityAction
@@ -41,9 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.core.view.WindowInsetsControllerCompat
-import androidx.core.view.WindowInsetsCompat
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
@@ -102,20 +99,15 @@ internal fun ImageViewer(model: Any?, loader: ImageLoader, title: String, onClos
     val pager = rememberPagerState(initialPage = index, pageCount = { count })
     val scope = rememberCoroutineScope()
     var zoomed by remember { mutableStateOf(false) }
+    val height = LocalConfiguration.current.screenHeightDp.dp * 0.8f
     fun select(page: Int) {
         if (page in 0 until count) scope.launch { pager.animateScrollToPage(page) }
     }
     LaunchedEffect(pager.settledPage) { zoomed = false; onSelect(pager.settledPage) }
-    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        val window = (LocalView.current.parent as DialogWindowProvider).window
-        SideEffect {
-            WindowInsetsControllerCompat(window, window.decorView).apply {
-                systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                hide(WindowInsetsCompat.Type.systemBars())
-            }
-        }
-        HorizontalPager(pager, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black).semantics {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        HorizontalPager(pager, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp).height(height).clip(RoundedCornerShape(20.dp))
+            .background(androidx.compose.ui.graphics.Color.White).semantics {
                 customActions = buildList {
                     add(CustomAccessibilityAction("关闭图片") { onClose(); true })
                     if (pager.currentPage > 0) add(CustomAccessibilityAction("上一张图片") { select(pager.currentPage - 1); true })

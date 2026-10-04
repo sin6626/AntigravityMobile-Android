@@ -35,7 +35,7 @@ internal fun Modifier.quietClickable(
         .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
 }
 
-/** Animates only the current content, never retains a second rich conversation. */
+/** Readiness delays the first entrance; it never hides content already on screen. */
 @Composable
 internal fun contentEntrance(visit: Any, offset: Dp = 0.dp, ready: Boolean = true): Modifier {
     val progress = remember(visit) { Animatable(0f) }
@@ -43,10 +43,10 @@ internal fun contentEntrance(visit: Any, offset: Dp = 0.dp, ready: Boolean = tru
     val density = LocalDensity.current
     val distance = with(density) { if (fontScale >= 1.3f) 0f else offset.toPx() }
     LaunchedEffect(visit, ready) {
-        if (ready) progress.animateTo(1f, tween(if (offset == 0.dp) 140 else 180))
+        if (ready || progress.value > 0f) progress.animateTo(1f, tween(if (offset == 0.dp) 140 else 180))
     }
     return Modifier.graphicsLayer {
-        alpha = if (ready) progress.value else 0f
+        alpha = progress.value
         translationX = distance * (1f - progress.value)
-    }.then(if (!ready || !visible) Modifier.clearAndSetSemantics {} else Modifier)
+    }.then(if (!visible) Modifier.clearAndSetSemantics {} else Modifier)
 }

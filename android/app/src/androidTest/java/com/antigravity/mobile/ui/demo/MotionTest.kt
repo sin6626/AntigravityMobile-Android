@@ -25,6 +25,33 @@ class MotionTest {
     })
     private val baseline get() = InstrumentationRegistry.getArguments().getString("motionBaseline") == "true"
 
+    @Test fun enteredContentRemainsVisibleWhenDrawerDelaysAnotherEntrance() {
+        val ready = mutableStateOf(false)
+        val visit = mutableStateOf("A")
+        compose.setContent {
+            Box(Modifier.fillMaxSize().then(contentEntrance(visit.value, ready = ready.value))) {
+                androidx.compose.material3.Text("正文保留")
+            }
+        }
+        compose.onNodeWithText("正文保留").assertDoesNotExist()
+        compose.runOnIdle { ready.value = true }
+        compose.onNodeWithText("正文保留").assertIsDisplayed()
+        compose.runOnIdle { ready.value = false }
+        compose.onNodeWithText("正文保留").assertIsDisplayed()
+        compose.runOnIdle { visit.value = "B" }
+        compose.onNodeWithText("正文保留").assertDoesNotExist()
+        compose.runOnIdle { ready.value = true }
+        compose.onNodeWithText("正文保留").assertIsDisplayed()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread { visit.value = "C" }
+            compose.mainClock.advanceTimeBy(64)
+            compose.runOnUiThread { ready.value = false }
+            compose.mainClock.advanceTimeBy(200)
+            compose.onNodeWithText("正文保留").assertIsDisplayed()
+        } finally { compose.mainClock.autoAdvance = true }
+    }
+
     @Test fun composerKeepsOneFieldAndGrowsToFourLines() {
         val draft = mutableStateOf("第一行")
         val images = mutableStateOf((1..4).map { PendingImage(Uri.parse("test://$it"), byteArrayOf(), "image/png") })

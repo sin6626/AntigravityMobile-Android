@@ -711,6 +711,11 @@ class ChatUxTest {
                     imageNode().assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "已加载，缩放 $expected%"))
                 }
                 loaded(0)
+                val imageBounds = imageNode().fetchSemanticsNode().boundsInWindow
+                val screenHeight = compose.activity.resources.displayMetrics.heightPixels
+                val screenWidth = compose.activity.resources.displayMetrics.widthPixels
+                assertTrue("Image popup must leave space above and below", imageBounds.height < screenHeight * .9f)
+                assertTrue("Image popup must leave side margins", imageBounds.width < screenWidth * .97f)
                 listOf("图片验收", "关闭", "放大", "缩小", "重置", "上一张", "下一张", "100%").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
                 imageNode().performTouchInput { doubleClick(center) }
                 assertScale("250")
@@ -752,6 +757,42 @@ class ChatUxTest {
         }
     }
 
+    @Test fun drawerGestureKeepsConversationVisibleBehindScrim() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("drawer-visibility", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.runOnIdle { vm.openConversation("A"); vm.setDraft("保留草稿") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.messages.isNotEmpty() }
+                compose.onNodeWithText("original message").assertIsDisplayed()
+                val text = compose.onNodeWithText("original message").fetchSemanticsNode().boundsInWindow
+                val x = (text.right + 5).toInt(); val y = text.center.y.toInt()
+                fun bubbleBlue(): Int {
+                    val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+                    val pixel = bitmap.getPixel(x, y)
+                    bitmap.recycle()
+                    return android.graphics.Color.blue(pixel) - android.graphics.Color.red(pixel)
+                }
+                assertTrue("Sample must be inside the blue user bubble", bubbleBlue() > 8)
+                repeat(2) {
+                    compose.onRoot().performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width * .06f, height * .4f),
+                        androidx.compose.ui.geometry.Offset(width * .85f, height * .4f), 600) }
+                    compose.onNodeWithText("已归档").assertIsDisplayed()
+                    compose.waitForIdle()
+                    assertTrue("Conversation bubble must still be drawn behind drawer scrim", bubbleBlue() > 3)
+                    saveScreenshot("ui-refine-drawer.png")
+                    compose.onRoot().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .97f, height * .4f)) }
+                    compose.onNodeWithText("original message").assertIsDisplayed()
+                    assertEquals("保留草稿", vm.state.value.draft)
+                }
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun conversationPullRetriesWithoutStatusTextAndActionsStayOutsideBubble() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -789,8 +830,18 @@ class ChatUxTest {
                 saveScreenshot("ui-fix-message.png")
                 compose.onNodeWithContentDescription("回退到这条消息").performClick()
                 compose.waitUntil(10_000) { vm.state.value.revertPreview != null }
+                compose.onNodeWithText("确认回退吗？").assertIsDisplayed()
+                compose.onNodeWithText("回退不影响已经修改的文件").assertIsDisplayed()
+                compose.onNodeWithText("同时回退工作区文件").assertDoesNotExist()
+                saveScreenshot("ui-refine-revert.png")
+                compose.onNodeWithText("取消").performClick()
+                assertFalse(gateway.requests.any { it.first.contains("/revert/execute") })
+                assertEquals("preserved draft", vm.state.value.draft)
+                compose.onNodeWithContentDescription("回退到这条消息").performClick()
+                compose.waitUntil(10_000) { vm.state.value.revertPreview != null }
                 compose.onNodeWithText("确认回退").performClick()
                 compose.waitUntil(10_000) { gateway.reverted && !vm.state.value.isReverting }
+                assertTrue(JSONObject(gateway.requests.last { it.first.contains("/revert/execute") }.second).getBoolean("conversationOnly"))
                 assertEquals("original message\n\npreserved draft", vm.state.value.draft)
                 // A legacy gateway gets an actionable error, never a disabled decorative Undo.
                 compose.runOnIdle { vm.previewRevert(GatewayMessageItem(id = "step-0", stepIndex = 0, text = "legacy")) }
