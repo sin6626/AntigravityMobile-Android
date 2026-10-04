@@ -109,3 +109,35 @@ Undo 的设备问题通过只读对照确认：同一闲置会话在运行中的
 已人工核对普通与1.5倍字体的确认弹窗截图、图片弹层及抽屉正文截图；图片采用合成蓝色夹具，验证布局与手势，不冒充真实图片内容验收。模拟器font_scale恢复1.0，其余系统动画/沉浸/无障碍设置未改。没有发送真实聊天消息、回退真实用户对话、操控真机或更新/重启网关；未宣称全套/性能/真机验收。
 
 证据仍留忽略目录 `android/design/.verification/`：`ui-refine-baseline.log`、`ui-refine-build.log`、`ui-refine-target.log`、`ui-refine-font15.log`、`ui-refine-zero-motion.log` 和 `ui-refine-revert.png`、`ui-refine-revert-font15.png`、`ui-refine-drawer.png`、`ui-refine-image.png`。最终 APK 仍为 `android/app/build/outputs/apk/debug/app-debug.apk`。
+
+## 文件回退与生成中 Undo 修正（2026-10-04）
+
+用户在桌面实际确认原生 Undo 支持文件恢复，要求恢复选项且默认勾选，取代上一节固定只撤回对话的要求。同时修复预览期间弹窗跳动和生成中 Undo 消失。本轮从 Gemini 的 `cf0dd6d` 继续，保留 `ConversationSkeleton`、Shimmer 与首页输入栏随滑动收缩/淡出/下沉的代码；不扩大其他页面改造。
+
+- 紧凑白色圆角弹窗沿用“确认回退吗？”，默认勾选“回退文件改动”，展示原生预览的文件名和增删行数；取消勾选仅撤回对话。文件区域固定为随字体适配的三行，多文件原生滚动。加载/错误/模式切换共用这块区域，加载圈放在确认按钮内部，按钮文字继续参与测量，避免预览完成时重新缩小弹窗。
+- Android 两个消息渲染调用、ViewModel 预览/执行入口和 Go 共享资格检查移除额外 RUNNING 禁止条件，保留发送/停止/重复执行与不支持消息类别的保护。直接用既有 `GetRevertPreview` / `RevertToCascadeStep`，没有增加猜测的停止接口调用。
+- 执行前取消旧消息读取并断开旧流连接，原有连接代次检查拒绝迟到流事件；成功后重新同步，失败保留正文/草稿并恢复连接。预览再打开增加请求代次保护，防止取消后同一消息的旧响应覆盖新弹窗。
+
+### 验证与边界
+
+先在旧实现运行新增回归：Go 拒绝运行中回退；Android 运行中 Undo 不显示，预览完成后弹窗高度从579px缩到494px（85px差异）。修复后相同路径通过，不是只看最终截图。
+
+| 最终检查 | 结果 |
+| --- | --- |
+| Go 回退测试 `go test ./internal/proxy -run Revert -count=1` | 通过，2.724秒；包含 RUNNING 预览、两种文件模式、原模型和既有边界校验 |
+| Android 单测、主包与测试包构建 | 通过，最终构建9秒；已有8项应用单测通过 |
+| 普通字体4项针对性界面检查 | 通过，43.647秒；弹窗宽高/默认选项/两种请求值、生成中 Undo/迟到流/重复执行、下拉恢复与气泡外按钮、管理失败与跨会话草稿 |
+| 1.5倍字体4项检查 | 通过，24.502秒；弹窗三行文件完整显示且加载/返回/失败尺寸一致、生成中回退、原图片恢复与读取失败保护、项目草稿/键盘返回/快速导航 |
+| 最终包连接58900原生回退两项 | 通过，26.357秒；原生 RUNNING 预览及回退、UI 默认勾选实际恢复隔离文件 |
+
+原生运行测试只创建纯聊天测试会话，在执行前再次确认实际状态仍是 RUNNING，回退后等待 IDLE 且原消息撤回。文件测试仅使用忽略目录内独立 Git 仓库的 `probe.txt`，由 Agent 从 BEFORE 改为 AFTER；预览包含该文件，从真实 UI 保持默认勾选确认，读回 BEFORE、原消息撤回且模型保持。两个自建测试会话均在 finally 清理；不操作用户开发会话或项目文件。
+
+首次文件夹具运行传入裸 Windows 路径，既有项目创建路径将其拼成无效 file URI，未执行文件写入；改为明确 `file:///H:/...` 后最终原生检查通过，同时夹具遇到服务端 hasError 会立即报错。没有将夹具修正冒充为项目创建协议修复，后续该功能仍按统一计划核查。
+
+人工核对普通字体及1.5倍字体的白色弹窗、勾选项、三行文件及按钮截图。模拟器字体已恢复1.0；本轮仅操作 emulator-5554，未操作USB真机，不宣称全套、性能或TalkBack验收。接口日志继续在 API_TRACE 中输出请求/响应并脱敏认证信息。证据为忽略目录中的 `revert-modes-go-baseline.log`、`revert-modes-android-baseline.log`、`revert-modes-go.log`、`revert-modes-final-build.log`、`revert-modes-final-target.log`、`revert-modes-final-font15.log`、`revert-modes-native-final.log`，以及 `revert-modes-ready-final.png` / `revert-modes-ready-final-font15.png`。
+
+### 已授权原网关更新
+
+沿用用户此前“允许更新并重启”授权，先备份原程序/启动命令，更新项目内 `bin/mgy.exe`，隐藏启动且保持原参数、配置和鉴权。新58900主进程PID35724、隧道PID19856；新隧道ready200后停止旧隧道55004，旧主进程17612已退出。58901的PID55216保持不变。
+
+最终本地58900/58901 `/healthz`、原公网 `/healthz`、新隧道 `/ready` 均200，活动二进制哈希与候选一致。真实原生测试使用既有认证和58900端点，没有更改设备配对或触碰真机。部署记录 `revert-modes-gateway-deploy.json`，旧程序备份 `mgy-before-revert-modes.exe` 均仅在忽略目录。

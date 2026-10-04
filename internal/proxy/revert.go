@@ -10,9 +10,6 @@ func revertStepReason(raw *upstreamTrajectoryResp, index int) string {
 	if index < 0 || index >= len(raw.Trajectory.Steps) {
 		return "消息步骤不存在，请刷新会话"
 	}
-	if strings.Contains(strings.ToUpper(raw.Status), "RUNNING") {
-		return "请先停止生成，再回退消息"
-	}
 	step := raw.Trajectory.Steps[index]
 	if step.Type != "CORTEX_STEP_TYPE_USER_INPUT" || step.UserInput == nil {
 		return "只能回退已发送的用户消息"

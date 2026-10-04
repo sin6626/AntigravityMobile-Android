@@ -39,7 +39,6 @@ func TestRevertValidationAndModelPreservation(t *testing.T) {
 		{"outside", `{"cascadeId":"revert-validation","stepIndex":9}`, raw},
 		{"agent", `{"cascadeId":"revert-validation","stepIndex":1}`, raw},
 		{"override", `{"cascadeId":"revert-validation","stepIndex":0,"targetStepIndex":5}`, raw},
-		{"running", `{"cascadeId":"revert-validation","stepIndex":0}`, strings.Replace(raw, `"IDLE"`, `"RUNNING"`, 1)},
 		{"cleared", `{"cascadeId":"revert-validation","stepIndex":0}`, strings.Replace(raw, `"userInput":{}`, `"status":"CORTEX_STEP_STATUS_CLEARED","userInput":{}`, 1)},
 		{"comments", `{"cascadeId":"revert-validation","stepIndex":0}`, strings.Replace(raw, `"userInput":{}`, `"userInput":{"fileComments":[{}]}`, 1)},
 		{"battle", `{"cascadeId":"revert-validation","stepIndex":0}`, strings.Replace(raw, `"steps":`, `"battleModeInfos":[{}],"steps":`, 1)},
@@ -79,5 +78,44 @@ func TestRevertValidationAndModelPreservation(t *testing.T) {
 	cfg := executed["overrideConfig"].(map[string]interface{})
 	if cfg["plannerConfig"].(map[string]interface{})["modelName"] != "original" || cfg["checkpointConfig"].(map[string]interface{})["maxTokenLimit"] != float64(12345) || executed["conversationOnly"] != true || executed["stepIndex"] != float64(-1) {
 		t.Fatalf("configuration changed: %v", executed)
+	}
+}
+
+func TestRunningRevertUsesNativeEndpointAndBothFileModes(t *testing.T) {
+	var executed map[string]interface{}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/GetCascadeTrajectory"):
+			w.Write([]byte(`{"status":"CASCADE_RUN_STATUS_RUNNING","trajectory":{"steps":[{"type":"CORTEX_STEP_TYPE_USER_INPUT","userInput":{}}],"executorMetadatas":[{"cascadeConfig":{"plannerConfig":{"planModel":"MODEL_PLACEHOLDER_M26","modelName":"original"}}}]}}`))
+		case strings.HasSuffix(r.URL.Path, "/GetRevertPreview"):
+			w.Write([]byte(`{"codeEditPreviews":[{"fileUri":"file:///probe.txt","actionType":"MODIFY"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/RevertToCascadeStep"):
+			json.NewDecoder(r.Body).Decode(&executed)
+			w.Write([]byte(`{}`))
+		default:
+			t.Errorf("unexpected upstream call: %s", r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+	id := "running-revert-modes"
+	defer ClearTrajectoryCache(id)
+	p := &Proxy{shortClient: upstream.Client(), mediumClient: upstream.Client(), longClient: upstream.Client()}
+	port := upstream.Listener.Addr().(*net.TCPAddr).Port
+	preview, err := p.GetRevertPreview(id, 0, nil, port, "test")
+	if err != nil || len(preview.Files) != 1 {
+		t.Fatalf("running preview rejected: %v", err)
+	}
+	for _, conversationOnly := range []bool{false, true} {
+		_, err = p.ExecuteRevert(id, 0, nil, conversationOnly, port, "test")
+		if err != nil {
+			t.Fatalf("running revert rejected: %v", err)
+		}
+		if executed["conversationOnly"] != conversationOnly || executed["stepIndex"] != float64(-1) {
+			t.Fatalf("wrong revert mode or target: %v", executed)
+		}
+		if executed["overrideConfig"].(map[string]interface{})["plannerConfig"].(map[string]interface{})["modelName"] != "original" {
+			t.Fatal("running revert changed original model")
+		}
 	}
 }

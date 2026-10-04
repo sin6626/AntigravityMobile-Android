@@ -244,8 +244,8 @@ internal fun ConversationContent(
                             if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
                             else ExecutionPanel(item, viewModel, expanded, toggle)
                         } else if (item.streaming) DisableSelection {
-                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, allowRevert && !isRunning)
-                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, allowRevert && !isRunning)
+                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, allowRevert)
+                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, allowRevert)
                         if (item.canCopy) DisableSelection {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 CopyTextButton(item.message.effectiveText, "复制整条回复")

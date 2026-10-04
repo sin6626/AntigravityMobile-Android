@@ -113,6 +113,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var draftKey = NEW_CHAT_DRAFT
     private val draftAttachments = mutableMapOf<String, List<PendingImage>>()
     private var conversationVisit = 0L
+    private var revertPreviewVisit = 0L
     private var messagesRevision = 0L
     private var fullSnapshotRevision = 0L
     private var messagesJob: Job? = null
@@ -603,6 +604,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun dismissRevert() {
+        revertPreviewVisit++
         if (!_state.value.isReverting) _state.value = _state.value.copy(revertMessage = null, revertPreview = null,
             isLoadingRevert = false, revertError = null)
     }
@@ -611,7 +613,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val id = current.selectedConversationId ?: return
         val index = message.stepIndex ?: return
-        if (current.isRunning || current.isSending || current.isReverting || id in current.busyConversations || message.canRevert == false) return
+        if (current.isSending || current.isReverting || current.isStopping || id in current.busyConversations || message.canRevert == false) return
+        val previewVisit = ++revertPreviewVisit
         if (message.canRevert == null) {
             _state.value = current.copy(revertMessage = message, revertPreview = null, isLoadingRevert = false,
                 revertError = "电脑网关版本较旧，请更新并重启 mgy 后下拉刷新会话，再使用回退。")
@@ -621,7 +624,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = current.copy(revertMessage = message, revertPreview = null, revertError = null, isLoadingRevert = true)
         viewModelScope.launch {
             val result = api.getRevertPreview(id, index)
-            if (conversationVisit != visit || _state.value.revertMessage?.id != message.id) return@launch
+            if (conversationVisit != visit || revertPreviewVisit != previewVisit || _state.value.revertMessage?.id != message.id) return@launch
             result.fold(onSuccess = { _state.value = _state.value.copy(revertPreview = it, isLoadingRevert = false) },
                 onFailure = { _state.value = _state.value.copy(revertError = it.message ?: "预览失败", isLoadingRevert = false) })
         }
@@ -632,8 +635,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val id = current.selectedConversationId ?: return
         val message = current.revertMessage ?: return
         val index = message.stepIndex ?: return
-        if (current.revertPreview == null || current.isReverting || current.isRunning || current.isSending || id in current.busyConversations) return
-        val visit = conversationVisit
+        if (current.revertPreview == null || current.isReverting || current.isSending || current.isStopping || id in current.busyConversations) return
+        val visit = ++conversationVisit
+        messagesJob?.cancel(); messagesJob = null
+        stream.disconnect()
         _state.value = current.copy(isReverting = true, revertError = null, busyConversations = current.busyConversations + id)
         viewModelScope.launch {
             try {
@@ -665,7 +670,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 refreshConversations()
             } catch (error: Exception) {
-                if (conversationVisit == visit) _state.value = _state.value.copy(isReverting = false, revertError = error.message ?: "回退失败")
+                if (conversationVisit == visit) {
+                    _state.value = _state.value.copy(isReverting = false, revertError = error.message ?: "回退失败")
+                    stream.connect(id); loadMessages(id)
+                }
             } finally {
                 _state.value = _state.value.copy(busyConversations = _state.value.busyConversations - id)
             }
