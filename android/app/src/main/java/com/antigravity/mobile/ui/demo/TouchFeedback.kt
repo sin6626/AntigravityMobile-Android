@@ -37,7 +37,7 @@ internal fun Modifier.quietClickable(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val alpha by animateFloatAsState(if (pressed && pressedColor == null) 0.72f else 1f, tween(90), label = "press")
-    val background by animateColorAsState(if (pressed || highlighted) pressedColor ?: Color.Transparent else Color.Transparent,
+    val background by animateColorAsState(if (pressed || highlighted) pressedColor ?: Color.Transparent else pressedColor?.copy(alpha = 0f) ?: Color.Transparent,
         tween(90), label = "press background")
     this.clip(shape).background(background).graphicsLayer(alpha = alpha)
         .combinedClickable(interactionSource = interaction, indication = null, enabled = enabled,

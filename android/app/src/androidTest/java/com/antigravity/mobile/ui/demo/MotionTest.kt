@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
@@ -27,6 +28,32 @@ class MotionTest {
         override val scaleFactor get() = if (InstrumentationRegistry.getArguments().getString("motionDisabled") == "true") 0f else 1f
     })
     private val baseline get() = InstrumentationRegistry.getArguments().getString("motionBaseline") == "true"
+
+    @Test fun grayHighlightNeverDarkensDuringPressOrRelease() {
+        val highlighted = mutableStateOf(false)
+        compose.setContent {
+            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White)) {
+                Box(Modifier.fillMaxWidth().quietClickable(pressedColor = androidx.compose.ui.graphics.Color(0xFFF1F1F1),
+                    highlighted = highlighted.value, onClick = {})) { androidx.compose.material3.Text("灰底过渡") }
+            }
+        }
+        fun gray() = compose.onNodeWithText("灰底过渡").captureToImage().toPixelMap().let { it[it.width - 4, it.height / 2].red }
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread { highlighted.value = true }
+            compose.mainClock.advanceTimeByFrame()
+            repeat(7) {
+                compose.mainClock.advanceTimeBy(16)
+                assertTrue("Gray entry must stay between white and #F1F1F1, was ${gray()}", gray() >= 240f / 255f)
+            }
+            compose.runOnUiThread { highlighted.value = false }
+            compose.mainClock.advanceTimeByFrame()
+            repeat(7) {
+                compose.mainClock.advanceTimeBy(16)
+                assertTrue("Gray exit must stay between #F1F1F1 and white, was ${gray()}", gray() >= 240f / 255f)
+            }
+        } finally { compose.mainClock.autoAdvance = true }
+    }
 
     @Test fun composerShadowStaysAttachedDuringWidthMorphing() {
         val active = mutableStateOf(false)
