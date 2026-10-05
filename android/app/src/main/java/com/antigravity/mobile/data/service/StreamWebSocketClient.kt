@@ -93,9 +93,10 @@ class StreamWebSocketClient(
     }
 
     private fun startConnection() {
-        val avoidLan = (connectionManager?.isCellular ?: false) || !(connectionManager?.isWifi ?: true)
-        val baseUrl = prefs.getEffectiveGatewayUrl(avoidLan, connectionManager) ?: prefs.gatewayBaseUrl ?: run {
+        val avoidLan = !(connectionManager?.isWifi ?: true)
+        val baseUrl = prefs.getEffectiveGatewayUrl(avoidLan, connectionManager) ?: run {
             _connectionStatus.value = ConnectionStatus.FAILED
+            scheduleReconnect()
             return
         }
         val cascadeId = activeCascadeId ?: return

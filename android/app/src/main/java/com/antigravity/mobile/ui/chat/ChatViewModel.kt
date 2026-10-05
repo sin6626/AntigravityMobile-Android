@@ -2,6 +2,7 @@ package com.antigravity.mobile.ui.chat
 
 import android.app.Application
 import android.net.Uri
+import android.webkit.MimeTypeMap
 import coil.ImageLoader
 import coil.request.ImageRequest
 import androidx.lifecycle.AndroidViewModel
@@ -29,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.util.UUID
+import java.io.File
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 data class ChatUiState(
@@ -62,6 +64,7 @@ data class ChatUiState(
     val outgoing: List<OutgoingMessage> = emptyList(),
     val draft: String = "",
     val attachments: List<PendingImage> = emptyList(),
+    val isRestoringDraft: Boolean = false,
     val error: String? = null,
     val messagesError: String? = null,
     val olderMessagesError: String? = null,
@@ -70,7 +73,7 @@ data class ChatUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
 )
 
-data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String)
+data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String, val sourceUri: Uri = uri)
 
 data class OutgoingMessage(
     val conversationId: String,
@@ -117,6 +120,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var messagesRevision = 0L
     private var fullSnapshotRevision = 0L
     private var messagesJob: Job? = null
+    private var draftRestoreJob: Job? = null
+    private var recoveryJob: Job? = null
     private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired(), draft = prefs.getDraftText(draftKey)))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
@@ -127,8 +132,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     val gatewayUrl: String? get() = prefs.gatewayBaseUrl
 
     init {
+        // A request interrupted by process death becomes a draft, never an automatic resend.
+        prefs.pendingSendTarget?.let { target ->
+            prefs.setDraftText(target, listOf(prefs.getDraftText(PENDING_SEND_DRAFT), prefs.getDraftText(target))
+                .filter { it.isNotEmpty() }.distinct().joinToString("\n\n"))
+            prefs.saveDraftImages(target, (prefs.loadDraftImages(PENDING_SEND_DRAFT) + prefs.loadDraftImages(target)).distinct().take(4))
+            clearSendSnapshot()
+        }
+        _state.value = _state.value.copy(draft = prefs.getDraftText(NEW_CHAT_DRAFT))
+        restoreDraftImages(NEW_CHAT_DRAFT)
         if (prefs.isPaired()) {
             connectionManager.startMonitoring(prefs, viewModelScope)
+            prefs.lastConversationId?.takeUnless { it.startsWith("local:") || prefs.isDeletedConversation(it) }?.let(::openConversation)
             refreshConversations()
             refreshProjects()
         }
@@ -180,9 +195,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun switchDraft(key: String) {
         prefs.setDraftText(draftKey, _state.value.draft)
-        draftAttachments[draftKey] = _state.value.attachments
+        if (!_state.value.isRestoringDraft) draftAttachments[draftKey] = _state.value.attachments
+        draftRestoreJob?.cancel()
         draftKey = key
         _state.value = _state.value.copy(draft = prefs.getDraftText(key), attachments = draftAttachments[key].orEmpty())
+        restoreDraftImages(key)
+    }
+
+    private fun restoreDraftImages(key: String) {
+        _state.value = _state.value.copy(isRestoringDraft = key !in draftAttachments && prefs.draftImageCount(key) > 0)
+        if (_state.value.isRestoringDraft) draftRestoreJob = viewModelScope.launch {
+            val images = withContext(Dispatchers.IO) { prefs.loadDraftImages(key).mapNotNull { file ->
+                try { PendingImage(Uri.fromFile(file), file.readBytes(),
+                    checkNotNull(MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension))) }
+                catch (_: Exception) { null }
+            } }
+            if (draftKey != key) return@launch
+            draftAttachments[key] = images
+            _state.value = _state.value.copy(attachments = images, isRestoringDraft = false,
+                error = if (images.size < prefs.draftImageCount(key)) "部分图片草稿无法读取，请重新选择图片" else _state.value.error)
+        }
+    }
+
+    private fun saveImages(key: String, images: List<PendingImage>) {
+        draftAttachments[key] = images
+        if (images.isEmpty()) prefs.clearDraftImages(key)
+        else prefs.saveDraftImages(key, images.map { File(checkNotNull(it.uri.path)) })
+    }
+
+    private fun clearSendSnapshot() {
+        prefs.pendingSendTarget = null
+        prefs.clearDraftText(PENDING_SEND_DRAFT)
+        prefs.clearDraftImages(PENDING_SEND_DRAFT)
     }
 
     private fun moveDraft(from: String, to: String) {
@@ -194,8 +238,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val targetImages = if (draftKey == to) _state.value.attachments else draftAttachments[to].orEmpty()
         val images = (sourceImages + targetImages).distinctBy { it.uri }
         prefs.setDraftText(to, text)
-        draftAttachments[to] = images
+        saveImages(to, images)
         prefs.clearDraftText(from)
+        prefs.clearDraftImages(from)
         draftAttachments.remove(from)
         if (active) draftKey = to
         if (draftKey == to) _state.value = _state.value.copy(draft = text, attachments = images)
@@ -204,14 +249,20 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun addImages(uris: List<Uri>) {
         val key = draftKey
         viewModelScope.launch {
+            draftRestoreJob?.join()
             for (uri in uris.take(4)) {
                 if (draftKey != key) break
-                if (_state.value.attachments.size >= 4) break
-                if (_state.value.attachments.any { it.uri == uri }) continue
+                if (_state.value.attachments.size + prefs.loadDraftImages(PENDING_SEND_DRAFT).size >= 4) break
+                if (_state.value.attachments.any { it.sourceUri == uri }) continue
                 try {
                     val image = withContext(Dispatchers.IO) { readImage(uri) }
-                    if (draftKey != key) break
+                    if (draftKey != key) { prefs.deleteUnusedDraftImage(File(checkNotNull(image.uri.path))); break }
+                    if (_state.value.attachments.size + prefs.loadDraftImages(PENDING_SEND_DRAFT).size >= 4 ||
+                        _state.value.attachments.any { it.sourceUri == uri }) {
+                        prefs.deleteUnusedDraftImage(File(checkNotNull(image.uri.path))); continue
+                    }
                     _state.value = _state.value.copy(attachments = _state.value.attachments + image)
+                    saveImages(key, _state.value.attachments)
                 } catch (error: Exception) {
                     if (draftKey != key) break
                     _state.value = _state.value.copy(error = error.message ?: "读取图片失败")
@@ -222,6 +273,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     fun removeImage(uri: Uri) {
         _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.uri == uri })
+        saveImages(draftKey, _state.value.attachments)
+        uri.path?.let { prefs.deleteUnusedDraftImage(File(it)) }
     }
 
     private fun readImage(uri: Uri): PendingImage {
@@ -243,7 +296,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 output.write(buffer, 0, count)
             }
         }
-        return PendingImage(uri, output.toByteArray(), mime)
+        val bytes = output.toByteArray()
+        return PendingImage(Uri.fromFile(prefs.storeDraftImage(bytes, mime)), bytes, mime, uri)
     }
 
     fun clearError() {
@@ -258,6 +312,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.deviceId = null
         stream.disconnect()
         connectionManager.stopMonitoring()
+        prefs.lastConversationId = null
         _state.value = _state.value.copy(
             isPaired = false, isLoadingConversations = false, isLoadingProjects = false,
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
@@ -302,6 +357,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             api.pair(info, override).fold(
                 onSuccess = {
+                    closeConversation()
                     _state.value = _state.value.copy(
                         isPaired = true, isPairing = false,
                         pairSuccessCount = _state.value.pairSuccessCount + 1,
@@ -386,6 +442,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
         switchDraft(id)
+        prefs.lastConversationId = id.takeUnless { it.startsWith("local:") }
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = id,
@@ -412,14 +469,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         closeConversation()
         switchDraft(NEW_CHAT_DRAFT)
         prefs.clearDraftText(NEW_CHAT_DRAFT)
+        prefs.clearDraftImages(NEW_CHAT_DRAFT)
+        draftRestoreJob?.cancel()
         draftAttachments.remove(NEW_CHAT_DRAFT)
-        _state.value = _state.value.copy(draft = "", attachments = emptyList())
+        _state.value = _state.value.copy(draft = "", attachments = emptyList(), isRestoringDraft = false)
     }
 
     fun closeConversation() {
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
         stream.disconnect()
+        prefs.lastConversationId = null
+        switchDraft(NEW_CHAT_DRAFT)
         _state.value = _state.value.copy(
             selectedConversationId = null,
             messages = emptyList(),
@@ -439,6 +500,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun send() {
+        if (_state.value.isRestoringDraft) return
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
         if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
@@ -451,7 +513,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
             _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull())
         val wasRunning = _state.value.isRunning
+        prefs.setDraftText(PENDING_SEND_DRAFT, text)
+        prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
+        prefs.pendingSendTarget = originalDraftKey
         setDraft("")
+        saveImages(draftKey, emptyList())
         _state.value = _state.value.copy(attachments = emptyList())
         if (id == null) moveDraft(originalDraftKey, targetId)
         if (id == null) conversationVisit++
@@ -471,6 +537,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 api.createCascade("", "", model = DEFAULT_CHAT_MODEL, projectId = ProjectItem.PURE_CHAT.id)
                     .fold(
                         onSuccess = { createdId ->
+                            prefs.pendingSendTarget = createdId
                             moveDraft(targetId, createdId)
                             _state.value = _state.value.copy(outgoing = _state.value.outgoing.map {
                                 if (it.message.id == pending.message.id) it.copy(conversationId = createdId) else it
@@ -518,7 +585,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         .distinctBy { it.uri } else current.attachments
                     if (unconfirmed) {
                         prefs.setDraftText(restoreKey, restoredDraft)
-                        draftAttachments[restoreKey] = restoredImages
+                        saveImages(restoreKey, restoredImages)
                     }
                     _state.value = current.copy(
                         outgoing = current.outgoing.filterNot { it.message.id == pending.message.id },
@@ -531,6 +598,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
             )
+            clearSendSnapshot()
         }
     }
 
@@ -556,6 +624,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             if (_state.value.selectedConversationId == id) _state.value = _state.value.copy(isDeleting = false)
         } }) {
             prefs.clearDraftText(id)
+            prefs.clearDraftImages(id)
             draftAttachments.remove(id)
             if (_state.value.selectedConversationId == id) {
                 _state.value = _state.value.copy(draft = "", attachments = emptyList())
@@ -641,13 +710,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stream.disconnect()
         _state.value = current.copy(isReverting = true, revertError = null, busyConversations = current.busyConversations + id)
         viewModelScope.launch {
+            val stagedFiles = mutableListOf<File>()
             try {
                 val urls = message.imageUrls.orEmpty().distinct()
                 check(urls.isNotEmpty() || message.media.isNullOrEmpty()) { "原图片不可恢复，请在电脑端回退" }
                 check(urls.size + _state.value.attachments.size <= 4) { "恢复后图片超过 4 张，请先保存当前草稿" }
                 val images = urls.map { url ->
                     val (bytes, mime) = api.imageForDraft(url, id).getOrThrow()
-                    PendingImage(Uri.parse(url), bytes, mime)
+                    withContext(Dispatchers.IO) {
+                        val file = prefs.storeDraftImage(bytes, mime).also(stagedFiles::add)
+                        PendingImage(Uri.fromFile(file), bytes, mime)
+                    }
                 }
                 if (conversationVisit != visit) return@launch
                 api.executeRevert(id, index, conversationOnly).getOrThrow()
@@ -655,7 +728,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val text = listOf(message.effectiveText, if (draftKey == id) _state.value.draft else prefs.getDraftText(id))
                     .filter { it.isNotEmpty() }.joinToString("\n\n")
                 prefs.setDraftText(id, text)
-                draftAttachments[id] = (images + if (draftKey == id) _state.value.attachments else draftAttachments[id].orEmpty()).distinctBy { it.uri }
+                saveImages(id, (images + if (draftKey == id) _state.value.attachments else draftAttachments[id].orEmpty()).distinctBy { it.uri })
                 if (conversationVisit == visit) {
                     conversationVisit++
                     messagesJob?.cancel(); messagesJob = null
@@ -675,6 +748,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     stream.connect(id); loadMessages(id)
                 }
             } finally {
+                stagedFiles.forEach(prefs::deleteUnusedDraftImage)
                 _state.value = _state.value.copy(busyConversations = _state.value.busyConversations - id)
             }
         }
@@ -769,8 +843,24 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val id = _state.value.selectedConversationId ?: return
         if (messagesJob?.isActive == true) return
         _state.value = _state.value.copy(isLoadingMessages = true, messagesError = null)
-        loadMessages(id)
-        if (_state.value.connectionStatus != ConnectionStatus.CONNECTED) stream.reconnect()
+        resumeConnection()
+    }
+
+    /** Sync after background/lock or manual retry while keeping the current page and draft. */
+    fun resumeConnection() {
+        if (!_state.value.isPaired || recoveryJob?.isActive == true) return
+        val visit = conversationVisit
+        recoveryJob = viewModelScope.launch {
+            connectionManager.probeEndpoints(prefs)
+            if (conversationVisit == visit && !_state.value.isSending && !_state.value.isReverting && !_state.value.isStopping) {
+                _state.value.selectedConversationId?.takeUnless { it.startsWith("local:") }?.let { id ->
+                    stream.reconnect()
+                    loadMessages(id)
+                }
+            }
+            refreshConversations()
+            refreshProjects()
+        }
     }
 
     fun loadOlderMessages() {
@@ -814,6 +904,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
 private const val DEFAULT_CHAT_MODEL = "gemini-3.8-flash-high"
 private const val NEW_CHAT_DRAFT = "android_new_chat"
+private const val PENDING_SEND_DRAFT = "android_pending_send"
 
 private fun mergeMessages(
     current: List<GatewayMessageItem>,

@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.File
+import java.util.UUID
 
 class PreferencesManager(context: Context) {
     private val appContext = context.applicationContext
@@ -225,6 +227,14 @@ class PreferencesManager(context: Context) {
         get() = prefs.getString(KEY_DRAFT_SESSIONS, null)
         set(value) = prefs.edit().putString(KEY_DRAFT_SESSIONS, value).apply()
 
+    var lastConversationId: String?
+        get() = prefs.getString("android_last_conversation", null)
+        set(value) = prefs.edit().putString("android_last_conversation", value).apply()
+
+    var pendingSendTarget: String?
+        get() = prefs.getString("android_pending_send_target", null)
+        set(value) = prefs.edit().putString("android_pending_send_target", value).apply()
+
     fun updateEndpoints(
         lan: String? = null,
         ipv6: String? = null,
@@ -260,7 +270,7 @@ class PreferencesManager(context: Context) {
         if (!active.isNullOrBlank()) {
             val clean = active.trimEnd('/')
             editor.putString(KEY_GATEWAY_URL, clean)
-            if (!ConnectionManager.isLanHost(ConnectionManager.extractHost(clean))) {
+            if (primaryCloud.isNullOrBlank() && !ConnectionManager.isLanHost(ConnectionManager.extractHost(clean))) {
                 editor.putString(KEY_PRIMARY_CLOUD_URL, clean)
             }
         }
@@ -369,49 +379,66 @@ class PreferencesManager(context: Context) {
         return getDraftText(cascadeId).isNotBlank() || hasDraftImages(cascadeId)
     }
 
-    fun saveDraftImages(cascadeId: String, images: List<ByteArray>) {
-        try {
-            val safeKey = cascadeId.replace('/', '_').replace(':', '_')
-            val dir = java.io.File(appContext.cacheDir, "draft_images/$safeKey").apply { mkdirs() }
-            dir.listFiles()?.forEach { it.delete() }
-            images.forEachIndexed { index, bytes ->
-                val file = java.io.File(dir, "draft_${index}.png")
-                file.writeBytes(bytes)
-            }
-        } catch (_: Exception) {}
+    private val draftImageDirectory: File get() = File(appContext.noBackupFilesDir, "android_draft_images")
+
+    /** Copy once, outside the system-evictable cache. Call on IO; existing 4×8MB limits still apply. */
+    fun storeDraftImage(bytes: ByteArray, mime: String): File {
+        require(bytes.isNotEmpty() && bytes.size <= 8 * 1024 * 1024) { "图片大小无效" }
+        val extension = when (mime) {
+            "image/jpeg" -> "jpg"; "image/png" -> "png"; "image/webp" -> "webp"; "image/gif" -> "gif"
+            else -> throw IllegalArgumentException("不支持的图片格式")
+        }
+        val directory = draftImageDirectory.apply { mkdirs() }
+        cleanupUnusedDraftImages()
+        check(directory.listFiles().orEmpty().sumOf { it.length() } + bytes.size <= 128L * 1024 * 1024) {
+            "图片草稿空间已满，请先发送或移除部分图片"
+        }
+        val file = File(directory, "${UUID.randomUUID()}.$extension")
+        try { file.writeBytes(bytes) } catch (error: Exception) { file.delete(); throw error }
+        return file
     }
 
-    fun loadDraftImages(cascadeId: String): List<ByteArray> {
-        return try {
-            val safeKey = cascadeId.replace('/', '_').replace(':', '_')
-            val dir = java.io.File(appContext.cacheDir, "draft_images/$safeKey")
-            if (!dir.exists()) return emptyList()
-            val files = dir.listFiles()?.sortedBy { it.name } ?: return emptyList()
-            files.mapNotNull {
-                try { it.readBytes() } catch (_: Exception) { null }
-            }
-        } catch (_: Exception) {
-            emptyList()
+    private fun draftImageNames(cascadeId: String): List<String> = try {
+        draftJson.decodeFromString<List<String>>(prefs.getString(KEY_DRAFT_IMAGES_PREFIX + cascadeId, "[]") ?: "[]")
+    } catch (_: Exception) { emptyList() }
+
+    private fun draftImageFile(name: String): File? = name.takeIf {
+        it.matches(Regex("[a-f0-9-]{36}\\.(jpg|png|webp|gif)"))
+    }?.let { File(draftImageDirectory, it) }
+
+    fun saveDraftImages(cascadeId: String, images: List<File>) {
+        require(images.size <= 4) { "最多保存4张图片" }
+        val names = images.map { file ->
+            require(file.parentFile?.canonicalFile == draftImageDirectory.canonicalFile && draftImageFile(file.name) != null)
+            file.name
         }
+        prefs.edit().putString(KEY_DRAFT_IMAGES_PREFIX + cascadeId, draftJson.encodeToString(names)).apply()
     }
+
+    fun loadDraftImages(cascadeId: String): List<File> = draftImageNames(cascadeId).take(4)
+        .mapNotNull(::draftImageFile).filter { it.isFile && it.length() in 1..8L * 1024 * 1024 }
+
+    fun draftImageCount(cascadeId: String): Int = draftImageNames(cascadeId).size
 
     fun clearDraftImages(cascadeId: String) {
-        try {
-            val safeKey = cascadeId.replace('/', '_').replace(':', '_')
-            val dir = java.io.File(appContext.cacheDir, "draft_images/$safeKey")
-            dir.deleteRecursively()
-        } catch (_: Exception) {}
+        val files = draftImageNames(cascadeId).mapNotNull(::draftImageFile)
+        prefs.edit().remove(KEY_DRAFT_IMAGES_PREFIX + cascadeId).apply()
+        files.forEach(::deleteUnusedDraftImage)
     }
 
-    fun hasDraftImages(cascadeId: String): Boolean {
-        return try {
-            val safeKey = cascadeId.replace('/', '_').replace(':', '_')
-            val dir = java.io.File(appContext.cacheDir, "draft_images/$safeKey")
-            dir.exists() && (dir.listFiles()?.isNotEmpty() == true)
-        } catch (_: Exception) {
-            false
-        }
+    fun deleteUnusedDraftImage(file: File) {
+        if (file.parentFile?.canonicalFile != draftImageDirectory.canonicalFile || draftImageFile(file.name) == null) return
+        val referenced = prefs.all.keys.filter { it.startsWith(KEY_DRAFT_IMAGES_PREFIX) }
+            .any { file.name in draftImageNames(it.removePrefix(KEY_DRAFT_IMAGES_PREFIX)) }
+        if (!referenced) file.delete() // Only this explicitly validated, privately owned file; never recurse.
     }
+
+    fun cleanupUnusedDraftImages() {
+        val expired = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+        draftImageDirectory.listFiles().orEmpty().filter { it.lastModified() < expired }.forEach(::deleteUnusedDraftImage)
+    }
+
+    fun hasDraftImages(cascadeId: String): Boolean = loadDraftImages(cascadeId).isNotEmpty()
 
     private val draftJson = JsonConfig.instance
 
@@ -535,6 +562,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_CUSTOM_URL = "custom_server_url"
         private const val KEY_LAST_VIEW_PREFIX = "ag_last_view_"
         private const val KEY_DRAFT_TEXT_PREFIX = "ag_draft_text_"
+        private const val KEY_DRAFT_IMAGES_PREFIX = "android_draft_images_"
         private const val KEY_CACHED_PROJECTS = "cached_projects_json"
         private const val KEY_CACHED_CONVERSATIONS = "cached_conversations_json"
         private const val KEY_DRAFT_SESSIONS = "cached_draft_sessions_json"

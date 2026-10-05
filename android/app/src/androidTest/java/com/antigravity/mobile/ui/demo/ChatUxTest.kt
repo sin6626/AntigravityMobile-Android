@@ -32,6 +32,232 @@ import kotlin.concurrent.thread
 class ChatUxTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun customPairRetainsKnownLanCandidate() {
+        val app = isolatedApplication()
+        val prefs = PreferencesManager(app)
+        FakeGateway().use { gateway ->
+            val uri = java.net.URI(gateway.url)
+            val info = com.antigravity.mobile.data.model.PairingInfo(uri.host, uri.port, "test-code", lanHost = "192.168.50.9")
+            runBlocking { ApiClient(app, prefs).pair(info, gateway.url).getOrThrow() }
+            assertEquals("自定义地址配对不能丢失已知LAN候选", info.lanBaseUrl, prefs.lanServerUrl)
+        }
+    }
+
+    // Opt-in native process probe. The shell caller backs up/restores emulator prefs before using this.
+    @Test fun nativeProcessRecoveryFixture() {
+        val args = InstrumentationRegistry.getArguments()
+        val phase = args.getString("uxRecoveryPhase")
+        org.junit.Assume.assumeTrue(phase != null && android.os.Build.HARDWARE == "ranchu")
+        val app = compose.activity.application
+        val prefs = PreferencesManager(app)
+        if (phase == "prepare") {
+            app.getSharedPreferences("agy_standard_prefs", Context.MODE_PRIVATE).edit().clear().commit()
+            prefs.updateEndpoints(lan = checkNotNull(args.getString("uxRecoveryUrl")), active = args.getString("uxRecoveryUrl"))
+            prefs.deviceToken = "recovery-test-token"
+            prefs.deviceId = "recovery-test-device"
+        }
+        val vm = ChatViewModel(app)
+        val store = ViewModelStore().apply { put("native-recovery", vm) }
+        try {
+            compose.setContent { ChatDemoScreen(vm, {}) }
+            if (phase == "prepare") {
+                val bitmap = android.graphics.Bitmap.createBitmap(160, 240, android.graphics.Bitmap.Config.ARGB_8888)
+                bitmap.eraseColor(android.graphics.Color.BLUE)
+                val file = File(compose.activity.cacheDir, "reliability-native-source.png")
+                file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                bitmap.recycle()
+                val uri = androidx.core.content.FileProvider.getUriForFile(app, "com.antigravity.mobile.fileprovider", file)
+                compose.runOnIdle { vm.openConversation("recovery-fixture"); vm.setDraft("进程重启后保留的草稿"); vm.addImages(listOf(uri)) }
+                compose.waitUntil(10_000) { vm.state.value.attachments.size == 1 && !vm.state.value.isLoadingMessages }
+                file.delete() // The picked source vanishes; only our persisted private copy can restore it.
+                app.getSharedPreferences("agy_standard_prefs", Context.MODE_PRIVATE).edit().commit()
+            } else {
+                compose.waitUntil(10_000) { !vm.state.value.isRestoringDraft && !vm.state.value.isLoadingMessages }
+                assertEquals("recovery-fixture", vm.state.value.selectedConversationId)
+                assertEquals("进程重启后保留的草稿", vm.state.value.draft)
+                assertEquals(1, vm.state.value.attachments.size)
+                val restored = vm.state.value.attachments.single()
+                assertEquals("image/png", restored.mimeType)
+                assertTrue(File(checkNotNull(restored.uri.path)).isFile)
+                compose.onNodeWithContentDescription("移除待发送图片").assertExists()
+                saveScreenshot("reliability-native-restored.png")
+                if (phase == "cleanup") {
+                    compose.runOnIdle { vm.removeImage(restored.uri) }
+                    assertFalse(File(checkNotNull(restored.uri.path)).exists())
+                    assertTrue(prefs.loadDraftImages("recovery-fixture").isEmpty())
+                }
+            }
+        } finally { compose.runOnIdle { store.clear() } }
+    }
+
+    @Test fun viewModelRestartRestoresConversationAndImageDraft() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            var vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("restore", vm) }
+            val file = File(compose.activity.cacheDir, "restore-${UUID.randomUUID()}.png").apply { writeBytes(gateway.imageBytes) }
+            val uri = androidx.core.content.FileProvider.getUriForFile(compose.activity, "com.antigravity.mobile.fileprovider", file)
+            try {
+                compose.runOnIdle { vm.openConversation("A"); vm.setDraft("A draft"); vm.addImages(listOf(uri)) }
+                compose.waitUntil(10_000) { vm.state.value.attachments.size == 1 }
+                compose.runOnIdle { store.clear(); vm = ChatViewModel(app); store.put("restore", vm) }
+                compose.waitUntil(10_000) { !vm.state.value.isRestoringDraft }
+                assertEquals("恢复最后打开的会话", "A", vm.state.value.selectedConversationId)
+                assertEquals("A draft", vm.state.value.draft)
+                assertEquals(1, vm.state.value.attachments.size)
+                assertArrayEquals(gateway.imageBytes, vm.state.value.attachments.single().bytes)
+            } finally { compose.runOnIdle { store.clear() }; file.delete() }
+        }
+    }
+
+    @Test fun legacyRoutesRefreshAndReadsFailOverWithoutReplayingWrites() {
+        val app = isolatedApplication()
+        val prefs = PreferencesManager(app)
+        val manager = com.antigravity.mobile.data.service.ConnectionManager(app)
+        assertTrue("此测试在模拟器Wi-Fi开启时运行", manager.isWifi)
+        FakeGateway().use { cloud -> FakeGateway().use { lan ->
+            val lanUrl = "http://10.0.2.16:${java.net.URI(lan.url).port}"
+            cloud.endpointsJson = """[{"type":"lan","url":"$lanUrl"},{"type":"cloudflare","url":"http://public.invalid"},{"type":"lan","url":"http://127.0.0.1:9"}]"""
+            prefs.updateEndpoints(active = cloud.url, primaryCloud = cloud.url)
+            prefs.deviceToken = "test-token"
+            val api = ApiClient(app, prefs, manager)
+            val stream = com.antigravity.mobile.data.service.StreamWebSocketClient(prefs, manager)
+            try {
+                runBlocking { assertEquals(lanUrl, manager.probeEndpoints(prefs)) }
+                assertEquals("Bearer test-token", cloud.endpointAuthorization)
+                assertEquals(lanUrl, prefs.lanServerUrl)
+                assertEquals("错误的公网HTTP地址必须被拒绝", cloud.url, prefs.primaryCloudUrl)
+                assertEquals(lanUrl, prefs.gatewayBaseUrl)
+                lan.liveStream = true
+                cloud.liveStream = true
+                prefs.gatewayBaseUrl = cloud.url
+                stream.connect("A")
+                compose.waitUntil(10_000) { stream.connectionStatus.value == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                cloud.failurePath = "/"; cloud.failureCode = 530
+                runBlocking { api.fetchProjects().getOrThrow() }
+                assertEquals("530应该转到已知可达LAN", lanUrl, prefs.gatewayBaseUrl)
+                compose.waitUntil(10_000) { lan.requests.any { it.first.contains("cascade/stream") } &&
+                    stream.connectionStatus.value == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                // A write may have reached the gateway: re-elect the next route, never replay this POST.
+                prefs.gatewayBaseUrl = cloud.url
+                val sends = lan.requests.count { it.first.contains("SendUserCascadeMessage") }
+                runBlocking { assertTrue(ApiClient(app, prefs, com.antigravity.mobile.data.service.ConnectionManager(app))
+                    .sendMessage("A", "must-send-once").isFailure) }
+                assertEquals(sends, lan.requests.count { it.first.contains("SendUserCascadeMessage") })
+                assertEquals(1, cloud.requests.count { it.first.contains("SendUserCascadeMessage") })
+                cloud.failurePath = null; cloud.dropPath = "SendUserCascadeMessage"; prefs.gatewayBaseUrl = cloud.url
+                runBlocking { assertTrue(ApiClient(app, prefs, com.antigravity.mobile.data.service.ConnectionManager(app))
+                    .sendMessage("A", "transport-failure-once").isFailure) }
+                assertEquals(2, cloud.requests.count { it.first.contains("SendUserCascadeMessage") })
+                assertEquals(sends, lan.requests.count { it.first.contains("SendUserCascadeMessage") })
+                // Foreign Wi-Fi: the saved LAN is unavailable, so the public candidate wins again.
+                cloud.dropPath = null; prefs.lanServerUrl = "http://10.0.2.16:1"; cloud.endpointsJson = "[]"
+                runBlocking { assertEquals(cloud.url, manager.probeEndpoints(prefs)) }
+                val reads = lan.requests.count { it.first.startsWith("/gateway/projects") }
+                prefs.lanServerUrl = lanUrl
+                cloud.failurePath = "/gateway/projects"
+                cloud.block = { path -> if (path.startsWith("/gateway/projects")) prefs.deviceToken = "replacement-token" }
+                runBlocking { assertTrue(api.fetchProjects().isFailure) }
+                assertEquals("更换配对时不转发携带旧凭据的请求", reads, lan.requests.count { it.first.startsWith("/gateway/projects") })
+            } finally { stream.close(); manager.stopMonitoring() }
+        } }
+    }
+
+    @Test fun streamRetriesWhenARouteBecomesAvailableWithoutANetworkChange() {
+        val prefs = PreferencesManager(isolatedApplication())
+        val stream = com.antigravity.mobile.data.service.StreamWebSocketClient(prefs)
+        FakeGateway().use { gateway ->
+            gateway.liveStream = true
+            try {
+                stream.connect("A")
+                assertEquals(com.antigravity.mobile.data.service.ConnectionStatus.FAILED, stream.connectionStatus.value)
+                prefs.gatewayBaseUrl = gateway.url
+                compose.waitUntil(10_000) { stream.connectionStatus.value == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+            } finally { stream.close() }
+        }
+    }
+
+    @Test fun interruptedSendBecomesDraftAndForegroundResyncKeepsNewConversation() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true; gateway.liveStream = true
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            prefs.lastConversationId = "A"
+            prefs.setDraftText("A", "edited while sending")
+            prefs.setDraftText("android_pending_send", "interrupted message")
+            val pendingFile = prefs.storeDraftImage(gateway.imageBytes, "image/png")
+            prefs.saveDraftImages("android_pending_send", listOf(pendingFile))
+            prefs.pendingSendTarget = "A"
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("foreground", vm) }
+            val entered = CountDownLatch(1); val release = CountDownLatch(1)
+            try {
+                assertEquals("A", vm.state.value.selectedConversationId)
+                assertEquals("interrupted message\n\nedited while sending", vm.state.value.draft)
+                compose.waitUntil(10_000) { !vm.state.value.isRestoringDraft }
+                assertEquals(1, vm.state.value.attachments.size)
+                assertArrayEquals(gateway.imageBytes, vm.state.value.attachments.single().bytes)
+                assertTrue("清理发送快照不能删除已转入会话草稿的图片", pendingFile.isFile)
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                assertFalse(gateway.requests.any { it.first.contains("SendUserCascadeMessage") })
+                assertNull(prefs.pendingSendTarget)
+                gateway.messageText = "updated while backgrounded"; gateway.running = true
+                compose.runOnIdle { vm.resumeConnection() }
+                compose.waitUntil(10_000) { vm.state.value.messages.any { it.effectiveText == "updated while backgrounded" } && vm.state.value.isRunning }
+                assertEquals("interrupted message\n\nedited while sending", vm.state.value.draft)
+                gateway.block = { if (it.contains("auth/endpoints")) { entered.countDown(); release.await(10, TimeUnit.SECONDS) } }
+                compose.runOnIdle { vm.resumeConnection() }
+                assertTrue(entered.await(5, TimeUnit.SECONDS))
+                compose.runOnIdle { vm.openConversation("B"); vm.setDraft("B draft") }
+                release.countDown()
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                assertEquals("B", vm.state.value.selectedConversationId)
+                assertEquals("B draft", vm.state.value.draft)
+            } finally { release.countDown(); compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun nativeWifiLossAndRecoveryKeepTheDraftAndHistory() {
+        val url = InstrumentationRegistry.getArguments().getString("uxRecoveryUrl")
+        org.junit.Assume.assumeTrue(url != null && android.os.Build.HARDWARE == "ranchu")
+        fun shell(command: String) = android.os.ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand(command)).bufferedReader().use { it.readText() }
+        val wifi = shell("settings get global wifi_on").trim() == "1"
+        val data = shell("settings get global mobile_data").trim() == "1"
+        val app = isolatedApplication()
+        val prefs = PreferencesManager(app).apply { updateEndpoints(lan = url, active = url); deviceToken = "recovery-test-token" }
+        val vm = ChatViewModel(app)
+        val manager = com.antigravity.mobile.data.service.ConnectionManager(app)
+        val api = ApiClient(app, prefs, manager)
+        val store = ViewModelStore().apply { put("native-network", vm) }
+        try {
+            compose.runOnIdle { vm.openConversation("recovery-fixture"); vm.setDraft("断网后仍保留的草稿") }
+            compose.waitUntil(15_000) { !vm.state.value.isLoadingMessages && vm.state.value.messages.size == 2 &&
+                vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+            val messages = vm.state.value.messages
+            shell("svc data disable"); shell("svc wifi disable")
+            compose.waitUntil(15_000) { !manager.isWifi && !manager.isConnectedToNetwork }
+            assertNull("离开Wi-Fi且没有公网候选时，不能继续发往私有LAN", api.currentBaseUrl)
+            compose.runOnIdle { vm.retryMessages() }
+            compose.waitUntil(15_000) { !vm.state.value.isLoadingMessages && vm.state.value.messagesError != null }
+            assertEquals(messages, vm.state.value.messages)
+            assertEquals("断网后仍保留的草稿", vm.state.value.draft)
+            prefs.primaryCloudUrl = "https://unreachable.invalid"
+            assertEquals("无Wi-Fi时应选择公网候选", "https://unreachable.invalid", api.currentBaseUrl)
+            prefs.primaryCloudUrl = null
+            shell("svc wifi enable")
+            compose.waitUntil(30_000) { manager.isWifi && vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED &&
+                vm.state.value.messagesError == null }
+            assertEquals("recovery-fixture", vm.state.value.selectedConversationId)
+            assertEquals("断网后仍保留的草稿", vm.state.value.draft)
+            assertEquals(url, prefs.gatewayBaseUrl)
+        } finally {
+            shell("svc wifi ${if (wifi) "enable" else "disable"}"); shell("svc data ${if (data) "enable" else "disable"}")
+            compose.runOnIdle { store.clear() }; manager.stopMonitoring()
+        }
+    }
+
     @Test fun realGatewayRenamesOnlyADisposableConversation() {
         org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("uxRealGateway") == "true")
         val application = compose.activity.application
@@ -422,12 +648,12 @@ class ChatUxTest {
         bitmap.recycle()
     }
 
-    private fun isolatedApplication(): Application {
-        val namespace = "ux_${UUID.randomUUID()}_"
+    private fun isolatedApplication(namespace: String = "ux_${UUID.randomUUID()}_"): Application {
         val context = object : ContextWrapper(compose.activity.applicationContext) {
             override fun getApplicationContext(): Context = this
             override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences(namespace + name, mode)
             override fun getCacheDir(): File = File(super.getCacheDir(), namespace).apply { mkdirs() }
+            override fun getNoBackupFilesDir(): File = File(super.getNoBackupFilesDir(), namespace).apply { mkdirs() }
         }
         return object : Application() { fun attach(context: Context) { attachBaseContext(context) } }.apply { attach(context) }
     }
@@ -630,6 +856,8 @@ class ChatUxTest {
                 compose.waitUntil(10_000) { !vm.state.value.isReverting && !vm.state.value.isLoadingMessages }
                 assertEquals("original message\n\nunsent draft", vm.state.value.draft)
                 assertTrue(vm.state.value.messages.isEmpty())
+                assertEquals("A", prefs.lastConversationId)
+                assertEquals(vm.state.value.draft, prefs.getDraftText("A"))
                 val payload = gateway.requests.last { it.first.contains("/revert/execute") }.second
                 assertTrue(JSONObject(payload).getBoolean("conversationOnly"))
                 onMain { vm.setPinned("B", false) }; settled()
@@ -687,7 +915,7 @@ class ChatUxTest {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
             gateway.management = true; gateway.userImage = true
-            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
             val vm = ChatViewModel(app)
             val store = ViewModelStore().apply { put("image-revert", vm) }
             try {
@@ -707,6 +935,24 @@ class ChatUxTest {
                 assertEquals("image/png", vm.state.value.attachments.single().mimeType)
                 assertArrayEquals(gateway.imageBytes, vm.state.value.attachments.single().bytes)
                 assertEquals("original message", vm.state.value.draft)
+                assertEquals("A", prefs.lastConversationId)
+                assertEquals("original message", prefs.getDraftText("A"))
+                assertEquals(1, prefs.draftImageCount("A"))
+                compose.runOnIdle { store.clear() }
+                val restored = ChatViewModel(app)
+                val restoredStore = ViewModelStore().apply { put("restored-revert", restored) }
+                try {
+                    compose.waitUntil(10_000) { !restored.state.value.isRestoringDraft && !restored.state.value.isLoadingMessages }
+                    assertEquals("A", restored.state.value.selectedConversationId)
+                    assertEquals("original message", restored.state.value.draft)
+                    assertArrayEquals(gateway.imageBytes, restored.state.value.attachments.single().bytes)
+                    compose.runOnIdle { restored.closeConversation() }
+                    assertNull(prefs.lastConversationId)
+                    compose.runOnIdle { restored.openConversation("A") }
+                    compose.waitUntil(10_000) { !restored.state.value.isRestoringDraft }
+                    assertEquals("original message", restored.state.value.draft)
+                    assertArrayEquals(gateway.imageBytes, restored.state.value.attachments.single().bytes)
+                } finally { compose.runOnIdle { restoredStore.clear() } }
             } finally { compose.runOnIdle { store.clear() } }
         }
     }
@@ -738,6 +984,7 @@ class ChatUxTest {
                 gateway.block = { path -> if (path.startsWith("/gateway/cascade/messages")) { requested.countDown(); release.await(10, TimeUnit.SECONDS) } }
                 main { vm.retryMessages() }
                 assertTrue(requested.await(10, TimeUnit.SECONDS))
+                compose.waitUntil(10_000) { vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
                 gateway.emit("A", """{"cascadeId":"A","status":"RUNNING","messages":[{"id":"step-0","type":"user","text":"new stream"}]}""")
                 compose.waitUntil(10_000) { vm.state.value.messages.any { it.effectiveText == "new stream" } }
                 release.countDown()
@@ -1347,6 +1594,9 @@ class ChatUxTest {
         @Volatile var failureCode = 500
         @Volatile var liveStream = false
         @Volatile var messageText = "original message"
+        @Volatile var endpointsJson = "[]"
+        @Volatile var endpointAuthorization = ""
+        @Volatile var dropPath: String? = null
         private val streams = CopyOnWriteArrayList<Pair<java.net.Socket, String>>()
         fun dropStreams() { streams.forEach { it.first.close() }; streams.clear() }
         fun emit(id: String, text: String) {
@@ -1390,6 +1640,7 @@ class ChatUxTest {
                                 if (header.isEmpty()) break
                                 if (header.startsWith("Content-Length:", true)) length = header.substringAfter(':').trim().toInt()
                                 if (header.startsWith("Sec-WebSocket-Key:", true)) webSocketKey = header.substringAfter(':').trim()
+                                if (path.startsWith("/api/v1/auth/endpoints") && header.startsWith("Authorization:", true)) endpointAuthorization = header.substringAfter(':').trim()
                             }
                             val chars = CharArray(length)
                             var read = 0
@@ -1397,6 +1648,7 @@ class ChatUxTest {
                             val requestBody = String(chars).toByteArray(Charsets.ISO_8859_1).toString(Charsets.UTF_8)
                             requests += path to requestBody
                             block(path)
+                            if (dropPath?.let(path::contains) == true) return@use
                             if (liveStream && path.startsWith("/gateway/cascade/stream") && failurePath?.let(path::contains) != true) {
                                 val accept = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-1")
                                     .digest((webSocketKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray()), android.util.Base64.NO_WRAP)
@@ -1420,6 +1672,7 @@ class ChatUxTest {
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
                                 path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
+                                path.startsWith("/api/v1/auth/endpoints") -> """{"endpoints":$endpointsJson,"platform":"windows"}"""
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->

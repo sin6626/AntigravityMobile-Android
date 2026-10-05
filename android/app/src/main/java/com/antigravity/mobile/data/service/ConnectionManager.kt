@@ -18,8 +18,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.json.JSONObject
 import java.net.URI
 import java.util.concurrent.TimeUnit
@@ -59,6 +62,8 @@ class ConnectionManager(private val context: Context) {
         .readTimeout(2500, TimeUnit.MILLISECONDS)
         .writeTimeout(2500, TimeUnit.MILLISECONDS)
         .addInterceptor(LanCleartextSecurityInterceptor())
+        .addInterceptor(ApiTraceInterceptor())
+        .followRedirects(false)
         .build()
 
     private val _endpointStatuses = MutableStateFlow<Map<String, EndpointHealthStatus>>(emptyMap())
@@ -73,6 +78,8 @@ class ConnectionManager(private val context: Context) {
     private var isMonitoring = false
     private var lastWasCellular: Boolean? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private val probeMutex = Mutex()
+    private var lastProbedNetwork: Network? = null
     private val routeChangeListeners = java.util.concurrent.CopyOnWriteArrayList<(String) -> Unit>()
 
     fun addOnRouteChangedListener(listener: (String) -> Unit) {
@@ -258,10 +265,50 @@ class ConnectionManager(private val context: Context) {
         }
     }
 
-    suspend fun probeEndpoints(prefs: PreferencesManager): String? = withContext(Dispatchers.IO) {
-        if (_isProbing.value) return@withContext prefs.gatewayBaseUrl
+    // Endpoint discovery is authenticated against an already paired origin, never a scanned subnet.
+    private fun refreshEndpoints(prefs: PreferencesManager) {
+        val token = prefs.deviceToken?.takeIf { it.isNotBlank() } ?: return
+        val sources = (listOfNotNull(prefs.gatewayBaseUrl) + prefs.candidateEndpoints).distinct()
+        for (base in sources) {
+            if (!isWifi && isLanHost(extractHost(base))) continue
+            try {
+                val request = Request.Builder().url("${base.trimEnd('/')}/api/v1/auth/endpoints")
+                    .header("Authorization", "Bearer $token").header("x-device-token", token).build()
+                httpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful || prefs.deviceToken != token) return@use
+                    val body = JSONObject(response.body?.string() ?: "{}")
+                    val endpoints = body.optJSONArray("endpoints") ?: return@use
+                    for (index in 0 until endpoints.length()) {
+                        val item = endpoints.optJSONObject(index) ?: continue
+                        val url = item.optString("url").trim().trimEnd('/').toHttpUrlOrNull() ?: continue
+                        if (url.encodedPath != "/" || url.query != null || url.fragment != null ||
+                            url.username.isNotEmpty() || url.password.isNotEmpty() ||
+                            url.host in setOf("localhost", "::1") || url.host.startsWith("127.")) continue
+                        if (!url.isHttps && !isLanHost(url.host) && !isTailscaleHost(url.host)) continue
+                        val clean = url.toString().trimEnd('/')
+                        when (item.optString("type").lowercase()) {
+                            "lan" -> if (isLanHost(url.host)) prefs.lanServerUrl = clean
+                            "cloudflare", "ddns" -> if (url.isHttps) prefs.primaryCloudUrl = clean
+                            "relay" -> prefs.relayServerUrl = clean
+                            "ipv6" -> prefs.ipv6ServerUrl = clean
+                            "primary" -> if (isLanHost(url.host)) prefs.lanServerUrl = clean else if (url.isHttps) prefs.primaryCloudUrl = clean
+                        }
+                    }
+                    (body.optString("platform").takeIf { it.isNotBlank() } ?: body.optString("os").takeIf { it.isNotBlank() })
+                        ?.let { prefs.gatewayPlatform = it }
+                    return
+                }
+            } catch (_: Exception) { /* Keep the last paired candidates when discovery is unavailable. */ }
+        }
+    }
 
-        val isCellularNow = isCellular || !isWifi
+    suspend fun probeEndpoints(prefs: PreferencesManager): String? = withContext(Dispatchers.IO) { probeMutex.withLock {
+        val token = prefs.deviceToken
+        val network = connectivityManager?.activeNetwork
+        refreshEndpoints(prefs)
+        if (prefs.deviceToken != token) return@withLock prefs.gatewayBaseUrl
+
+        val isCellularNow = !isWifi
 
         // 智能路由候选集：
         // 1. 局域网：若为蜂窝网络状态，直接跳过！
@@ -292,7 +339,11 @@ class ConnectionManager(private val context: Context) {
             }
         }
 
-        if (endpointsToTest.isEmpty()) return@withContext null
+        if (endpointsToTest.isEmpty()) {
+            lastProbedNetwork = network
+            _endpointStatuses.value = _endpointStatuses.value.mapValues { it.value.copy(isReachable = false) }
+            return@withLock null
+        }
 
         _isProbing.value = true
         try {
@@ -303,6 +354,10 @@ class ConnectionManager(private val context: Context) {
             }
 
             val map = results.associateBy { it.urlString }
+            if (prefs.deviceToken != token) return@withLock prefs.gatewayBaseUrl
+            val previousStatuses = _endpointStatuses.value
+            val networkChanged = lastProbedNetwork != network
+            lastProbedNetwork = network
             _endpointStatuses.value = map
             _lastProbeTime.value = System.currentTimeMillis()
 
@@ -335,20 +390,22 @@ class ConnectionManager(private val context: Context) {
             if (selected == null && cloud != null) {
                 selected = reachable.firstOrNull { it.urlString.trimEnd('/') == cloud }?.urlString ?: cloud
             }
+            if (selected == null) selected = reachable.firstOrNull()?.urlString
 
             if (selected != null) {
                 val oldBase = prefs.gatewayBaseUrl
                 prefs.gatewayBaseUrl = selected
-                if (!oldBase.equals(selected, ignoreCase = true)) {
+                if (!oldBase.equals(selected, ignoreCase = true) || networkChanged ||
+                    previousStatuses[selected]?.isReachable == false && map[selected]?.isReachable == true) {
                     routeChangeListeners.forEach { it.invoke(selected) }
                 }
-                return@withContext selected
+                return@withLock selected
             }
-            return@withContext prefs.gatewayBaseUrl
+            return@withLock prefs.gatewayBaseUrl
         } finally {
             _isProbing.value = false
         }
-    }
+    } }
 
     suspend fun testGatewayStatus(baseUrl: String): Result<String> = withContext(Dispatchers.IO) {
         val clean = baseUrl.trim().trimEnd('/')
@@ -433,17 +490,10 @@ class ConnectionManager(private val context: Context) {
             if (clean == "127.0.0.1" || clean == "localhost" || clean == "::1" || clean.endsWith(".local")) {
                 return true
             }
-            if (clean.startsWith("192.168.") || clean.startsWith("10.") || clean.startsWith("127.")) {
-                return true
-            }
-            if (clean.startsWith("172.")) {
-                val parts = clean.split(".")
-                if (parts.size >= 2) {
-                    val second = parts[1].toIntOrNull() ?: 0
-                    if (second in 16..31) return true
-                }
-            }
-            return false
+            val parts = clean.split('.').map { it.toIntOrNull() }
+            if (parts.size != 4 || parts.any { it == null || it !in 0..255 }) return false
+            return parts[0] in setOf(10, 127) || parts[0] == 192 && parts[1] == 168 ||
+                parts[0] == 172 && parts[1]!! in 16..31
         }
 
         fun isIpv6Host(host: String): Boolean {

@@ -470,7 +470,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                             onRemoveImage = viewModel::removeImage,
                             onSend = viewModel::send,
-                            isSending = state.isSending || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
+                            isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
                             isRunning = state.isRunning,
                             isStopping = state.isStopping,
                             onStop = viewModel::stopGeneration,

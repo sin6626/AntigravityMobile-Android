@@ -60,8 +60,8 @@ class ApiClient(
 ) {
     val currentBaseUrl: String?
         get() {
-            val avoidLan = (connectionManager?.isCellular ?: false) || !(connectionManager?.isWifi ?: true)
-            return prefs.getEffectiveGatewayUrl(avoidLan, connectionManager) ?: prefs.gatewayBaseUrl
+            val avoidLan = !(connectionManager?.isWifi ?: true)
+            return prefs.getEffectiveGatewayUrl(avoidLan, connectionManager)
         }
 
     val json = JsonConfig.instance
@@ -79,6 +79,7 @@ class ApiClient(
             response
         }
         .addInterceptor(ApiTraceInterceptor())
+        .retryOnConnectionFailure(false)
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .writeTimeout(30, TimeUnit.SECONDS)
@@ -196,17 +197,14 @@ class ApiClient(
                         }
                     }
 
-                    if (customUrl != null) {
-                        prefs.updateEndpoints(custom = candidate, active = candidate)
-                    } else {
-                        prefs.updateEndpoints(
+                    prefs.updateEndpoints(
                             lan = lanUrl,
                             ipv6 = ipv6Url,
                             relay = relayUrl,
+                            custom = customUrl,
                             active = candidate,
                             primaryCloud = cloudUrl
                         )
-                    }
                     prefs.deviceToken = pairResp.deviceToken
                     prefs.deviceId = pairResp.deviceId
                     val plat = pairResp.platform ?: pairResp.os ?: info.platform ?: info.os
@@ -1125,72 +1123,47 @@ class ApiClient(
     }
 }
 
-/**
- * OkHttp Interceptor that automatically fails over from an unreachable LAN gateway
- * to the primary cloud domain (Cloudflare HTTPS tunnel) when on external/foreign Wi-Fi.
- */
+/** Re-elect a route on transport/5xx failure; only replay reads. Writes may already have executed. */
 class RouteFailoverInterceptor(
     private val prefs: PreferencesManager,
     private val connectionManager: ConnectionManager?
 ) : okhttp3.Interceptor {
     override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
         val request = chain.request()
+        val token = prefs.deviceToken
         val originalUrl = request.url
-        val originalHost = originalUrl.host
-
-        // If communicating with LAN host, shorten connect timeout to 1800ms so off-network failover is snappy
-        val isLan = ConnectionManager.isLanHost(originalHost)
+        val isGateway = prefs.candidateEndpoints.any { candidate ->
+            val endpoint = candidate.toHttpUrlOrNull()
+            endpoint != null && endpoint.scheme == originalUrl.scheme && endpoint.host == originalUrl.host && endpoint.port == originalUrl.port
+        }
+        val isRead = request.method in setOf("GET", "HEAD") ||
+            request.method == "POST" && originalUrl.encodedPath == "/api/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories"
+        val isLan = ConnectionManager.isLanHost(originalUrl.host)
         val initialChain = if (isLan) {
             chain.withConnectTimeout(1800, TimeUnit.MILLISECONDS)
         } else {
             chain
         }
 
+        var response: Response? = null
+        var failure: IOException? = null
         try {
-            return initialChain.proceed(request)
+            response = initialChain.proceed(request)
+            if (response.code < 500 || !isGateway) return response
         } catch (e: IOException) {
-            if (e is GatewayAuthorizationException) throw e
-            val isGateway = listOf(prefs.gatewayBaseUrl, prefs.primaryCloudUrl, prefs.lanServerUrl,
-                prefs.ipv6ServerUrl, prefs.relayServerUrl, prefs.customServerUrl).any { candidate ->
-                val endpoint = candidate?.toHttpUrlOrNull()
-                endpoint != null && endpoint.scheme == originalUrl.scheme && endpoint.host == originalHost && endpoint.port == originalUrl.port
-            }
-            if (!isGateway) throw e
-            val cloud = prefs.primaryCloudUrl?.trim()?.trimEnd('/')
-            if (!cloud.isNullOrBlank()) {
-                val cloudHost = ConnectionManager.extractHost(cloud)
-                if (!originalHost.equals(cloudHost, ignoreCase = true)) {
-                    Log.w("ApiClient", "Request to $originalHost failed (${e.message}). Failing over to cloud domain: $cloud")
-                    try {
-                        val cloudUri = java.net.URI(if (!cloud.contains("://")) "https://$cloud" else cloud)
-                        val newScheme = cloudUri.scheme ?: "https"
-                        val newHost = cloudUri.host ?: cloudHost
-                        val newPort = if (cloudUri.port != -1) cloudUri.port else (if (newScheme.equals("https", ignoreCase = true)) 443 else 80)
-
-                        val fallbackUrl = originalUrl.newBuilder()
-                            .scheme(newScheme)
-                            .host(newHost)
-                            .port(newPort)
-                            .build()
-
-                        val fallbackRequest = request.newBuilder()
-                            .url(fallbackUrl)
-                            .build()
-
-                        val fallbackResponse = chain.withConnectTimeout(10, TimeUnit.SECONDS).proceed(fallbackRequest)
-                        if (fallbackResponse.isSuccessful || fallbackResponse.code < 500) {
-                            Log.i("ApiClient", "Failover to $cloud succeeded! Updating active gateway to $cloud")
-                            prefs.gatewayBaseUrl = cloud
-                            connectionManager?.notifyRouteChanged(cloud)
-                        }
-                        return fallbackResponse
-                    } catch (fallbackEx: Exception) {
-                        if (fallbackEx is GatewayAuthorizationException) throw fallbackEx
-                        Log.w("ApiClient", "Failover to $cloud also failed: ${fallbackEx.message}")
-                    }
-                }
-            }
-            throw e
+            if (e is GatewayAuthorizationException || !isGateway) throw e
+            failure = e
         }
+        if (prefs.deviceToken != token) return response ?: throw checkNotNull(failure)
+        val selected = if (connectionManager != null) kotlinx.coroutines.runBlocking { connectionManager.probeEndpoints(prefs) }
+            else prefs.primaryCloudUrl
+        val endpoint = selected?.toHttpUrlOrNull()
+        val different = endpoint != null && (endpoint.scheme != originalUrl.scheme || endpoint.host != originalUrl.host || endpoint.port != originalUrl.port)
+        if (!isRead || !different || prefs.deviceToken != token) return response ?: throw checkNotNull(failure)
+        response?.close()
+        val fallbackUrl = originalUrl.newBuilder().scheme(endpoint!!.scheme).host(endpoint.host).port(endpoint.port).build()
+        val fallback = chain.withConnectTimeout(10, TimeUnit.SECONDS).proceed(request.newBuilder().url(fallbackUrl).build())
+        if (fallback.isSuccessful && connectionManager == null) prefs.gatewayBaseUrl = selected
+        return fallback
     }
 }

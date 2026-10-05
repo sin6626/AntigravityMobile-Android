@@ -11,6 +11,17 @@ import com.antigravity.mobile.ui.demo.ChatDemoScreen
 
 class MainActivity : ComponentActivity() {
     private val chatViewModel by viewModels<ChatViewModel>()
+    private var wasBackgrounded = false
+
+    override fun onResume() {
+        super.onResume()
+        if (wasBackgrounded) { wasBackgrounded = false; chatViewModel.resumeConnection() }
+    }
+
+    override fun onPause() {
+        wasBackgrounded = true
+        super.onPause()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
