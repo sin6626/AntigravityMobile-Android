@@ -80,3 +80,23 @@ cloudflared 源码在初始发现阶段建立边缘地址池，重试从池中�
 - [Cloudflare 1033 说明](https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/error-1033/)：CF 找不到健康的 cloudflared 连接器。
 - [Mihomo DNS 配置](https://wiki.metacubex.one/config/dns/)：Fake-IP 网段和过滤规则。
 - [cloudflared 边缘地址池源码](https://github.com/cloudflare/cloudflared/blob/master/edgediscovery/edgediscovery.go)：初始发现和地址池重试。
+
+## 2026-10-05：睡眠唤醒后530与未转局域网
+
+用户吃饭回来，真机请求报530。既有只读脚本`python android/design/.verification/cf-health-check.py`两次复现：本地200、公网530且正文1033，gateway_ok=true、tunnel_ok=false；连接器20241/ready为503、readyConnections=0。电脑独立公网请求也失败，故已定位到电脑与Cloudflare之间的隧道连接，不需要以手机VPN作为唯一解释。
+
+Windows System日志Kernel-Power事件42显示18:11:00进入睡眠，原因Application API；Power-Troubleshooter事件1记录18:33:24.580唤醒。WLAN日志8001于18:33:28.688记录重新连接。网关日志在18:33:25起记录四条CF连接断开；Mihomo在18:33:35报自动检测网络接口为空及interface not found。时间线支持睡眠断网、唤醒后隧道重连延迟是本次触发过程；没有证据指认调用睡眠API的具体应用，也未精确证明后续每次重试失败的内部原因。
+
+DNS返回198.41.192.*与198.41.200.*真实地址，持久/运行配置仍保留argotunnel.com、cftunnel.com例外；此次不是已确认的Fake-IP旧映射问题。Mihomo只读控制器采样确认7844连接走geolocation-!cn代理链。没有切节点、关TUN、改路由或重启服务。连接器自行恢复4条连接；18:43:56、18:44:01、18:44:06、18:44:12四次本地/公网/ready均200、连接数4，记录位于忽略目录`android/design/.verification/cf-recovery-20261005.json`。mgy35724、cloudflared19856、Mihomo2412及各启动时间均保持不变。短时间恢复不能证明长期稳定，未替用户验证真实业务发送。
+
+用户随后指出手机与电脑同网络，应能选择LAN。只读诊断确认：手机192.168.101.107/24、电脑192.168.101.120/24；手机ADB shell经nc请求`http://192.168.101.120:58900/healthz`返回200，说明该路径当时可达，不等同于已验证App UID下全部VPN行为。只读取`agy_standard_prefs.xml`中的路由键，发现LAN、自定义、IPv6、relay为空，active与primaryCloud均为原公网地址；没有读取加密设备凭据。后端本地`GET /api/v1/auth/endpoints`返回cloudflare和正确lan地址，表明已有接口能提供候选。
+
+客户端缺口与证据：
+
+- `ApiClient.pair()`已解析配对响应中的候选，但customUrl分支仅调用updateEndpoints(custom, active)。updateEndpoints会先清除所有路由槽，LAN因此不能保存；普通分支才保存LAN等字段。当前手机LAN确实为空，但没有当次配对历史日志，不断言本次必然由这个分支造成。
+- Android没有调用`/api/v1/auth/endpoints`的配对后刷新流程。ConnectionManager只能探测本地已有候选，无法补取缺失或过期的LAN地址；当前Wi-Fi下也无法选择空候选。
+- RouteFailoverInterceptor只处理IOException，并尝试primaryCloud。HTTP530是正常返回的错误响应，没有进入异常分支，也不会主动从公网转LAN。网络回调触发探测时仍然缺少LAN候选。
+
+修复方向是复用现有候选接口与选路器：配对时保留完整可信候选，已配对启动/网络变化时刷新候选，Wi-Fi下优先选择可达LAN；公网失败时触发重新探测与后续请求切换。写操作不能仅凭5xx跨地址盲目重发，以免重复发送/回退。此轮只定位并提出方案，没有修改选路代码、设备配对、VPN或电脑睡眠设置。
+
+用户随后确认手机已成功连接，并要求继续排查。为验证代码路径而非仅看源码，临时在既有ChatUxTest中加入隔离配对探针，使用独立偏好与FakeGateway，仅在emulator-5554运行`am instrument -w -e class com.antigravity.mobile.ui.demo.ChatUxTest#diagnosticCustomPairMustRetainKnownLanCandidate com.antigravity.mobile.test/androidx.test.runner.AndroidJUnitRunner`。输入明确包含LAN候选，调用真实ApiClient.pair(info, customUrl)，配对成功；随后断言应保存LAN，实际得到null，测试3.373秒明确失败（lan-custom-pair-baseline.log）。这证明自定义分支确实丢掉已知候选，仍不能还原手机当次配对历史。临时测试已从源码撤回，片段lan-custom-pair-probe.kt与日志仅保留忽略目录作为待修复依据，不将未修复的失败测试提交为正常测试。没有重新配对真机或操作真实网关的配对接口。
