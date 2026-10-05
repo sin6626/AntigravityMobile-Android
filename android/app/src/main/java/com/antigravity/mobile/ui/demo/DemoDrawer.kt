@@ -250,8 +250,8 @@ private fun DrawerConversation(item: ConversationItem, indent: androidx.compose.
         var menuOpen by remember { mutableStateOf(false) }
         Box(Modifier.fillMaxWidth()) {
             Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { selected = current }
-                .background(if (current || menuOpen) Color(0xFFF1F1F1) else Color.Transparent, RoundedCornerShape(14.dp))
                 .quietClickable(RoundedCornerShape(14.dp), pressedColor = Color(0xFFF1F1F1),
+                    highlighted = current || menuOpen,
                     onLongClick = { menuOpen = true }, onClick = onClick)
                 .padding(start = indent + 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), contentAlignment = Alignment.CenterStart) {
                 Text(item.displayTitle, color = Ink, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)

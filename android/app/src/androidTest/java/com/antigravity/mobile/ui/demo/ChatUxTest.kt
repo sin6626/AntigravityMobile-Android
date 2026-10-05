@@ -7,7 +7,6 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
@@ -440,8 +439,15 @@ class ChatUxTest {
         var opened = ""
         compose.setContent { DemoDrawer(Modifier.fillMaxSize(), chats, emptyList(), false, false,
             { opened = it }, {}, {}, {}, {}, selectedConversationId = "A") }
-        fun rowShade() = compose.onNodeWithText("待操作会话").captureToImage().toPixelMap().let {
-            it[4, it.height / 2].red
+        fun rowShade(title: String = "待操作会话"): Float {
+            compose.waitForIdle()
+            Thread.sleep(80) // Inspect the presented native frame, including popup focus changes.
+            val node = compose.onNodeWithText(title).fetchSemanticsNode()
+            val bounds = node.boundsInWindow.translate(node.positionOnScreen - node.positionInWindow)
+            val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            val shade = android.graphics.Color.red(bitmap.getPixel((bounds.left + 4).toInt(), bounds.center.y.toInt())) / 255f
+            bitmap.recycle()
+            return shade
         }
         assertTrue(rowShade() > .99f)
         compose.onNodeWithText("待操作会话").performTouchInput { down(center) }
@@ -451,7 +457,26 @@ class ChatUxTest {
         assertTrue("Pressed row must show a gray background: ${rowShade()}", rowShade() < .97f)
         compose.onNodeWithText("待操作会话").performTouchInput { cancel() }
         assertTrue(rowShade() > .99f)
-        compose.onNodeWithText("待操作会话").performTouchInput { longClick() }
+        fun holdAndRelease(title: String) {
+            compose.mainClock.autoAdvance = false
+            try {
+                compose.onNodeWithText(title).performTouchInput { down(center) }
+                compose.mainClock.advanceTimeBy(240)
+                val pressedShade = rowShade(title)
+                compose.mainClock.advanceTimeBy(400)
+                compose.onNodeWithText("重命名").assertExists()
+                repeat(4) {
+                    compose.mainClock.advanceTimeBy(32)
+                    assertEquals("Long press must retain the pressed gray through menu entry", pressedShade, rowShade(title), .004f)
+                }
+                compose.onNodeWithText(title).performTouchInput { up() }
+                repeat(4) {
+                    compose.mainClock.advanceTimeBy(32)
+                    assertEquals("Finger release must not flash the gray highlight", pressedShade, rowShade(title), .004f)
+                }
+            } finally { compose.mainClock.autoAdvance = true }
+        }
+        holdAndRelease("待操作会话")
         listOf("置顶", "重命名", "归档", "删除会话").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
         assertEquals("", opened)
         compose.onNodeWithText("当前会话").assertIsSelected()
@@ -461,6 +486,11 @@ class ChatUxTest {
         compose.onNodeWithText("重命名").assertDoesNotExist()
         assertTrue(rowShade() > .99f)
         compose.onNodeWithText("当前会话").assertIsSelected()
+        holdAndRelease("当前会话")
+        assertEquals("", opened)
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithText("重命名").assertDoesNotExist()
+        assertTrue("Selected row must remain gray after dismissal", rowShade("当前会话") < .97f)
         compose.onNodeWithText("待操作会话").performClick()
         assertEquals("B", opened)
         compose.onNodeWithText("会话 30").performScrollTo().performTouchInput { longClick() }

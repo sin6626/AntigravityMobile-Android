@@ -16,8 +16,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.MutableTransitionState
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -48,6 +50,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -433,11 +436,25 @@ internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, t
     } }
     androidx.compose.ui.window.Popup(popupPositionProvider = position, onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.PopupProperties(focusable = expanded)) {
-        AnimatedVisibility(visibility,
-            enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.96f, transformOrigin = origin),
-            exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.98f, transformOrigin = origin)) {
-        androidx.compose.material3.Surface(shape = RoundedCornerShape(20.dp), color = Color.White,
-            shadowElevation = 6.dp, modifier = Modifier.width(220.dp).then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier)) {
+        AnimatedVisibility(visibility, enter = EnterTransition.None, exit = ExitTransition.None) {
+        val progress by transition.animateFloat(
+            transitionSpec = { tween(if (targetState == EnterExitState.Visible) 160 else 100) }, label = "menu appearance") {
+            if (it == EnterExitState.Visible) 1f else 0f
+        }
+        val shape = RoundedCornerShape(20.dp)
+        androidx.compose.material3.Surface(shape = shape, color = Color.White,
+            modifier = Modifier.width(220.dp).graphicsLayer {
+                alpha = progress
+                scaleX = .96f + .04f * progress
+                scaleY = scaleX
+                transformOrigin = origin
+                // Keep the fading shadow outside the card's rectangular bounds.
+                compositingStrategy = CompositingStrategy.ModulateAlpha
+                this.shape = shape
+                shadowElevation = 6.dp.toPx() * progress
+                ambientShadowColor = Color.Black.copy(alpha = progress)
+                spotShadowColor = ambientShadowColor
+            }.then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier)) {
             Column(Modifier.padding(vertical = 6.dp)) {
                 if (showTitle) Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled && expanded,
                     pressedColor = Color(0xFFF1F1F1), onClick = onRename)

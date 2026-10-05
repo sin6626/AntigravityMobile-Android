@@ -121,6 +121,65 @@ class MotionTest {
         compose.activity.runOnUiThread { compose.activity.window.decorView.clearFocus() }
     }
 
+    @Test fun menuShadowFollowsOpeningClosingAndReversal() {
+        val open = mutableStateOf(false)
+        compose.setContent {
+            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White), contentAlignment = Alignment.TopCenter) {
+                Box(Modifier.fillMaxWidth(.85f), contentAlignment = Alignment.TopEnd) {
+                    RoundIconButton("more_vert", "打开测试菜单", { open.value = true })
+                    ConversationActionsMenu(open.value, { open.value = false }, "阴影验收", false, false, true, {}, {}, {}, {})
+                }
+            }
+        }
+        val density = compose.activity.resources.displayMetrics.density
+        var menuRow: androidx.compose.ui.semantics.SemanticsNode? = null
+        fun shadow(): Int {
+            compose.waitForIdle()
+            Thread.sleep(150) // Present this held transition frame in the native window.
+            val node = if (open.value) compose.onNodeWithText("删除会话").fetchSemanticsNode().also { menuRow = it }
+                else checkNotNull(menuRow)
+            val row = node.boundsInWindow.translate(node.positionOnScreen - node.positionInWindow)
+            val scale = row.width / (220f * density)
+            val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())
+            val result = (1..8).maxOf { gap -> 255 - android.graphics.Color.red(bitmap.getPixel(
+                row.center.x.toInt(), (row.bottom + (6 * scale + gap) * density).toInt())) }
+            bitmap.recycle()
+            return result
+        }
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread { open.value = true }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(80)
+            val early = shadow()
+            screenshot("menu-shadow-opening-early.png")
+            compose.mainClock.advanceTimeBy(48)
+            val later = shadow()
+            screenshot("menu-shadow-opening-later.png")
+            compose.mainClock.advanceTimeBy(96)
+            val resting = shadow()
+            screenshot("menu-shadow-resting.png")
+            assertTrue("Shadow must already be visible during entry: $early / $later / $resting", early > 0)
+            assertTrue("Shadow must grow during entry: $early / $later / $resting", later > early && resting >= later)
+            compose.runOnUiThread { open.value = false }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(32)
+            val closing = shadow()
+            screenshot("menu-shadow-closing.png")
+            assertTrue("Shadow must fade before dismissal: $closing / $resting", closing in 1 until resting)
+            compose.runOnUiThread { open.value = true }
+            compose.mainClock.advanceTimeByFrame()
+            val reversing = shadow()
+            screenshot("menu-shadow-reversing.png")
+            assertTrue("Reversal must keep a partial shadow: $reversing / $resting", reversing in 1 until resting)
+            compose.mainClock.advanceTimeBy(240)
+            assertTrue(kotlin.math.abs(shadow() - resting) <= 2)
+            compose.runOnUiThread { open.value = false }
+            compose.mainClock.advanceTimeBy(240)
+            compose.onNodeWithText("删除会话").assertDoesNotExist()
+        } finally { compose.mainClock.autoAdvance = true }
+    }
+
     @Test fun menuExitStopsActionsAndCanReverseBeforeFinishing() {
         val open = mutableStateOf(false)
         var pins = 0
