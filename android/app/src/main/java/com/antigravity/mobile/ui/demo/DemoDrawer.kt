@@ -29,10 +29,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.key
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
@@ -67,17 +67,19 @@ internal fun DemoDrawer(
     selectedConversationId: String? = null,
     conversationsError: String? = null, projectsError: String? = null,
     onRetryConversations: () -> Unit = {}, onRetryProjects: () -> Unit = {},
+    busy: Set<String> = emptySet(),
+    onRename: (ConversationItem) -> Unit = {}, onPin: (ConversationItem) -> Unit = {},
+    onArchive: (ConversationItem) -> Unit = {}, onDelete: (ConversationItem) -> Unit = {},
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
     var projectsOpen by remember { mutableStateOf(false) }
     var expandedProjects by remember { mutableStateOf(setOf<String>()) }
     Column(modifier = modifier.background(Color.White).padding(start = 28.dp, end = 22.dp)) {
-        val backdrop = rememberGraphicsLayer()
         val density = LocalDensity.current
         var headerHeight by remember { mutableStateOf(105.dp) }
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            Column(Modifier.fillMaxSize().recordBackdrop(backdrop, headerHeight).verticalScroll(rememberScrollState()).padding(top = headerHeight)) {
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(top = headerHeight)) {
                 DrawerMenuItem("chat_bubble", "聊天", onNewChat)
                 DrawerMenuItem("archive", "已归档", onArchived)
                 DrawerMenuItem("folder", "项目") { projectsOpen = !projectsOpen }
@@ -115,7 +117,8 @@ internal fun DemoDrawer(
                                     color = SecondaryInk, fontSize = 14.sp)
                             }
                             visibleChats.forEach { item ->
-                                DrawerConversation(item.displayTitle, indent = 45.dp, current = item.id == selectedConversationId) {
+                                DrawerConversation(item, indent = 45.dp, current = item.id == selectedConversationId,
+                                    enabled = item.id !in busy, onRename = onRename, onPin = onPin, onArchive = onArchive, onDelete = onDelete) {
                                     onOpenProjectConversation(item.id)
                                 }
                             }
@@ -127,7 +130,8 @@ internal fun DemoDrawer(
                 val pinned = conversations.filter { it.isPinned && it.displayTitle.contains(searchText, true) }
                 if (pinned.isNotEmpty()) {
                     DrawerSection("置顶")
-                    pinned.forEach { item -> DrawerConversation(item.displayTitle, current = item.id == selectedConversationId) {
+                    pinned.forEach { item -> DrawerConversation(item, current = item.id == selectedConversationId,
+                        enabled = item.id !in busy, onRename = onRename, onPin = onPin, onArchive = onArchive, onDelete = onDelete) {
                         if (item.isPureChat) onOpenConversation(item.id) else onOpenProjectConversation(item.id)
                     } }
                     Spacer(Modifier.height(20.dp))
@@ -141,10 +145,11 @@ internal fun DemoDrawer(
                     if (conversationsError == null) Text(if (searchText.isBlank()) "暂无最近会话" else "没有匹配的最近会话", color = SecondaryInk, fontSize = 16.sp)
                 }
                 filtered.forEach { item ->
-                    DrawerConversation(item.displayTitle, current = item.id == selectedConversationId) { onOpenConversation(item.id) }
+                    DrawerConversation(item, current = item.id == selectedConversationId,
+                        enabled = item.id !in busy, onRename = onRename, onPin = onPin, onArchive = onArchive, onDelete = onDelete) { onOpenConversation(item.id) }
                 }
             }
-            FrostedTopBar(backdrop, headerHeight) {
+            GradientTopBar(headerHeight) {
                 Column(Modifier.onSizeChanged { headerHeight = with(density) { it.height.toDp() } }) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(top = 33.dp, bottom = 22.dp),
@@ -152,7 +157,7 @@ internal fun DemoDrawer(
                     ) {
                         Text("Multigravity", modifier = Modifier.weight(1f), color = Ink, fontSize = 27.sp,
                             fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        RoundIconButton("search", "搜索", { searchOpen = !searchOpen }, size = 50.dp)
+                        RoundIconButton("search", "搜索", { searchOpen = !searchOpen })
                     }
                     if (searchOpen) {
                         BasicTextField(
@@ -206,25 +211,26 @@ internal fun DemoDrawer(
 @Composable
 private fun DrawerMenuItem(icon: String, title: String, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().height(58.dp).quietClickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).quietClickable(RoundedCornerShape(14.dp),
+            pressedColor = Color(0xFFF1F1F1), onClick = onClick).padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Symbol(icon, size = 28)
+        Symbol(icon, size = 24)
         Spacer(Modifier.width(18.dp))
-        Text(title, color = Ink, fontSize = 19.sp)
+        Text(title, color = Ink, fontSize = 17.sp)
     }
 }
 
 @Composable
 private fun DrawerSection(title: String) {
-    Text(title, modifier = Modifier.padding(bottom = 13.dp), color = Ink, fontSize = 17.sp,
+    Text(title, modifier = Modifier.padding(bottom = 12.dp), color = Ink, fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold)
 }
 
 @Composable
 private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 51.dp).semantics { stateDescription = if (expanded) "已展开" else "已折叠" }.quietClickable(onClick = onClick)
+        modifier = Modifier.fillMaxWidth().heightIn(min = 51.dp).semantics { stateDescription = if (expanded) "已展开" else "已折叠" }.quietClickable(RoundedCornerShape(14.dp), pressedColor = Color(0xFFF1F1F1), onClick = onClick)
             .padding(start = 28.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -237,17 +243,24 @@ private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit)
 }
 
 @Composable
-private fun DrawerConversation(title: String, indent: androidx.compose.ui.unit.Dp = 0.dp, current: Boolean = false, onClick: () -> Unit) {
-    Box(Modifier.fillMaxWidth().heightIn(min = 52.dp).semantics { selected = current }
-            .background(if (current) Color(0xFFF1F1F1) else Color.Transparent, RoundedCornerShape(14.dp)).quietClickable(onClick = onClick)
-            .padding(start = indent + 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), contentAlignment = Alignment.CenterStart) {
-    Text(
-        title,
-        color = Ink,
-        fontSize = 17.sp,
-        maxLines = 1,
-        overflow = TextOverflow.Ellipsis,
-    )
+private fun DrawerConversation(item: ConversationItem, indent: androidx.compose.ui.unit.Dp = 0.dp,
+    current: Boolean, enabled: Boolean, onRename: (ConversationItem) -> Unit, onPin: (ConversationItem) -> Unit,
+    onArchive: (ConversationItem) -> Unit, onDelete: (ConversationItem) -> Unit, onClick: () -> Unit) {
+    key(item.id) {
+        var menuOpen by remember { mutableStateOf(false) }
+        Box(Modifier.fillMaxWidth()) {
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics { selected = current }
+                .background(if (current || menuOpen) Color(0xFFF1F1F1) else Color.Transparent, RoundedCornerShape(14.dp))
+                .quietClickable(RoundedCornerShape(14.dp), pressedColor = Color(0xFFF1F1F1),
+                    onLongClick = { menuOpen = true }, onClick = onClick)
+                .padding(start = indent + 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp), contentAlignment = Alignment.CenterStart) {
+                Text(item.displayTitle, color = Ink, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            ConversationActionsMenu(menuOpen, { menuOpen = false }, item.displayTitle, item.isPinned, item.isArchived,
+                enabled && !item.id.startsWith("local:"), { menuOpen = false; onRename(item) },
+                { menuOpen = false; onPin(item) }, { menuOpen = false; onArchive(item) },
+                { menuOpen = false; onDelete(item) }, showTitle = false)
+        }
     }
 }
 

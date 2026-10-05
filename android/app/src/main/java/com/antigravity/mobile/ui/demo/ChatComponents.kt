@@ -46,20 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.BlurEffect
-import androidx.compose.ui.graphics.TileMode
-import androidx.compose.ui.graphics.CompositingStrategy
-import androidx.compose.ui.graphics.Paint
-import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.graphics.layer.GraphicsLayer
-import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.onFocusChanged
@@ -85,43 +74,22 @@ import androidx.compose.material3.TextButton
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.window.PopupPositionProvider
 
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.foundation.text.KeyboardOptions
 import com.antigravity.mobile.R
 
-internal fun Modifier.recordBackdrop(layer: GraphicsLayer, headerHeight: Dp) = drawWithContent {
-    layer.record { this@drawWithContent.drawContent() }
-    val edge = (headerHeight + 24.dp).toPx()
-    // Mask only the top strip so sharp source text cannot show through the blurred overlay.
-    clipRect(bottom = edge) {
-        drawContext.canvas.saveLayer(Rect(0f, 0f, size.width, edge), Paint())
-        drawLayer(layer)
-        drawRect(Brush.verticalGradient(0f to Color.Transparent, .65f to Color.Transparent, 1f to Color.White,
-            endY = edge), blendMode = BlendMode.DstIn)
-        drawContext.canvas.restore()
-    }
-    clipRect(top = edge) { drawLayer(layer) }
-}
-
 @Composable
-internal fun FrostedTopBar(backdrop: GraphicsLayer, height: Dp, content: @Composable () -> Unit) {
-    Box(Modifier.fillMaxWidth().height(height + 24.dp)) {
-        Box(Modifier.matchParentSize().graphicsLayer {
-            compositingStrategy = CompositingStrategy.Offscreen
-        }.drawWithCache {
-            val fade = Brush.verticalGradient(0f to Color.White, .65f to Color.White, 1f to Color.Transparent)
-            onDrawWithContent {
-                drawContent()
-                drawRect(fade, blendMode = BlendMode.DstIn)
-            }
-        }) {
-            Box(Modifier.matchParentSize().graphicsLayer {
-                renderEffect = BlurEffect(12.dp.toPx(), 12.dp.toPx(), TileMode.Clamp)
-            }.drawWithContent { drawLayer(backdrop) })
-            Box(Modifier.matchParentSize().background(Brush.verticalGradient(
-                0f to Color.White.copy(alpha = .98f), .6f to Color.White.copy(alpha = .86f), 1f to Color.White.copy(alpha = .45f))))
-        }
+internal fun GradientTopBar(height: Dp, content: @Composable () -> Unit) {
+    Box(Modifier.fillMaxWidth().height(height + 16.dp)) {
+        Box(Modifier.matchParentSize().background(Brush.verticalGradient(
+            0f to Color.White.copy(alpha = .94f), .35f to Color.White.copy(alpha = .80f),
+            .75f to Color.White.copy(alpha = .38f), 1f to Color.Transparent)))
         content()
     }
 }
@@ -160,6 +128,7 @@ internal fun Symbol(
     size: Int = 28,
     color: Color = Ink,
 ) {
+    val iconSize = with(LocalDensity.current) { size.dp.toSp() }
     Text(
         text = symbolCodepoints.getValue(name),
         modifier = modifier,
@@ -167,8 +136,8 @@ internal fun Symbol(
         maxLines = 1,
         style = TextStyle(
             fontFamily = symbolFont,
-            fontSize = size.sp,
-            lineHeight = size.sp,
+            fontSize = iconSize,
+            lineHeight = iconSize,
         ),
     )
 }
@@ -178,24 +147,18 @@ internal fun RoundIconButton(
     icon: String,
     label: String,
     onClick: () -> Unit,
-    size: Dp = 52.dp,
-    iconSize: Int = 29,
+    size: Dp = 40.dp,
+    iconSize: Int = 24,
     background: Color = Color.White,
 ) {
-    Surface(
-        onClick = onClick,
-        modifier = Modifier.size(size).semantics { contentDescription = label },
-        shape = CircleShape,
-        color = background,
-        contentColor = Ink,
-        shadowElevation = 2.dp,
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            if (icon == "arrow_back") {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null,
-                    modifier = Modifier.size(iconSize.dp))
-            } else {
-                Symbol(icon, size = iconSize)
+    Box(Modifier.size(48.dp).semantics { contentDescription = label }
+        .quietClickable(CircleShape, onClick = onClick),
+        contentAlignment = Alignment.Center) {
+        Surface(modifier = Modifier.size(size), shape = CircleShape, color = background, shadowElevation = 1.dp) {
+            Box(contentAlignment = Alignment.Center) {
+                if (icon == "arrow_back") {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(iconSize.dp))
+                } else Symbol(icon, size = iconSize)
             }
         }
     }
@@ -214,20 +177,26 @@ internal fun EmptyTopBar(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        RoundIconButton("menu", "打开菜单", onMenu, size = 52.dp)
+        RoundIconButton("menu", "打开菜单", onMenu)
         val density = LocalDensity.current
-        Box(Modifier.width(184.dp).height(52.dp).background(Color(0xFFF4F4F4), RoundedCornerShape(32.dp))) {
-            Box(Modifier.padding(4.dp).width(88.dp).height(44.dp)
-                .graphicsLayer { translationX = with(density) { (88.dp * tabPosition.coerceIn(0f, 1f)).toPx() } }
-                .background(Color.White, RoundedCornerShape(28.dp)))
-            Row(Modifier.padding(horizontal = 4.dp, vertical = 2.dp)) {
-                Box(Modifier.width(88.dp).height(48.dp).semantics { selected = tabPosition < 0.5f }.quietClickable(RoundedCornerShape(28.dp), onClick = onChat),
-                    contentAlignment = Alignment.Center) { Text("聊天", fontSize = 18.sp, color = Ink) }
-                Box(Modifier.width(88.dp).height(48.dp).semantics { selected = tabPosition >= 0.5f }.quietClickable(RoundedCornerShape(28.dp), onClick = onProjects),
-                    contentAlignment = Alignment.Center) { Text("项目", fontSize = 18.sp, color = Ink) }
+        Box(Modifier.width(160.dp).height(48.dp)) {
+            Box(Modifier.fillMaxWidth().height(40.dp).align(Alignment.Center)
+                .background(Color(0xFFF4F4F4), RoundedCornerShape(24.dp)))
+            Box(Modifier.align(Alignment.CenterStart).padding(start = 4.dp).width(76.dp).height(32.dp)
+                .graphicsLayer { translationX = with(density) { (76.dp * tabPosition.coerceIn(0f, 1f)).toPx() } }
+                .background(Color.White, RoundedCornerShape(20.dp)))
+            Row(Modifier.padding(horizontal = 4.dp)) {
+                Box(Modifier.width(76.dp).height(48.dp).semantics { selected = tabPosition < 0.5f }
+                    .quietClickable(RoundedCornerShape(24.dp), onClick = onChat), contentAlignment = Alignment.Center) {
+                    Text("聊天", fontSize = 16.sp, color = Ink)
+                }
+                Box(Modifier.width(76.dp).height(48.dp).semantics { selected = tabPosition >= 0.5f }
+                    .quietClickable(RoundedCornerShape(24.dp), onClick = onProjects), contentAlignment = Alignment.Center) {
+                    Text("项目", fontSize = 16.sp, color = Ink)
+                }
             }
         }
-        RoundIconButton("chat_bubble", "语音聊天，暂未开放", onUnsupported, size = 52.dp)
+        RoundIconButton("chat_bubble", "语音聊天，暂未开放", onUnsupported)
     }
 }
 
@@ -444,26 +413,42 @@ private fun ComposerTextField(
 @Composable
 internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, title: String,
     pinned: Boolean, archived: Boolean, enabled: Boolean, onRename: () -> Unit,
-    onPin: () -> Unit, onArchive: () -> Unit, onDelete: () -> Unit) {
+    onPin: () -> Unit, onArchive: () -> Unit, onDelete: () -> Unit, showTitle: Boolean = true) {
     val visibility = remember { MutableTransitionState(false) }
     visibility.targetState = expanded
     if (!expanded && visibility.isIdle && !visibility.currentState) return
-    androidx.compose.ui.window.Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss,
+    var origin by remember { mutableStateOf(TransformOrigin(1f, 0f)) }
+    val margin = with(LocalDensity.current) { 8.dp.roundToPx() }
+    val position = remember(margin) { object : PopupPositionProvider {
+        override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize,
+            layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset {
+            val below = anchorBounds.bottom + margin
+            val opensBelow = below + popupContentSize.height <= windowSize.height - margin
+            origin = TransformOrigin(if (layoutDirection == LayoutDirection.Ltr) 1f else 0f, if (opensBelow) 0f else 1f)
+            val x = if (layoutDirection == LayoutDirection.Ltr) anchorBounds.right - popupContentSize.width else anchorBounds.left
+            val y = if (opensBelow) below else anchorBounds.top - popupContentSize.height - margin
+            return IntOffset(x.coerceIn(margin, (windowSize.width - popupContentSize.width - margin).coerceAtLeast(margin)),
+                y.coerceIn(margin, (windowSize.height - popupContentSize.height - margin).coerceAtLeast(margin)))
+        }
+    } }
+    androidx.compose.ui.window.Popup(popupPositionProvider = position, onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.PopupProperties(focusable = expanded)) {
         AnimatedVisibility(visibility,
-            enter = fadeIn(tween(150)) + scaleIn(tween(150), initialScale = 0.96f, transformOrigin = TransformOrigin(1f, 0f)),
-            exit = fadeOut(tween(110)) + scaleOut(tween(110), targetScale = 0.96f, transformOrigin = TransformOrigin(1f, 0f))) {
-        androidx.compose.material3.Surface(shape = RoundedCornerShape(28.dp), color = Color.White,
-            shadowElevation = 12.dp, modifier = Modifier.width(244.dp).then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier)) {
-            Column(Modifier.padding(vertical = 10.dp)) {
-                Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled && expanded, onClick = onRename)
-                    .semantics { contentDescription = "重命名" }.padding(horizontal = 22.dp, vertical = 15.dp),
+            enter = fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.96f, transformOrigin = origin),
+            exit = fadeOut(tween(100)) + scaleOut(tween(100), targetScale = 0.98f, transformOrigin = origin)) {
+        androidx.compose.material3.Surface(shape = RoundedCornerShape(20.dp), color = Color.White,
+            shadowElevation = 6.dp, modifier = Modifier.width(220.dp).then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier)) {
+            Column(Modifier.padding(vertical = 6.dp)) {
+                if (showTitle) Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled && expanded,
+                    pressedColor = Color(0xFFF1F1F1), onClick = onRename)
+                    .semantics { contentDescription = "重命名" }.padding(horizontal = 18.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, color = Color(0xFF8A8A8A), fontSize = 16.sp, maxLines = 2,
+                    Text(title, color = Color(0xFF8A8A8A), fontSize = 14.sp, maxLines = 2,
                         overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(12.dp)); Symbol("edit", size = 18, color = SecondaryInk)
                 }
                 if (!archived) ConversationMenuRow("push_pin", if (pinned) "取消置顶" else "置顶", enabled && expanded, onPin)
+                if (!showTitle) ConversationMenuRow("edit", "重命名", enabled && expanded, onRename)
                 ConversationMenuRow(if (archived) "unarchive" else "archive", if (archived) "恢复会话" else "归档", enabled && expanded, onArchive)
                 ConversationMenuRow("delete", "删除会话", enabled && expanded, onDelete, Color(0xFFCC2332))
             }
@@ -474,9 +459,10 @@ internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, t
 
 @Composable
 private fun ConversationMenuRow(icon: String, text: String, enabled: Boolean, onClick: () -> Unit, color: Color = Ink) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).quietClickable(enabled = enabled, onClick = onClick)
-        .alpha(if (enabled) 1f else 0.45f).padding(horizontal = 22.dp), verticalAlignment = Alignment.CenterVertically) {
-        Symbol(icon, size = 25, color = color); Spacer(Modifier.width(20.dp))
-        Text(text, color = color, fontSize = 18.sp)
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).quietClickable(enabled = enabled,
+        pressedColor = Color(0xFFF1F1F1), onClick = onClick)
+        .alpha(if (enabled) 1f else 0.45f).padding(horizontal = 18.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Symbol(icon, size = 22, color = color); Spacer(Modifier.width(14.dp))
+        Text(text, color = color, fontSize = 16.sp)
     }
 }

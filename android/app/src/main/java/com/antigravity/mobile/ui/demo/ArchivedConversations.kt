@@ -8,6 +8,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -24,7 +26,7 @@ internal fun ArchivedConversations(conversations: List<ConversationItem>, loadin
     Column(Modifier.fillMaxSize()) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             RoundIconButton("arrow_back", "返回", onBack)
-            Text("已归档", color = Ink, fontSize = 22.sp, modifier = Modifier.weight(1f))
+            Text("已归档", color = Ink, fontSize = 20.sp, modifier = Modifier.weight(1f))
             TextButton(onClick = onRefresh, enabled = !loading) { Text("刷新", color = AccentBlue) }
         }
         OutlinedTextField(query, { query = it }, placeholder = { Text("搜索归档会话") }, singleLine = true,
@@ -48,11 +50,14 @@ internal fun ArchivedConversations(conversations: List<ConversationItem>, loadin
                 var menuOpen by remember { mutableStateOf(false) }
                 Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f).quietClickable { onOpen(item.id) }.padding(vertical = 12.dp)) {
-                        Text(item.displayTitle, color = Ink, fontSize = 17.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(item.displayTitle, color = Ink, fontSize = 16.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         if (item.workspaceName != "Chat") Text(item.workspaceName, color = SecondaryInk, fontSize = 13.sp)
                     }
                     Box {
-                        RoundIconButton("more_vert", "归档会话操作", { menuOpen = true })
+                        Box(Modifier.size(48.dp).semantics { contentDescription = "归档会话操作" }
+                            .quietClickable(androidx.compose.foundation.shape.CircleShape,
+                                pressedColor = androidx.compose.ui.graphics.Color(0xFFF1F1F1), onClick = { menuOpen = true }),
+                            contentAlignment = Alignment.Center) { Symbol("more_vert", size = 22) }
                         ConversationActionsMenu(menuOpen, { menuOpen = false }, item.displayTitle, item.isPinned, true,
                             item.id !in busy, { menuOpen = false; onRename(item) }, {},
                             { menuOpen = false; onRestore(item.id) }, { menuOpen = false; onDelete(item.id) })

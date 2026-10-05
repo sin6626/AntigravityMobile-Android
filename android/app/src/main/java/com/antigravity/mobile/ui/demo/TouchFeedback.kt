@@ -11,7 +11,10 @@ import androidx.compose.ui.unit.dp
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.ui.graphics.RectangleShape
@@ -26,13 +29,18 @@ import androidx.compose.ui.graphics.graphicsLayer
 internal fun Modifier.quietClickable(
     shape: Shape = RectangleShape,
     enabled: Boolean = true,
+    pressedColor: Color? = null,
+    onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
 ): Modifier = composed {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val alpha by animateFloatAsState(if (pressed) 0.72f else 1f, tween(90), label = "press")
-    this.clip(shape).graphicsLayer(alpha = alpha)
-        .clickable(interactionSource = interaction, indication = null, enabled = enabled, onClick = onClick)
+    val alpha by animateFloatAsState(if (pressed && pressedColor == null) 0.72f else 1f, tween(90), label = "press")
+    val background by animateColorAsState(if (pressed) pressedColor ?: Color.Transparent else Color.Transparent,
+        tween(90), label = "press background")
+    this.clip(shape).background(background).graphicsLayer(alpha = alpha)
+        .combinedClickable(interactionSource = interaction, indication = null, enabled = enabled,
+            onLongClick = onLongClick, onClick = onClick)
 }
 
 /** Readiness delays the first entrance; it never hides content already on screen. */

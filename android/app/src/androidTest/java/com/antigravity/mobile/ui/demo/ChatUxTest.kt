@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
@@ -430,6 +431,107 @@ class ChatUxTest {
             override fun getCacheDir(): File = File(super.getCacheDir(), namespace).apply { mkdirs() }
         }
         return object : Application() { fun attach(context: Context) { attachBaseContext(context) } }.apply { attach(context) }
+    }
+
+    @Test fun drawerPressAndLongPressKeepSelectionAndUseContextActions() {
+        val chats = listOf(com.antigravity.mobile.data.model.ConversationItem("A", "当前会话"),
+            com.antigravity.mobile.data.model.ConversationItem("B", "待操作会话")) +
+            (1..30).map { com.antigravity.mobile.data.model.ConversationItem("row-$it", "会话 $it") }
+        var opened = ""
+        compose.setContent { DemoDrawer(Modifier.fillMaxSize(), chats, emptyList(), false, false,
+            { opened = it }, {}, {}, {}, {}, selectedConversationId = "A") }
+        fun rowShade() = compose.onNodeWithText("待操作会话").captureToImage().toPixelMap().let {
+            it[4, it.height / 2].red
+        }
+        assertTrue(rowShade() > .99f)
+        compose.onNodeWithText("待操作会话").performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(240)
+        compose.waitForIdle()
+        saveScreenshot("polish-drawer-pressed.png")
+        assertTrue("Pressed row must show a gray background: ${rowShade()}", rowShade() < .97f)
+        compose.onNodeWithText("待操作会话").performTouchInput { cancel() }
+        assertTrue(rowShade() > .99f)
+        compose.onNodeWithText("待操作会话").performTouchInput { longClick() }
+        listOf("置顶", "重命名", "归档", "删除会话").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
+        assertEquals("", opened)
+        compose.onNodeWithText("当前会话").assertIsSelected()
+        assertTrue("Context row must stay gray while its menu is open", rowShade() < .97f)
+        saveScreenshot("polish-drawer-context.png")
+        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithText("重命名").assertDoesNotExist()
+        assertTrue(rowShade() > .99f)
+        compose.onNodeWithText("当前会话").assertIsSelected()
+        compose.onNodeWithText("待操作会话").performClick()
+        assertEquals("B", opened)
+        compose.onNodeWithText("会话 30").performScrollTo().performTouchInput { longClick() }
+        listOf("置顶", "重命名", "归档", "删除会话").forEach { compose.onNodeWithText(it).assertIsDisplayed() }
+        saveScreenshot("polish-drawer-bottom-menu.png")
+    }
+
+    @Test fun drawerContextManagementTargetsOtherConversationAndPreservesDraft() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("drawer-context", vm) }
+            fun settled() = compose.waitUntil(10_000) { !vm.state.value.isLoadingConversations && vm.state.value.busyConversations.isEmpty() }
+            fun longPress(title: String) { compose.onNodeWithText(title).performTouchInput { longClick() } }
+            fun keepDraft() { assertEquals("A", vm.state.value.selectedConversationId); assertEquals("A的未发送草稿", vm.state.value.draft) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.runOnIdle { vm.openConversation("A"); vm.setDraft("A的未发送草稿") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.conversations.size == 2 }
+                compose.onNodeWithContentDescription("打开菜单").performClick()
+                longPress("B")
+                keepDraft()
+                compose.onNodeWithText("置顶").performClick()
+                settled()
+                assertTrue(vm.state.value.conversations.first { it.id == "B" }.isPinned)
+                keepDraft()
+                longPress("B")
+                compose.onNodeWithText("取消置顶").performClick()
+                settled()
+                assertFalse(vm.state.value.conversations.first { it.id == "B" }.isPinned)
+                longPress("B")
+                compose.onNodeWithText("重命名").performClick()
+                compose.onNode(hasSetTextAction() and hasText("B")).performTextReplacement("侧栏操作标题")
+                compose.onNodeWithText("保存").performClick()
+                settled()
+                compose.waitUntil(10_000) { vm.state.value.conversations.first { it.id == "B" }.title == "侧栏操作标题" }
+                keepDraft()
+                longPress("侧栏操作标题")
+                compose.onNodeWithText("归档").performClick()
+                settled()
+                assertTrue(vm.state.value.conversations.first { it.id == "B" }.isArchived)
+                keepDraft()
+                compose.onNodeWithText("已归档").performClick()
+                compose.onNodeWithText("侧栏操作标题").assertIsDisplayed()
+                compose.onNodeWithContentDescription("归档会话操作").performClick()
+                saveScreenshot("polish-archive-menu.png")
+                compose.onNodeWithText("恢复会话").performClick()
+                settled()
+                assertFalse(vm.state.value.conversations.first { it.id == "B" }.isArchived)
+                compose.onNodeWithContentDescription("返回").performClick()
+                compose.onNodeWithContentDescription("打开菜单").performClick()
+                compose.onNode(hasText("A") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                keepDraft()
+                compose.onNodeWithContentDescription("打开菜单").performClick()
+                longPress("侧栏操作标题")
+                compose.onNodeWithText("删除会话").performClick()
+                compose.onNodeWithText("删除会话？").assertIsDisplayed()
+                compose.onNodeWithText("取消").performClick()
+                assertFalse(gateway.requests.any { it.first.contains("DeleteCascadeTrajectory") })
+                longPress("侧栏操作标题")
+                compose.onNodeWithText("删除会话").performClick()
+                compose.onNodeWithText("删除").performClick()
+                settled()
+                val request = gateway.requests.last { it.first.contains("DeleteCascadeTrajectory") }.second
+                assertEquals("B", JSONObject(request).getString("cascadeId"))
+                keepDraft()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
     }
 
     @Test fun archiveScreenAndMenuUseOnlyTheRequestedActions() {
@@ -949,7 +1051,7 @@ class ChatUxTest {
         }
     }
 
-    @Test fun frostedHeadersKeepControlsFixedWhileListsScroll() {
+    @Test fun gradientHeadersKeepControlsFixedWhileListsScroll() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
             gateway.liveStream = true
@@ -967,22 +1069,25 @@ class ChatUxTest {
                 compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.connectionStatus ==
                     com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
                 val messages = org.json.JSONArray((1..30).map { JSONObject().put("id", "message-$it").put("type", if (it % 2 == 1) "user" else "agent")
-                    .put("text", "## 阅读段落 $it\n\n这是顶部渐变的滚动验收内容。文字应在进入顶部时柔和模糊，按钮保持清晰。") })
+                    .put("text", "## 阅读段落 $it\n\n这是顶部渐变的滚动验收内容。文字应在进入顶部时逐渐淡化，按钮保持清晰。") })
                 gateway.emit("A", JSONObject().put("type", "init").put("cascadeId", "A").put("status", "IDLE")
                     .put("isFullSnapshot", true).put("messages", messages).toString())
                 compose.waitUntil(10_000) { vm.state.value.messages.size == 30 }
                 val header = compose.onNodeWithContentDescription("打开菜单").fetchSemanticsNode().boundsInRoot
+                compose.onNodeWithContentDescription("打开菜单").assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                    .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
                 compose.onNode(hasScrollToIndexAction()).performScrollToIndex(6)
                 assertEquals(header, compose.onNodeWithContentDescription("打开菜单").fetchSemanticsNode().boundsInRoot)
-                saveScreenshot("frosted-conversation.png")
+                saveScreenshot("gradient-conversation.png")
                 compose.onNodeWithContentDescription("更多选项").performClick()
                 compose.onNodeWithText("置顶").assertIsDisplayed()
+                saveScreenshot("polish-conversation-menu.png")
                 compose.onNodeWithText("置顶").performClick()
                 compose.runOnIdle { drawerOnly.value = true }
                 val title = compose.onNodeWithText("Multigravity").fetchSemanticsNode().boundsInRoot
                 compose.onNode(hasScrollAction()).performTouchInput { swipeUp() }
                 assertEquals(title, compose.onNodeWithText("Multigravity").fetchSemanticsNode().boundsInRoot)
-                saveScreenshot("frosted-drawer.png")
+                saveScreenshot("gradient-drawer.png")
                 compose.onNodeWithContentDescription("搜索").performClick()
                 compose.onNode(hasSetTextAction()).performTextInput("历史会话 2")
                 compose.onNodeWithContentDescription("清除搜索").assertIsDisplayed().performClick()
@@ -1246,7 +1351,7 @@ class ChatUxTest {
                     val socket = try { server.accept() } catch (_: Exception) { break }
                     thread(isDaemon = true) {
                         try { socket.use {
-                            val reader = it.getInputStream().bufferedReader()
+                            val reader = it.getInputStream().bufferedReader(Charsets.ISO_8859_1)
                             val path = reader.readLine()?.split(' ')?.getOrNull(1) ?: return@use
                             var length = 0
                             var webSocketKey = ""
@@ -1259,7 +1364,8 @@ class ChatUxTest {
                             val chars = CharArray(length)
                             var read = 0
                             while (read < length) { val n = reader.read(chars, read, length - read); if (n < 0) break; read += n }
-                            requests += path to String(chars)
+                            val requestBody = String(chars).toByteArray(Charsets.ISO_8859_1).toString(Charsets.UTF_8)
+                            requests += path to requestBody
                             block(path)
                             if (liveStream && path.startsWith("/gateway/cascade/stream") && failurePath?.let(path::contains) != true) {
                                 val accept = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-1")
@@ -1270,10 +1376,10 @@ class ChatUxTest {
                                 return@use
                             }
                             if (path.contains("CancelCascadeInvocation") && failurePath?.let(path::contains) != true)
-                                stopped += JSONObject(String(chars)).getString("cascadeId")
+                                stopped += JSONObject(requestBody).getString("cascadeId")
                             if (management && failurePath?.let(path::contains) != true) {
                                 if (path.contains("UpdateConversationAnnotations")) {
-                                    val update = JSONObject(String(chars))
+                                    val update = JSONObject(requestBody)
                                     val key = update.getJSONArray("cascadeIds").getString(0)
                                     val ann = annotations.getOrPut(key) { JSONObject() }
                                     val changes = update.getJSONObject("annotations")

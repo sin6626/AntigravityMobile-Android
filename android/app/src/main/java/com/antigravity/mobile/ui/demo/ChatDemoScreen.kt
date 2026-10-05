@@ -15,7 +15,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.pager.HorizontalPager
@@ -187,6 +186,11 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 selectedConversationId = state.selectedConversationId,
                 conversationsError = state.conversationsError, projectsError = state.projectsError,
                 onRetryConversations = viewModel::refreshConversations, onRetryProjects = viewModel::refreshProjects,
+                busy = state.busyConversations,
+                onRename = { item -> renameConversationId = item.id; renameTitle = item.title; showRename = true },
+                onPin = { item -> viewModel.setPinned(item.id, !item.isPinned) },
+                onArchive = { item -> viewModel.setArchived(item.id, true) },
+                onDelete = { item -> deleteConversationId = item.id; showDeleteConfirm = true },
                 onOpenConversation = { id ->
                     archivedOpen = false; openedFromArchive = false
                     openedFromProject = false
@@ -236,13 +240,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     onDelete = { deleteConversationId = it; showDeleteConfirm = true }, entranceReady = !drawerState.isOpen)
             } else if (state.selectedConversationId != null) {
                 key(state.selectedConversationId) {
-                    val backdrop = rememberGraphicsLayer()
-                    var topBarHeight by remember { mutableStateOf(68.dp) }
+                    var topBarHeight by remember { mutableStateOf(64.dp) }
                     val refreshState = rememberPullToRefreshState()
                     Box(Modifier.weight(1f)) {
                         PullToRefreshBox(isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
                             onRefresh = viewModel::retryMessages, state = refreshState,
-                            modifier = Modifier.fillMaxSize().recordBackdrop(backdrop, topBarHeight),
+                            modifier = Modifier.fillMaxSize(),
                             indicator = {
                                 PullToRefreshDefaults.Indicator(state = refreshState,
                                     isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
@@ -280,7 +283,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                 },
                             )
                         }
-                        FrostedTopBar(backdrop, topBarHeight) {
+                        GradientTopBar(topBarHeight) {
                             Box(Modifier.onSizeChanged { topBarHeight = with(density) { it.height.toDp() } }) {
                                 ConversationTopBar(
                                     returnToProjects = openedFromProject || openedFromArchive,
@@ -545,8 +548,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         if (showDeleteConfirm) {
             AlertDialog(
                 onDismissRequest = { showDeleteConfirm = false },
-                title = { Text("删除当前会话？") },
-                text = { Text("这条会话会从网关中删除。") },
+                title = { Text("删除会话？") },
+                text = { Text(state.conversations.firstOrNull { it.id == deleteConversationId }?.displayTitle ?: "未命名会话",
+                    maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 confirmButton = {
                     TextButton(onClick = {
                         showDeleteConfirm = false

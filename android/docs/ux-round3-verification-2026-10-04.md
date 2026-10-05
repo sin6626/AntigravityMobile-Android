@@ -196,3 +196,24 @@ Undo 的设备问题通过只读对照确认：同一闲置会话在运行中的
 - 最终1.5倍字体3项通过28.651秒，涵盖完整返回的像素检查、共享形变及导航，`composer-shadow-continuity-font15.log`。
 
 人工核对早期/中间/反向/静止及项目页返回中的合成截图，证据只留忽略目录 `android/design/.verification/`：`composer-home-shadow-early.png`、`composer-home-morphing.png`、`composer-home-shadow-returning.png`、`composer-home-restored.png`、`composer-home-shadow-reappearing.png`。只操作 emulator-5554，font_scale恢复1.0，未触碰USB真机、网关、配对或真实用户对话；不将虚拟时钟中间帧检查描述为真机帧率/性能验收。APK为 `android/app/build/outputs/apk/debug/app-debug.apk`。
+
+## 浅渐变、列表尺寸与长按管理（2026-10-05）
+
+从9c2e53e继续，用户已授权实施六项细节调整，并明确字号只针对侧栏、归档列表与菜单。顶部使用40dp小圆底、24dp图标、48dp点击区域；归档行改为22dp裸三个点、48dp点击区域。聊天正文和输入框字号保留，字体图标按dp显示，避免系统文字缩放同时放大图标。
+
+两处顶部改为浅白渐变，移除BlurEffect和正文记录/重绘；底部只延伸16dp，透明度从.94/.80/.38到0，原文字保持清晰并逐渐淡出。实际高度测量、搜索展开、列表初始留白和下拉刷新避让沿用。原Gemini骨架屏、首页输入框形变与连续阴影未改。
+
+共享会话菜单宽244→220dp、圆角28→20dp、阴影12→6dp、操作文字18→16sp、图标28→22dp。打开160ms淡入并从.96缩放到1，关闭100ms淡出并从1轻收缩到.98；根据锚点与窗口空间选择向下或向上，缩放原点也随方向变化。退出阶段禁止点击，快速关闭/重开仍由既有MutableTransitionState处理。
+
+侧栏标题16sp，分组15sp，主导航17sp；会话仍单行省略、左对齐、垂直居中，原项目缩进保留。按压90ms过渡到浅灰，松手恢复；长按菜单展示期间目标行持续灰底，已选中行保持其高亮。长按提供置顶/取消置顶、重命名、归档、删除，复用既有ViewModel/API和忙碌/本地会话保护；不会先打开目标会话。删除二次确认显示目标标题，避免将其他会话误称当前会话。
+
+验收全部在emulator-5554执行，使用隔离偏好与合成会话：
+
+- 主包、测试包与8项既有单测通过，ui-polish-1005-build3.log。
+- 普通字号8项通过33.949秒，ui-polish-1005-final.log：灰底像素、长按保持高亮/关闭、底部会话菜单完整显示；管理B时保持A和未发送中文草稿，置顶/取消置顶、中文重命名、归档、恢复、删除取消及删除目标ID；归档操作与删除返回；搜索/项目展开；页面/草稿/键盘；顶部滚动及输入栏阴影正反向/完全返回；菜单退出禁止触发与中途反向。
+- 1.5倍字号5项通过25.757秒，ui-polish-1005-font15.log，覆盖上述长按管理、菜单、顶部/阴影和页面导航；顶部按钮语义边界至少48×48dp。字号恢复1.0后最终2项通过13.851秒，ui-polish-1005-normal-last.log。
+- 人工核对普通及大字号合成截图：polish-conversation-menu.png、polish-archive-menu.png、polish-drawer-context.png、polish-drawer-bottom-menu.png及font15版本、gradient-conversation.png、gradient-drawer.png。证据只保存在android/design/.verification/，未对外发布。
+
+首轮夹具读取Content-Length时误按UTF-8字符数等待，中文重命名导致超时。测试网关改为一字节一字符读取后按UTF-8解码；生产网络层和后端未改。按压像素检查需推进Compose时钟跨过滚动容器的按压延迟；保留中途截图及灰度断言，没有弱化为只测点击回调。菜单上下定位由底部真实长按截图及全部操作可见断言覆盖。删除检查验证取消不调用及目标ID正确，夹具未模拟删除后列表移除；列表删除导航另用已有回归覆盖。
+
+最终主包已安装模拟器，font_scale恢复1.0，没有触碰USB真机、配对、真实用户对话或运行中的网关。不宣称真机视觉尺寸、帧率或TalkBack专项验收。APK：android/app/build/outputs/apk/debug/app-debug.apk。
