@@ -68,6 +68,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.animation.Crossfade
@@ -217,6 +218,9 @@ internal fun ConversationTopBar(
     onPin: () -> Unit = {},
     onArchive: () -> Unit = {},
     leadingDescription: String = if (returnToProjects) "返回项目列表" else "打开菜单",
+    modelLabel: String? = null,
+    onChooseModel: () -> Unit = {},
+    modelEnabled: Boolean = true,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -229,6 +233,9 @@ internal fun ConversationTopBar(
             leadingDescription,
             onLeading,
         )
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+            modelLabel?.let { ModelChoice(it, onChooseModel, modelEnabled) }
+        }
         Row(
             modifier = Modifier.background(Color.White, RoundedCornerShape(32.dp)),
             verticalAlignment = Alignment.CenterVertically,
@@ -241,6 +248,17 @@ internal fun ConversationTopBar(
                     { menuOpen = false; onArchive() }, { menuOpen = false; onDelete() })
             }
         }
+    }
+}
+
+@Composable
+internal fun ModelChoice(label: String, onClick: () -> Unit, enabled: Boolean = true) {
+    Row(Modifier.heightIn(min = 48.dp).quietClickable(enabled = enabled, onClick = onClick)
+        .padding(horizontal = 12.dp).semantics { contentDescription = "选择模型" },
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = SecondaryInk, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false))
+        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = SecondaryInk, modifier = Modifier.size(16.dp))
     }
 }
 

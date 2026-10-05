@@ -15,6 +15,7 @@ import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
 import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
+import com.antigravity.mobile.data.model.ChatModel
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
@@ -59,6 +60,13 @@ data class ChatUiState(
     val isSubmittingInteraction: Boolean = false,
     val conversations: List<ConversationItem> = emptyList(),
     val projects: List<ProjectItem> = emptyList(),
+    val models: List<ChatModel> = emptyList(),
+    val isLoadingModels: Boolean = false,
+    val modelsError: String? = null,
+    val selectedModelId: String? = null,
+    val activeModelId: String? = null,
+    val modelOverrideId: String? = null,
+    val creatingProjectKey: String? = null,
     val selectedConversationId: String? = null,
     val messages: List<GatewayMessageItem> = emptyList(),
     val outgoing: List<OutgoingMessage> = emptyList(),
@@ -146,6 +154,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             prefs.lastConversationId?.takeUnless { it.startsWith("local:") || prefs.isDeletedConversation(it) }?.let(::openConversation)
             refreshConversations()
             refreshProjects()
+            refreshModels()
         }
         viewModelScope.launch {
             stream.connectionStatus.collect { status ->
@@ -180,6 +189,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isRunning = running || outgoing.any { it.conversationId == update.cascadeId },
                     streamingMessageId = if (running && (growing || previous.streamingMessageId == latestAgent?.id)) latestAgent?.id else null,
                     pendingInteraction = update.pendingInteraction,
+                    activeModelId = update.activeModel ?: previous.activeModelId,
                     isLoadingMessages = false, messagesError = null,
                     hasMoreMessages = if (previous.isLoadingMessages || update.isFullSnapshot) update.hasMore else previous.hasMoreMessages,
                     nextMessageOffset = if (previous.isLoadingMessages || update.isFullSnapshot) update.nextOffset else previous.nextMessageOffset,
@@ -315,6 +325,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.lastConversationId = null
         _state.value = _state.value.copy(
             isPaired = false, isLoadingConversations = false, isLoadingProjects = false,
+            models = emptyList(), isLoadingModels = false, modelsError = null,
+            activeModelId = null, modelOverrideId = null, creatingProjectKey = null,
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
             messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
             isLoadingMessages = false,
@@ -364,10 +376,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         conversations = emptyList(), projects = emptyList(), error = null,
                         isLoadingConversations = false, isLoadingProjects = false,
                         conversationsError = null, projectsError = null,
+                        models = emptyList(), isLoadingModels = false, modelsError = null, creatingProjectKey = null,
                     )
                     connectionManager.startMonitoring(prefs, viewModelScope)
                     refreshConversations()
                     refreshProjects()
+                    refreshModels()
                 },
                 onFailure = {
                     _state.value = _state.value.copy(isPairing = false, error = it.message ?: "配对失败")
@@ -438,6 +452,71 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun refreshModels() {
+        if (!_state.value.isPaired || _state.value.isLoadingModels) return
+        val token = prefs.deviceToken
+        _state.value = _state.value.copy(isLoadingModels = true)
+        viewModelScope.launch {
+            api.fetchChatModels().fold(onSuccess = { models ->
+                if (prefs.deviceToken != token) return@fold
+                val selected = models.firstOrNull { it.id == prefs.selectedModelId }
+                    ?: models.firstOrNull { it.id == DEFAULT_CHAT_MODEL } ?: models.first()
+                prefs.selectedModelId = selected.id
+                _state.value = _state.value.copy(models = models, selectedModelId = selected.id,
+                    isLoadingModels = false, modelsError = null)
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) { expirePairing(); return@fold }
+                _state.value = _state.value.copy(isLoadingModels = false, modelsError = error.message ?: "读取模型失败")
+            })
+        }
+    }
+
+    fun selectModel(id: String) {
+        val current = _state.value
+        val model = current.models.firstOrNull { it.id == id } ?: return
+        if (current.isSending || current.isReverting || current.creatingProjectKey != null) return
+        if (current.attachments.isNotEmpty() && !model.supportsImages) {
+            _state.value = current.copy(error = "这个模型不支持图片，请先移除图片")
+            return
+        }
+        if (current.selectedConversationId == null) {
+            prefs.selectedModelId = id
+            _state.value = current.copy(selectedModelId = id)
+        } else _state.value = current.copy(modelOverrideId = id)
+    }
+
+    fun createProjectConversation(project: ProjectItem, onCreated: () -> Unit = {}) {
+        val current = _state.value
+        if (current.creatingProjectKey != null || current.isSending || current.isReverting) return
+        if (project.isPureChat || project !in current.projects || (project.rawId.isNullOrBlank() && project.uri.isBlank())) {
+            _state.value = current.copy(error = "项目已不可用，请刷新项目列表")
+            return
+        }
+        val model = current.models.firstOrNull { it.id == current.selectedModelId } ?: run {
+            _state.value = current.copy(error = current.modelsError ?: "请先等待模型列表加载完成")
+            refreshModels(); return
+        }
+        val visit = conversationVisit
+        val token = prefs.deviceToken
+        _state.value = current.copy(creatingProjectKey = project.id, error = null)
+        viewModelScope.launch {
+            api.createCascade(project.uri, "", model.model, project.rawId).fold(onSuccess = { id ->
+                if (prefs.deviceToken != token) return@fold
+                if (conversationVisit == visit) {
+                    onCreated(); openConversation(id)
+                    _state.value = _state.value.copy(modelOverrideId = model.id)
+                }
+                refreshConversations()
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) { expirePairing(); return@fold }
+                if (conversationVisit == visit) _state.value = _state.value.copy(error = error.message ?: "创建项目会话失败")
+            })
+            if (prefs.deviceToken == token) _state.value = _state.value.copy(creatingProjectKey = null)
+        }
+    }
+
     fun openConversation(id: String) {
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
@@ -446,6 +525,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = id,
+            activeModelId = null, modelOverrideId = null,
             messages = emptyList(),
             isLoadingMessages = true,
             isLoadingOlder = false,
@@ -483,6 +563,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         switchDraft(NEW_CHAT_DRAFT)
         _state.value = _state.value.copy(
             selectedConversationId = null,
+            activeModelId = null, modelOverrideId = null,
             messages = emptyList(),
             streamingMessageId = null,
             isLoadingMessages = false,
@@ -505,6 +586,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val images = _state.value.attachments
         if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
         val id = _state.value.selectedConversationId
+        val modelId = _state.value.modelOverrideId ?: if (id == null) _state.value.selectedModelId else _state.value.activeModelId
+        val model = _state.value.models.firstOrNull { it.id == modelId || it.model == modelId }
+        if ((id == null || _state.value.modelOverrideId != null) && model == null) {
+            _state.value = _state.value.copy(error = _state.value.modelsError ?: "请等待模型列表加载完成后重试")
+            refreshModels(); return
+        }
+        if (images.isNotEmpty() && model?.supportsImages == false) {
+            _state.value = _state.value.copy(error = "这个模型不支持图片，请选择支持图片的模型")
+            return
+        }
+        val requestedModel = model?.model.takeIf { id == null || _state.value.modelOverrideId != null }
+        val token = prefs.deviceToken
+        val visit = conversationVisit
         val clientId = UUID.randomUUID().toString()
         var targetId = id ?: "local:$clientId"
         val originalDraftKey = draftKey
@@ -530,13 +624,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 api.createCascade(
                     workspaceUri = "",
                     prompt = text,
-                    model = DEFAULT_CHAT_MODEL,
+                    model = requestedModel,
                     projectId = ProjectItem.PURE_CHAT.id,
                 )
             } else if (id == null) {
-                api.createCascade("", "", model = DEFAULT_CHAT_MODEL, projectId = ProjectItem.PURE_CHAT.id)
+                api.createCascade("", "", model = requestedModel, projectId = ProjectItem.PURE_CHAT.id)
                     .fold(
                         onSuccess = { createdId ->
+                            if (prefs.deviceToken != token) return@fold Result.failure(IllegalStateException("配对已变化"))
                             prefs.pendingSendTarget = createdId
                             moveDraft(targetId, createdId)
                             _state.value = _state.value.copy(outgoing = _state.value.outgoing.map {
@@ -545,7 +640,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             if (_state.value.selectedConversationId == targetId) openConversation(createdId)
                             targetId = createdId
                             api.sendMessage(
-                                createdId, text, model = DEFAULT_CHAT_MODEL,
+                                createdId, text, model = requestedModel,
                                 images = images.map { it.bytes to it.mimeType },
                                 clientMessageId = clientId,
                             ).map { createdId }
@@ -554,10 +649,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
             } else {
                 api.sendMessage(
-                    id, text, images = images.map { it.bytes to it.mimeType },
+                    id, text, model = requestedModel, images = images.map { it.bytes to it.mimeType },
                     clientMessageId = clientId,
                 ).map { id }
             }
+            if (prefs.deviceToken != token) return@launch
             result.fold(
                 onSuccess = { conversationId ->
                     if (targetId.startsWith("local:")) moveDraft(targetId, conversationId)
@@ -568,6 +664,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (_state.value.selectedConversationId == targetId && targetId.startsWith("local:")) {
                         openConversation(conversationId)
                     } else if (_state.value.selectedConversationId == conversationId) {
+                        if (conversationVisit == visit && requestedModel != null) {
+                            _state.value = _state.value.copy(activeModelId = model?.id, modelOverrideId = null)
+                        }
                         loadMessages(conversationId)
                     }
                     refreshConversations()
@@ -593,6 +692,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         draft = if (draftKey == restoreKey && unconfirmed) restoredDraft else current.draft,
                         attachments = if (draftKey == restoreKey && unconfirmed) restoredImages else current.attachments,
                         isSending = false,
+                        modelOverrideId = if (stillHere && conversationVisit == visit) null else current.modelOverrideId,
                         isRunning = if (stillHere && unconfirmed) wasRunning else current.isRunning,
                         error = if (unconfirmed) "${error.message ?: "消息发送失败"}（内容已恢复到原会话草稿）" else null,
                     )
@@ -818,6 +918,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             isRunning = (if (changed) current.isRunning else payload.status.contains("RUNNING", ignoreCase = true)) ||
                                 outgoing.any { it.conversationId == id },
                             pendingInteraction = if (changed) current.pendingInteraction else payload.pendingInteraction,
+                            activeModelId = if (changed) current.activeModelId else payload.activeModel ?: current.activeModelId,
                             isLoadingMessages = false,
                             hasMoreMessages = payload.hasMore,
                             nextMessageOffset = payload.nextOffset,

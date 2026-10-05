@@ -32,6 +32,164 @@ import kotlin.concurrent.thread
 class ChatUxTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun projectCreationAndModelChoiceKeepMembershipDraftAndFailureState() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true; gateway.projectFixture = true
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("project-model", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.models.size == 3 && vm.state.value.projects.size == 1 }
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.onNodeWithText("Claude fixture").performClick()
+                assertEquals("claude-fixture", prefs.selectedModelId)
+                compose.runOnIdle { vm.setDraft("首页草稿保留") }
+                compose.onNode(hasText("项目") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
+                compose.onNodeWithText("动效项目").performClick()
+                gateway.failurePath = "/gateway/cascade/new"
+                compose.onNodeWithText("新建会话").performClick()
+                compose.waitUntil(10_000) { vm.state.value.error != null && vm.state.value.creatingProjectKey == null }
+                assertNull(vm.state.value.selectedConversationId)
+                assertEquals("首页草稿保留", vm.state.value.draft)
+                gateway.failurePath = null
+                compose.onNodeWithText("新建会话").performClick()
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "C" && !vm.state.value.isLoadingMessages }
+                val created = JSONObject(gateway.requests.last { it.first == "/gateway/cascade/new" }.second)
+                assertEquals("p", created.getString("projectId"))
+                assertEquals("file:///test/project", created.getString("workspaceUri"))
+                assertEquals("MODEL_PLACEHOLDER_M26", created.getString("model"))
+                compose.waitUntil(10_000) { vm.state.value.conversations.any { it.id == "C" && it.belongsTo(vm.state.value.projects.single(), vm.state.value.projects) } }
+                saveScreenshot("features-project-created.png")
+                compose.runOnIdle { vm.setDraft("项目首条消息"); vm.send() }
+                compose.waitUntil(10_000) { !vm.state.value.isSending }
+                val sent = JSONObject(gateway.requests.last { it.first == "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage" }.second)
+                assertEquals("C", sent.getString("cascadeId"))
+                assertEquals("MODEL_PLACEHOLDER_M26", sent.getString("model"))
+                compose.onNodeWithContentDescription("返回项目列表").performClick()
+                compose.onNodeWithText("动效项目").assertExists()
+                assertEquals("首页草稿保留", vm.state.value.draft)
+                saveScreenshot("features-project-list.png")
+
+                // Selection for an existing chat is applied to the next send; failed sends restore the actual model.
+                compose.runOnIdle { vm.openConversation("A") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                val actual = vm.state.value.activeModelId
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.onNodeWithText("Gemini fixture").performClick()
+                gateway.failurePath = "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage"
+                compose.runOnIdle { vm.setDraft("失败保留正文"); vm.send() }
+                compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.error != null }
+                assertEquals(actual, vm.state.value.activeModelId)
+                assertNull(vm.state.value.modelOverrideId)
+                assertEquals("失败保留正文", vm.state.value.draft)
+                assertEquals("claude-fixture", prefs.selectedModelId)
+                gateway.failurePath = null
+                compose.runOnIdle { vm.selectModel("gemini-3.8-flash-high"); vm.send() }
+                compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.activeModelId == "gemini-3.8-flash-high" }
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                saveScreenshot("features-model-picker.png")
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun modelCatalogRetryImageGuardAndLateProjectCreationDoNotLoseDrafts() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true; gateway.projectFixture = true; gateway.failurePath = "GetUserStatus"
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("model-errors", vm) }
+            val requested = CountDownLatch(1); val release = CountDownLatch(1)
+            val file = File(compose.activity.cacheDir, "model-${UUID.randomUUID()}.png").apply { writeBytes(gateway.imageBytes) }
+            try {
+                compose.waitUntil(10_000) { vm.state.value.modelsError != null && vm.state.value.projects.isNotEmpty() }
+                compose.runOnIdle { vm.setDraft("无模型不发送"); vm.send() }
+                assertEquals("无模型不发送", vm.state.value.draft)
+                assertFalse(gateway.requests.any { it.first == "/gateway/cascade/new" })
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingModels }
+                gateway.failurePath = null
+                compose.runOnIdle { vm.refreshModels() }
+                compose.waitUntil(10_000) { vm.state.value.models.size == 3 }
+                compose.runOnIdle { vm.selectModel("text-fixture") }
+                val uri = androidx.core.content.FileProvider.getUriForFile(compose.activity, "com.antigravity.mobile.fileprovider", file)
+                compose.runOnIdle { vm.addImages(listOf(uri)) }
+                compose.waitUntil(10_000) { vm.state.value.attachments.size == 1 }
+                compose.runOnIdle { vm.send() }
+                assertTrue(vm.state.value.error.orEmpty().contains("不支持图片"))
+                assertEquals(1, vm.state.value.attachments.size)
+                assertFalse(gateway.requests.any { it.first == "/gateway/cascade/new" })
+                compose.runOnIdle { vm.removeImage(vm.state.value.attachments.single().uri); vm.selectModel("gemini-3.8-flash-high") }
+                gateway.block = { path -> if (path == "/gateway/cascade/new") { requested.countDown(); release.await(10, TimeUnit.SECONDS) } }
+                compose.runOnIdle { vm.createProjectConversation(vm.state.value.projects.single()) }
+                assertTrue(requested.await(10, TimeUnit.SECONDS))
+                compose.runOnIdle { vm.openConversation("B"); vm.setDraft("另一会话草稿") }
+                release.countDown()
+                compose.waitUntil(10_000) { vm.state.value.creatingProjectKey == null }
+                assertEquals("B", vm.state.value.selectedConversationId)
+                assertEquals("另一会话草稿", vm.state.value.draft)
+                val restored = compose.runOnIdle { store.clear(); ChatViewModel(app).also { store.put("model-errors", it) } }
+                compose.waitUntil(10_000) { !restored.state.value.isLoadingModels && restored.state.value.models.isNotEmpty() }
+                assertEquals("gemini-3.8-flash-high", restored.state.value.selectedModelId)
+                compose.runOnIdle { restored.closeConversation(); restored.selectModel("claude-fixture"); restored.setDraft("图片模型验收"); restored.addImages(listOf(uri)) }
+                compose.waitUntil(10_000) { restored.state.value.attachments.size == 1 }
+                compose.runOnIdle { restored.send() }
+                compose.waitUntil(10_000) { !restored.state.value.isSending }
+                val created = JSONObject(gateway.requests.last { it.first == "/gateway/cascade/new" }.second)
+                assertEquals(ProjectItem.PURE_CHAT.id, created.getString("projectId"))
+                assertEquals("MODEL_PLACEHOLDER_M26", created.getString("model"))
+                val imageSend = JSONObject(gateway.requests.last { it.first.contains("SendUserCascadeMessage") }.second)
+                assertEquals("MODEL_PLACEHOLDER_M26", imageSend.getString("model"))
+                assertEquals(1, imageSend.getJSONArray("images").length())
+            } finally { release.countDown(); compose.runOnIdle { store.clear() }; file.delete() }
+        }
+    }
+
+    @Test fun realGatewayCreatesProjectConversationWithAccountModel() {
+        org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("uxRealModels") == "true")
+        val app = compose.activity.application
+        val original = PreferencesManager(app)
+        assertTrue(original.isPaired())
+        val prefs = PreferencesManager(isolatedApplication()).apply {
+            gatewayBaseUrl = InstrumentationRegistry.getArguments().getString("uxGatewayUrl") ?: original.gatewayBaseUrl
+            deviceToken = original.deviceToken
+        }
+        val api = ApiClient(app, prefs)
+        runBlocking {
+            suspend fun readConversations(): List<com.antigravity.mobile.data.model.ConversationItem> {
+                val first = api.fetchConversations()
+                // Desktop list cold reads can exceed the gateway's existing 4s deadline; retry only this read.
+                if (first.exceptionOrNull()?.message?.contains("502") == true) {
+                    kotlinx.coroutines.delay(350)
+                    return api.fetchConversations().getOrThrow()
+                }
+                return first.getOrThrow()
+            }
+            val models = api.fetchChatModels().getOrThrow()
+            val model = models.firstOrNull { it.id == "gemini-3.8-flash-high" } ?: models.first()
+            val projects = api.fetchProjects().getOrThrow().filterNot { it.isPureChat }
+            val project = projects.first { it.name == "antigravity-mobile" }
+            val id = api.createCascade(project.uri, "", model.model, project.rawId).getOrThrow()
+            try {
+                api.renameConversation(id, "Android 项目与模型验收 ${UUID.randomUUID().toString().take(8)}").getOrThrow()
+                assertTrue(readConversations().first { it.id == id }.belongsTo(project, projects))
+                api.sendMessage(id, "仅回复：项目模型验证通过。不要读取或修改任何文件。", model = model.model).getOrThrow()
+                val deadline = android.os.SystemClock.elapsedRealtime() + 90_000
+                var payload = api.fetchMessages(id).getOrThrow()
+                while (payload.messages.orEmpty().none { !it.isUser && it.effectiveText.contains("项目模型验证通过") } && android.os.SystemClock.elapsedRealtime() < deadline) {
+                    kotlinx.coroutines.delay(700); payload = api.fetchMessages(id).getOrThrow()
+                }
+                assertTrue("真实项目会话应收到模型回复", payload.messages.orEmpty().any { !it.isUser && it.effectiveText.contains("项目模型验证通过") })
+                assertTrue("服务端应返回所选模型", payload.activeModel == model.id || payload.activeModel == model.model)
+                assertTrue(readConversations().first { it.id == id }.belongsTo(project, projects))
+            } finally {
+                api.cancelInvocation(id)
+                api.deleteConversation(id).getOrThrow()
+            }
+        }
+    }
+
     @Test fun customPairRetainsKnownLanCandidate() {
         val app = isolatedApplication()
         val prefs = PreferencesManager(app)
@@ -1610,6 +1768,8 @@ class ChatUxTest {
         }
         @Volatile var management = false
         @Volatile var projectFixture = false
+        @Volatile var createdProject = false
+        @Volatile var activeModel = "gemini-3.8-flash-high"
         @Volatile var reverted = false
         @Volatile var userImage = false
         @Volatile var running = false
@@ -1649,6 +1809,15 @@ class ChatUxTest {
                             requests += path to requestBody
                             block(path)
                             if (dropPath?.let(path::contains) == true) return@use
+                            if (failurePath?.let(path::contains) != true && (path == "/gateway/cascade/new" || path == "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage")) {
+                                val request = JSONObject(requestBody)
+                                if (path == "/gateway/cascade/new" && request.optString("projectId") == "p") createdProject = true
+                                when (request.optString("model")) {
+                                    "MODEL_PLACEHOLDER_M318" -> activeModel = "gemini-3.8-flash-high"
+                                    "MODEL_PLACEHOLDER_M26" -> activeModel = "claude-fixture"
+                                    "MODEL_TEXT" -> activeModel = "text-fixture"
+                                }
+                            }
                             if (liveStream && path.startsWith("/gateway/cascade/stream") && failurePath?.let(path::contains) != true) {
                                 val accept = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-1")
                                     .digest((webSocketKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray()), android.util.Base64.NO_WRAP)
@@ -1671,17 +1840,24 @@ class ChatUxTest {
                             }
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
+                                path.contains("GetUserStatus") -> """{"userStatus":{"planStatus":{"planInfo":{"teamsTier":"PRO"}},"cascadeModelConfigData":{"clientModelConfigs":[
+                                    {"modelId":"gemini-3.8-flash-high","label":"Gemini fixture","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M318"},"supportsImages":true,"allowedTiers":["PRO"]},
+                                    {"modelId":"claude-fixture","label":"Claude fixture","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M26"},"supportsImages":true,"allowedTiers":["PRO"]},
+                                    {"modelId":"text-fixture","label":"Text fixture","modelOrAlias":{"model":"MODEL_TEXT"}},
+                                    {"modelId":"restricted","label":"Restricted fixture","modelOrAlias":{"model":"MODEL_HIDDEN"},"allowedTiers":["ENTERPRISE"]}
+                                ]}}}"""
+                                path == "/gateway/cascade/new" -> """{"cascadeId":"${if (JSONObject(requestBody).optString("projectId") == "p") "C" else "D"}","status":"ok"}"""
                                 path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
                                 path.startsWith("/api/v1/auth/endpoints") -> """{"endpoints":$endpointsJson,"platform":"windows"}"""
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
+                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
                                 management && path.contains("GetAllCascadeTrajectories") -> {
                                     val summaries = JSONObject()
-                                    for (key in listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
+                                    for (key in if (createdProject) listOf("A", "B", "C") else listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
                                         .put("status", "IDLE").put("annotations", annotations[key] ?: JSONObject()).apply {
-                                            if (projectFixture && key == "B") put("trajectoryMetadata", JSONObject().put("projectId", "p"))
+                                            if (projectFixture && key in listOf("B", "C")) put("trajectoryMetadata", JSONObject().put("projectId", "p"))
                                         })
                                     JSONObject().put("trajectorySummaries", summaries).toString()
                                 }

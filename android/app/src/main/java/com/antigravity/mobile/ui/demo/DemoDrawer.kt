@@ -70,6 +70,8 @@ internal fun DemoDrawer(
     busy: Set<String> = emptySet(),
     onRename: (ConversationItem) -> Unit = {}, onPin: (ConversationItem) -> Unit = {},
     onArchive: (ConversationItem) -> Unit = {}, onDelete: (ConversationItem) -> Unit = {},
+    onNewProjectConversation: (ProjectItem) -> Unit = {},
+    canCreate: Boolean = true,
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
@@ -110,6 +112,10 @@ internal fun DemoDrawer(
                             enter = expandVertically(tween(200), expandFrom = Alignment.Top) + fadeIn(tween(150)),
                             exit = shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(120))) {
                             Column {
+                            Text("新建会话", modifier = Modifier.fillMaxWidth()
+                                .quietClickable(enabled = canCreate) { onNewProjectConversation(project) }
+                                .padding(start = 45.dp, top = 14.dp, bottom = 14.dp),
+                                color = if (canCreate) SecondaryInk else SecondaryInk.copy(alpha = 0.4f), fontSize = 14.sp)
                             val visibleChats = if (searchText.isBlank() || project.name.contains(searchText, ignoreCase = true))
                                 projectChats else projectChats.filter { it.displayTitle.contains(searchText, ignoreCase = true) }
                             if (visibleChats.isEmpty()) {

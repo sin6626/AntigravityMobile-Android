@@ -381,8 +381,21 @@ class ApiClient(
     }
 
     /**
-     * Create a new cascade session
+     * Read the current desktop account's model catalog.
      */
+    suspend fun fetchChatModels(): Result<List<ChatModel>> = withContext(Dispatchers.IO) {
+        val base = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        try {
+            val request = buildAuthorizedRequest("$base/api/exa.language_server_pb.LanguageServerService/GetUserStatus")
+                .post("{}".toRequestBody(jsonMediaType)).build()
+            client.newCall(request).await().use { response ->
+                check(response.isSuccessful) { "读取模型失败 (${response.code})" }
+                Result.success(parseChatModels(json.parseToJsonElement(response.body?.string() ?: "{}").jsonObject))
+            }
+        } catch (error: Exception) { Result.failure(error) }
+    }
+
+    /** Create a new cascade session. */
     suspend fun createCascade(
         workspaceUri: String,
         prompt: String,
@@ -1137,7 +1150,9 @@ class RouteFailoverInterceptor(
             endpoint != null && endpoint.scheme == originalUrl.scheme && endpoint.host == originalUrl.host && endpoint.port == originalUrl.port
         }
         val isRead = request.method in setOf("GET", "HEAD") ||
-            request.method == "POST" && originalUrl.encodedPath == "/api/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories"
+            request.method == "POST" && originalUrl.encodedPath in setOf(
+                "/api/exa.language_server_pb.LanguageServerService/GetAllCascadeTrajectories",
+                "/api/exa.language_server_pb.LanguageServerService/GetUserStatus")
         val isLan = ConnectionManager.isLanHost(originalUrl.host)
         val initialChain = if (isLan) {
             chain.withConnectTimeout(1800, TimeUnit.MILLISECONDS)

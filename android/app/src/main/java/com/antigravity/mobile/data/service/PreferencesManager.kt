@@ -231,6 +231,10 @@ class PreferencesManager(context: Context) {
         get() = prefs.getString("android_last_conversation", null)
         set(value) = prefs.edit().putString("android_last_conversation", value).apply()
 
+    var selectedModelId: String?
+        get() = prefs.getString("android_selected_model", null)
+        set(value) = prefs.edit().putString("android_selected_model", value).apply()
+
     var pendingSendTarget: String?
         get() = prefs.getString("android_pending_send_target", null)
         set(value) = prefs.edit().putString("android_pending_send_target", value).apply()

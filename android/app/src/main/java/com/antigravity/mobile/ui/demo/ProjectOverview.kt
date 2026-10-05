@@ -41,6 +41,8 @@ internal fun ProjectOverview(
     modifier: Modifier = Modifier,
     error: String? = null,
     onRetry: () -> Unit = {},
+    onNewConversation: (ProjectItem) -> Unit = {},
+    canCreate: Boolean = true,
 ) {
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -80,6 +82,10 @@ internal fun ProjectOverview(
                     enter = expandVertically(tween(200), expandFrom = Alignment.Top) + fadeIn(tween(150)),
                     exit = shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(120))) {
                     Column {
+                    Text("新建会话", modifier = Modifier.fillMaxWidth()
+                        .quietClickable(enabled = canCreate) { onNewConversation(project) }
+                        .padding(start = 68.dp, end = 28.dp, top = 14.dp, bottom = 14.dp),
+                        color = if (canCreate) SecondaryInk else SecondaryInk.copy(alpha = 0.4f), fontSize = 15.sp)
                     if (projectChats.isEmpty()) {
                         Text("暂无对话", modifier = Modifier.padding(start = 68.dp, bottom = 13.dp),
                             color = SecondaryInk, fontSize = 15.sp)

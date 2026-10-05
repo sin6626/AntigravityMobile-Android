@@ -39,6 +39,13 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Surface
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.window.Dialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -76,7 +83,7 @@ import com.antigravity.mobile.ui.chat.InteractionPanel
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -108,6 +115,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var showDeleteConfirm by rememberSaveable { mutableStateOf(false) }
     var showRename by rememberSaveable { mutableStateOf(false) }
     var renameTitle by rememberSaveable { mutableStateOf("") }
+    var modelPickerOpen by remember { mutableStateOf(false) }
+    val chosenModelId = state.modelOverrideId ?: if (state.selectedConversationId == null) state.selectedModelId else state.activeModelId
+    val chosenModel = state.models.firstOrNull { it.id == chosenModelId || it.model == chosenModelId }
+    val modelLabel = chosenModel?.label ?: "选择模型"
+    val modelEnabled = !state.isSending && !state.isReverting && state.creatingProjectKey == null
+    val canCreate = modelEnabled && state.models.isNotEmpty() && !state.isLoadingModels
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val imagePicker = rememberLauncherForActivityResult(
@@ -117,6 +130,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         scope.launch { snackbar.showSnackbar("已支持文字和图片，语音功能暂未开放") }
     }
     LaunchedEffect(state.selectedConversationId) {
+        modelPickerOpen = false
         showDeleteConfirm = false
         showRename = false
         if (state.selectedConversationId == null && openedFromArchive) {
@@ -177,6 +191,11 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         gesturesEnabled = !openedFromProject,
         drawerContent = {
             DemoDrawer(
+                canCreate = canCreate,
+                onNewProjectConversation = { project -> viewModel.createProjectConversation(project) {
+                    archivedOpen = false; openedFromArchive = false; openedFromProject = true; projectsSelected = true
+                    scope.launch { drawerState.close() }
+                } },
                 modifier = Modifier.fillMaxWidth(0.80f).fillMaxHeight()
                     .statusBarsPadding().navigationBarsPadding(),
                 conversations = activeConversations,
@@ -286,6 +305,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         GradientTopBar(topBarHeight) {
                             Box(Modifier.onSizeChanged { topBarHeight = with(density) { it.height.toDp() } }) {
                                 ConversationTopBar(
+                                    modelLabel = modelLabel, modelEnabled = modelEnabled,
+                                    onChooseModel = { modelPickerOpen = true; viewModel.refreshModels() },
                                     returnToProjects = openedFromProject || openedFromArchive,
                                     leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
                                     onLeading = if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
@@ -331,10 +352,15 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     beyondViewportPageCount = 1) { page ->
                 if (page == 1) {
                     ProjectOverview(
+                        canCreate = canCreate,
+                        onNewConversation = { project -> viewModel.createProjectConversation(project) {
+                            archivedOpen = false; openedFromArchive = false; openedFromProject = true
+                        } },
                         projects = state.projects,
                         conversations = activeConversations,
-                        isLoading = state.isLoadingProjects,
-                        error = state.projectsError, onRetry = viewModel::refreshProjects,
+                        isLoading = state.isLoadingProjects || state.isLoadingConversations,
+                        error = state.projectsError ?: state.conversationsError,
+                        onRetry = { viewModel.refreshProjects(); viewModel.refreshConversations(); viewModel.refreshModels() },
                         onOpenConversation = { id ->
                             archivedOpen = false; openedFromArchive = false
                             openedFromProject = true
@@ -451,6 +477,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onChoose = viewModel::respondToInteraction,
                         )
                     }
+                    if (isHome) Box(Modifier.graphicsLayer { alpha = alphaFactor }) {
+                        ModelChoice(modelLabel, { modelPickerOpen = true; viewModel.refreshModels() }, modelEnabled && alphaFactor > .9f)
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(widthFactor)
@@ -484,6 +513,35 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
+        if (modelPickerOpen && state.isPaired) {
+            ModalBottomSheet(onDismissRequest = { modelPickerOpen = false }, containerColor = Color.White,
+                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)) {
+                Text("选择模型", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
+                if (state.isLoadingModels || state.modelsError != null) Row(
+                    Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 24.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    if (state.isLoadingModels) CircularProgressIndicator(Modifier.size(18.dp), color = AccentBlue, strokeWidth = 2.dp)
+                    else {
+                        Text(state.modelsError.orEmpty(), color = SecondaryInk, fontSize = 13.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = viewModel::refreshModels) { Text("重试", color = AccentBlue) }
+                    }
+                }
+                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp).navigationBarsPadding()) {
+                    items(state.models, key = { it.id }) { model ->
+                        val enabled = modelEnabled && (state.attachments.isEmpty() || model.supportsImages)
+                        Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled) {
+                            viewModel.selectModel(model.id); modelPickerOpen = false
+                        }.padding(horizontal = 24.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(model.label, color = if (enabled) Ink else SecondaryInk.copy(alpha = .4f), fontSize = 15.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                            if (model.id == chosenModelId || model.model == chosenModelId) Text("✓", color = AccentBlue,
+                                modifier = Modifier.padding(start = 12.dp).semantics { contentDescription = "已选择" })
+                        }
+                    }
+                }
+            }
+        }
         state.revertMessage?.let { message ->
             var revertFiles by remember(message.id) { mutableStateOf(true) }
             Dialog(onDismissRequest = viewModel::dismissRevert) {
