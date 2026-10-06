@@ -5,6 +5,13 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-06 流式回复回到底部按钮闪烁
+
+- 根因是流式正文逐帧增高后，列表先暂时离开底部、再自动定位；按钮原来仅检查nearBottom，重复触发120ms淡入淡出。最小模拟器复现（2轮历史+30次长文本追加）失败：120帧采样有113帧存在按钮节点；临时状态探针记录29次nearBottom=false，followLatest一直为true，组件没有重建。
+- ConversationContent共享显示条件同时检查已离开自动跟随；原有120ms过渡、圆形阴影、手动阅读与点击回到底部继续跟随均保留。未改滚动算法，临时DEBUG-stream-jump探针已移除。
+- 新增MotionTest.jumpButtonDoesNotFlashWhileStreamingLatest：连续帧核对自动跟随不冒出按钮、阅读历史时按钮稳定且阅读坐标不动、点击回到底部后继续输出不闪。Debug应用/测试包构建及9项JVM单测通过；此测试、流式转Markdown、历史阅读和思考面板滚动4项模拟器回归通过（25.847秒）。最新版APK已装emulator-5554，测试记录及截图仅留忽略目录android/design/.verification/。
+- 本轮不操作真机、不修改或重启Go网关，第5项通知仍暂缓。
+
 ### 2026-10-05 项目会话与模型选择
 
 - 用户授权继续第3、4项；第5项通知明确暂缓，不接入Firebase、后台连接或通知权限。

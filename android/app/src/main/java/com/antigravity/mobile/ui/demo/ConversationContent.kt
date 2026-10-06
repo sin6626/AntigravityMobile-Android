@@ -262,7 +262,8 @@ internal fun ConversationContent(
                 }
             }
         }
-        AnimatedVisibility(visible = positioned && !nearBottom,
+        // 流式文字变高到自动定位完成之间，也会暂时离开底部；仍在跟随时不播放按钮入场。
+        AnimatedVisibility(visible = positioned && !followLatest && !nearBottom,
             modifier = Modifier.align(Alignment.BottomCenter).offset(y = -bottomSpace),
             enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
             Surface(shape = CircleShape, color = Color.White, shadowElevation = 3.dp) {

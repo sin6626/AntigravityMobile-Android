@@ -262,6 +262,52 @@ class MotionTest {
         compose.onNodeWithContentDescription("回到最新消息").assertIsDisplayed()
     }
 
+    @Test fun jumpButtonDoesNotFlashWhileStreamingLatest() {
+        val viewModel = ViewModelProvider(compose.activity)[ChatViewModel::class.java]
+        val old = (1..2).flatMap { listOf(GatewayMessageItem(id = "u$it", text = "问题 $it"),
+            GatewayMessageItem(id = "a$it", type = "agent", text = "历史回复 $it")) }
+        var source = "开始回复"
+        val messages = mutableStateOf(old + GatewayMessageItem(id = "live", type = "agent", text = source))
+        compose.setContent { ConversationContent(viewModel, messages.value, "live", true,
+            false, false, false, {}, Modifier.fillMaxSize()) }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("正在回复…").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("回到最新消息").assertDoesNotExist()
+        compose.mainClock.autoAdvance = false
+        fun appendChunks(count: Int, showButton: Boolean) {
+            val presence = mutableListOf<Boolean>()
+            repeat(count) { chunk ->
+                source += "\n\n第 $chunk 段实时输出。" + "连续返回的正文会逐渐增加列表高度。".repeat(12)
+                compose.runOnUiThread { messages.value = old + GatewayMessageItem(id = "live", type = "agent", text = source) }
+                repeat(4) {
+                    Thread.sleep(20)
+                    compose.mainClock.advanceTimeByFrame()
+                    presence += compose.onAllNodesWithContentDescription("回到最新消息").fetchSemanticsNodes().isNotEmpty()
+                }
+            }
+            assertTrue("Button must remain $showButton during output; visible frames=${presence.count { it }}, transitions=${presence.zipWithNext().count { (a, b) -> a != b }}",
+                presence.all { it == showButton })
+        }
+        try {
+            appendChunks(30, showButton = false)
+            compose.mainClock.autoAdvance = true
+            compose.waitForIdle()
+            compose.onNode(hasScrollToIndexAction()).performScrollToIndex(0)
+            compose.onNodeWithContentDescription("回到最新消息").assertIsDisplayed()
+            val historyY = compose.onNodeWithText("历史回复 1").fetchSemanticsNode().boundsInRoot.top
+            compose.mainClock.autoAdvance = false
+            appendChunks(5, showButton = true)
+            assertEquals(historyY, compose.onNodeWithText("历史回复 1").fetchSemanticsNode().boundsInRoot.top, 1f)
+            compose.mainClock.autoAdvance = true
+            compose.onNodeWithContentDescription("回到最新消息").performClick()
+            compose.waitForIdle()
+            compose.onNodeWithText("正在回复…").assertIsDisplayed()
+            compose.onNodeWithContentDescription("回到最新消息").assertDoesNotExist()
+            compose.mainClock.autoAdvance = false
+            appendChunks(5, showButton = false)
+        } finally { compose.mainClock.autoAdvance = true }
+    }
+
     private fun screenshot(name: String) {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val file = java.io.File(compose.activity.getExternalFilesDir(null), name)
