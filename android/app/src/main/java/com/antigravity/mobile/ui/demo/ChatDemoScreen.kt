@@ -1,9 +1,13 @@
 package com.antigravity.mobile.ui.demo
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
@@ -119,13 +123,28 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val chosenModelId = state.modelOverrideId ?: if (state.selectedConversationId == null) state.selectedModelId else state.activeModelId
     val chosenModel = state.models.firstOrNull { it.id == chosenModelId || it.model == chosenModelId }
     val modelLabel = chosenModel?.label ?: "选择模型"
+    val gptModelBadge = formatGptModelBadge(chosenModel)
     val modelEnabled = !state.isSending && !state.isReverting && state.creatingProjectKey == null
     val canCreate = modelEnabled && state.models.isNotEmpty() && !state.isLoadingModels
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var tempPhotoUri by remember { mutableStateOf<Uri?>(null) }
+    val cameraLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.TakePicture(),
+    ) { success ->
+        if (success) {
+            tempPhotoUri?.let { uri -> viewModel.addImages(listOf(uri)) }
+        }
+    }
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia(4),
     ) { uris -> viewModel.addImages(uris) }
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent(),
+    ) { uri ->
+        uri?.let { viewModel.addImages(listOf(it)) }
+    }
     val unsupported: () -> Unit = {
         scope.launch { snackbar.showSnackbar("已支持文字和图片，语音功能暂未开放") }
     }
@@ -305,8 +324,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         GradientTopBar(topBarHeight) {
                             Box(Modifier.onSizeChanged { topBarHeight = with(density) { it.height.toDp() } }) {
                                 ConversationTopBar(
-                                    modelLabel = modelLabel, modelEnabled = modelEnabled,
-                                    onChooseModel = { modelPickerOpen = true; viewModel.refreshModels() },
                                     returnToProjects = openedFromProject || openedFromArchive,
                                     leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
                                     onLeading = if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
@@ -477,9 +494,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onChoose = viewModel::respondToInteraction,
                         )
                     }
-                    if (isHome) Box(Modifier.graphicsLayer { alpha = alphaFactor }) {
-                        ModelChoice(modelLabel, { modelPickerOpen = true; viewModel.refreshModels() }, modelEnabled && alphaFactor > .9f)
-                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(widthFactor)
@@ -496,7 +510,18 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             draft = state.draft,
                             attachments = state.attachments,
                             onDraftChange = viewModel::setDraft,
-                            onAddImage = { imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onTakePhoto = {
+                                val tempFile = File(context.cacheDir, "camera_capture_${System.currentTimeMillis()}.jpg")
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", tempFile)
+                                tempPhotoUri = uri
+                                cameraLauncher.launch(uri)
+                            },
+                            onPickImage = {
+                                imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                            },
+                            onPickFile = {
+                                filePicker.launch("*/*")
+                            },
                             onRemoveImage = viewModel::removeImage,
                             onSend = viewModel::send,
                             isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
@@ -505,6 +530,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onStop = viewModel::stopGeneration,
                             onUnsupported = unsupported,
                             shadowAlpha = alphaFactor,
+                            modelBadge = gptModelBadge,
+                            onOpenModelConfig = {
+                                modelPickerOpen = true
+                                viewModel.refreshModels()
+                            },
+                            modelEnabled = modelEnabled,
                         )
                     }
                     Spacer(Modifier.height(23.dp))
@@ -514,33 +545,16 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
         if (modelPickerOpen && state.isPaired) {
-            ModalBottomSheet(onDismissRequest = { modelPickerOpen = false }, containerColor = Color.White,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)) {
-                Text("选择模型", color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
-                if (state.isLoadingModels || state.modelsError != null) Row(
-                    Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    if (state.isLoadingModels) CircularProgressIndicator(Modifier.size(18.dp), color = AccentBlue, strokeWidth = 2.dp)
-                    else {
-                        Text(state.modelsError.orEmpty(), color = SecondaryInk, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                        TextButton(onClick = viewModel::refreshModels) { Text("重试", color = AccentBlue) }
-                    }
-                }
-                LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp).navigationBarsPadding()) {
-                    items(state.models, key = { it.id }) { model ->
-                        val enabled = modelEnabled && (state.attachments.isEmpty() || model.supportsImages)
-                        Row(Modifier.fillMaxWidth().quietClickable(enabled = enabled) {
-                            viewModel.selectModel(model.id); modelPickerOpen = false
-                        }.padding(horizontal = 24.dp, vertical = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(model.label, color = if (enabled) Ink else SecondaryInk.copy(alpha = .4f), fontSize = 15.sp,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            if (model.id == chosenModelId || model.model == chosenModelId) Text("✓", color = AccentBlue,
-                                modifier = Modifier.padding(start = 12.dp).semantics { contentDescription = "已选择" })
-                        }
-                    }
-                }
-            }
+            ModelConfigBottomSheet(
+                onDismiss = { modelPickerOpen = false },
+                models = state.models,
+                currentChosenModelId = chosenModelId,
+                onSelectModel = viewModel::selectModel,
+                isLoadingModels = state.isLoadingModels,
+                modelsError = state.modelsError,
+                onRetryModels = viewModel::refreshModels,
+                modelSelectionEnabled = modelEnabled,
+            )
         }
         state.revertMessage?.let { message ->
             var revertFiles by remember(message.id) { mutableStateOf(true) }

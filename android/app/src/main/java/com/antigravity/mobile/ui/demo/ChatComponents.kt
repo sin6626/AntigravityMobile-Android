@@ -58,6 +58,14 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
+import androidx.compose.material.icons.outlined.PhotoCamera
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
@@ -218,9 +226,6 @@ internal fun ConversationTopBar(
     onPin: () -> Unit = {},
     onArchive: () -> Unit = {},
     leadingDescription: String = if (returnToProjects) "返回项目列表" else "打开菜单",
-    modelLabel: String? = null,
-    onChooseModel: () -> Unit = {},
-    modelEnabled: Boolean = true,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     Row(
@@ -233,9 +238,7 @@ internal fun ConversationTopBar(
             leadingDescription,
             onLeading,
         )
-        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            modelLabel?.let { ModelChoice(it, onChooseModel, modelEnabled) }
-        }
+        Spacer(Modifier.weight(1f))
         Row(
             modifier = Modifier.background(Color.White, RoundedCornerShape(32.dp)),
             verticalAlignment = Alignment.CenterVertically,
@@ -252,13 +255,108 @@ internal fun ConversationTopBar(
 }
 
 @Composable
-internal fun ModelChoice(label: String, onClick: () -> Unit, enabled: Boolean = true) {
-    Row(Modifier.heightIn(min = 48.dp).quietClickable(enabled = enabled, onClick = onClick)
-        .padding(horizontal = 12.dp).semantics { contentDescription = "选择模型" },
-        verticalAlignment = Alignment.CenterVertically) {
-        Text(label, color = SecondaryInk, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false))
-        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = SecondaryInk, modifier = Modifier.size(16.dp))
+internal fun ComposerPlusMenu(
+    expanded: Boolean,
+    onDismissRequest: () -> Unit,
+    onTakePhoto: () -> Unit,
+    onPickImage: () -> Unit,
+    onPickFile: () -> Unit,
+) {
+    if (!expanded) return
+
+    val density = LocalDensity.current
+    // 向上弹出定位在加号按钮上方
+    val offsetY = with(density) { (-190).dp.roundToPx() }
+
+    Popup(
+        alignment = Alignment.TopStart,
+        offset = IntOffset(x = 0, y = offsetY),
+        onDismissRequest = onDismissRequest,
+        properties = PopupProperties(focusable = true)
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(185.dp)
+                .shadow(16.dp, RoundedCornerShape(26.dp), spotColor = Color(0x33000000))
+                .border(1.dp, Color(0xFFEEEEEE), RoundedCornerShape(26.dp)),
+            shape = RoundedCornerShape(26.dp),
+            color = Color.White
+        ) {
+            Column(
+                modifier = Modifier.padding(vertical = 10.dp, horizontal = 10.dp)
+            ) {
+                // 1. 拍照
+                PlusMenuItem(
+                    icon = Icons.Outlined.PhotoCamera,
+                    label = "拍照",
+                    onClick = {
+                        onDismissRequest()
+                        onTakePhoto()
+                    }
+                )
+
+                Spacer(Modifier.height(4.dp))
+
+                // 2. 照片
+                PlusMenuItem(
+                    icon = Icons.Outlined.Image,
+                    label = "照片",
+                    onClick = {
+                        onDismissRequest()
+                        onPickImage()
+                    }
+                )
+
+                Spacer(Modifier.height(4.dp))
+
+                // 3. 文件
+                PlusMenuItem(
+                    icon = Icons.Outlined.AttachFile,
+                    label = "文件",
+                    onClick = {
+                        onDismissRequest()
+                        onPickFile()
+                    }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlusMenuItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(38.dp)
+                .background(Color(0xFFF1F1F1), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Color(0xFF1E1E1E),
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(
+            text = label,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.Medium,
+            color = Color(0xFF1E1E1E)
+        )
     }
 }
 
@@ -269,7 +367,10 @@ internal fun Composer(
     draft: String,
     attachments: List<PendingImage>,
     onDraftChange: (String) -> Unit,
-    onAddImage: () -> Unit,
+    onAddImage: () -> Unit = {},
+    onTakePhoto: () -> Unit = {},
+    onPickImage: () -> Unit = onAddImage,
+    onPickFile: () -> Unit = {},
     onRemoveImage: (Uri) -> Unit,
     onSend: () -> Unit,
     isSending: Boolean,
@@ -278,9 +379,13 @@ internal fun Composer(
     isStopping: Boolean = false,
     onStop: () -> Unit = {},
     shadowAlpha: Float = 1f,
+    modelBadge: String? = null,
+    onOpenModelConfig: () -> Unit = {},
+    modelEnabled: Boolean = true,
 ) {
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isRunning && !isStopping
     var focused by remember { mutableStateOf(false) }
+    var plusMenuOpen by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty()
     val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
     val targetCorner = if (expanded) 30.dp else 36.dp
@@ -307,7 +412,16 @@ internal fun Composer(
                 AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
                     exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
                     Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {
-                        ComposerIcon("add", "添加图片", 32, onAddImage, enabled = !expanded)
+                        Box {
+                            ComposerIcon("add", "添加附件与操作", 32, { plusMenuOpen = true }, enabled = !expanded)
+                            ComposerPlusMenu(
+                                expanded = plusMenuOpen && !expanded,
+                                onDismissRequest = { plusMenuOpen = false },
+                                onTakePhoto = onTakePhoto,
+                                onPickImage = onPickImage,
+                                onPickFile = onPickFile
+                            )
+                        }
                     }
                 }
                 ComposerTextField(draft, onDraftChange, onSend, canSend,
@@ -324,7 +438,29 @@ internal fun Composer(
             AnimatedVisibility(expanded, enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                 exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
                 Box((if (!expanded) Modifier.clearAndSetSemantics {} else Modifier).padding(start = 20.dp, end = 12.dp, bottom = 9.dp, top = 3.dp)) {
-                    ComposerActions(canSend, onSend, onAddImage, onUnsupported, isRunning, isSending, isStopping, onStop, expanded)
+                    Box {
+                        ComposerActions(
+                            canSend = canSend,
+                            onSend = onSend,
+                            onOpenPlusMenu = { plusMenuOpen = true },
+                            onUnsupported = onUnsupported,
+                            isRunning = isRunning,
+                            isSending = isSending,
+                            isStopping = isStopping,
+                            onStop = onStop,
+                            active = expanded,
+                            modelBadge = modelBadge,
+                            onOpenModelConfig = onOpenModelConfig,
+                            modelEnabled = modelEnabled
+                        )
+                        ComposerPlusMenu(
+                            expanded = plusMenuOpen && expanded,
+                            onDismissRequest = { plusMenuOpen = false },
+                            onTakePhoto = onTakePhoto,
+                            onPickImage = onPickImage,
+                            onPickFile = onPickFile
+                        )
+                    }
                 }
             }
         }
@@ -332,11 +468,39 @@ internal fun Composer(
 }
 
 @Composable
-private fun ComposerActions(canSend: Boolean, onSend: () -> Unit, onAddImage: () -> Unit, onUnsupported: () -> Unit,
-    isRunning: Boolean, isSending: Boolean, isStopping: Boolean, onStop: () -> Unit, active: Boolean) {
+private fun ComposerActions(
+    canSend: Boolean,
+    onSend: () -> Unit,
+    onOpenPlusMenu: () -> Unit,
+    onUnsupported: () -> Unit,
+    isRunning: Boolean,
+    isSending: Boolean,
+    isStopping: Boolean,
+    onStop: () -> Unit,
+    active: Boolean,
+    modelBadge: String?,
+    onOpenModelConfig: () -> Unit,
+    modelEnabled: Boolean
+) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ComposerIcon("add", "添加图片", 32, onAddImage, active)
+        ComposerIcon("add", "添加附件与操作", 32, onOpenPlusMenu, active)
         Spacer(Modifier.weight(1f))
+        if (!modelBadge.isNullOrBlank()) {
+            Text(
+                text = modelBadge,
+                color = Ink,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable(enabled = active && modelEnabled, onClick = onOpenModelConfig)
+                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                    .semantics { contentDescription = "选择模型" }
+            )
+            Spacer(Modifier.width(4.dp))
+        }
         ComposerIcon("mic", "语音输入，暂不可用", 27, onUnsupported, active)
         SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active)
     }
