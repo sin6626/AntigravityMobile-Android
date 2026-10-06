@@ -1,7 +1,15 @@
 package com.antigravity.mobile.ui.demo
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -9,19 +17,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.ChatModel
@@ -47,9 +51,9 @@ data class ModelFamily(
 )
 
 /**
- * 将后端的扁平模型列表智能聚合成同一个模型族（如 Gemini 3.8 Flash、Gemini 3.1 Pro、Claude 等）
+ * 全量聚合后端返回的所有模型（绝不过滤任何模型），并将 Gemini 模型按版本倒序排在前面。
  */
-internal fun groupChatModels(models: List<ChatModel>): List<ModelFamily> {
+internal fun groupAndSortChatModels(models: List<ChatModel>): List<ModelFamily> {
     val families = linkedMapOf<String, MutableList<ModelVariant>>()
     val imageSupportMap = mutableMapOf<String, Boolean>()
     val displayNameMap = mutableMapOf<String, String>()
@@ -75,14 +79,14 @@ internal fun groupChatModels(models: List<ChatModel>): List<ModelFamily> {
         val level = levelFromId ?: levelFromLabel
 
         val baseName = label
-            .replace(Regex("\\s*\\((High|Medium|Low)\\)", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\s+(High|Medium|Low)$", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s*\((High|Medium|Low)\)""", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("""\s+(High|Medium|Low)$""", RegexOption.IGNORE_CASE), "")
             .trim()
 
         val baseKey = if (level != null) {
             baseName.lowercase().replace(Regex("[^a-z0-9]"), "")
         } else {
-            id
+            m.id
         }
 
         val list = families.getOrPut(baseKey) { mutableListOf() }
@@ -93,7 +97,7 @@ internal fun groupChatModels(models: List<ChatModel>): List<ModelFamily> {
         }
     }
 
-    return families.map { (key, variants) ->
+    val familyList = families.map { (key, variants) ->
         val sortedVariants = variants.sortedBy { v ->
             when (v.level) {
                 ThinkingLevel.LOW -> 1
@@ -109,6 +113,26 @@ internal fun groupChatModels(models: List<ChatModel>): List<ModelFamily> {
             variants = sortedVariants
         )
     }
+
+    // 辅助解析版本号进行倒序排序
+    fun extractVersionScore(name: String): Double {
+        val match = Regex("""(\d+\.?\d*)""").find(name)
+        val num = match?.value?.toDoubleOrNull() ?: 0.0
+        val sub = if (name.contains("flash", ignoreCase = true)) 0.05 else 0.0
+        return num + sub
+    }
+
+    // Gemini 模型倒序排在前面（版本高的排前面）
+    val geminiFamilies = familyList.filter {
+        it.displayName.contains("gemini", ignoreCase = true) || it.baseKey.contains("gemini", ignoreCase = true)
+    }.sortedByDescending { extractVersionScore(it.displayName) }
+
+    // 其余非 Gemini 模型（Claude, GPT-OSS等）紧随其后全量展示
+    val otherFamilies = familyList.filter {
+        !it.displayName.contains("gemini", ignoreCase = true) && !it.baseKey.contains("gemini", ignoreCase = true)
+    }
+
+    return geminiFamilies + otherFamilies
 }
 
 /**
@@ -124,10 +148,162 @@ internal fun formatGptModelBadge(model: ChatModel?): String {
         else -> ""
     }
     val cleanName = label
-        .replace(Regex("\\s*\\((High|Medium|Low)\\)", RegexOption.IGNORE_CASE), "")
-        .replace(Regex("\\s+(High|Medium|Low)$", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\s*\((High|Medium|Low)\)""", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("""\s+(High|Medium|Low)$""", RegexOption.IGNORE_CASE), "")
         .trim()
     return cleanName + levelSuffix
+}
+
+/**
+ * GPT 风格的思考程度（推理强度）大药丸可拉动滑块选择器
+ */
+@Composable
+internal fun ThinkingLevelSlider(
+    currentLevel: ThinkingLevel,
+    onLevelSelected: (ThinkingLevel) -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    val targetIndex = currentLevel.ordinal.toFloat()
+    val animatedProgress by animateFloatAsState(
+        targetValue = targetIndex,
+        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+        label = "thinking_progress"
+    )
+
+    val targetTrackColor = when (currentLevel) {
+        ThinkingLevel.HIGH -> Color(0xFF0A84FF)
+        ThinkingLevel.MEDIUM -> Color(0xFF2E82E6)
+        ThinkingLevel.LOW -> Color(0xFFE5E5EA)
+    }
+    val animatedTrackColor by animateColorAsState(
+        targetValue = if (enabled) targetTrackColor else Color(0xFFE5E5EA),
+        animationSpec = tween(250),
+        label = "thinking_track_color"
+    )
+
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // 顶部文本：“高 推理强度”（高高亮蓝色）
+        Row(
+            modifier = Modifier.padding(bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = currentLevel.displayName,
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (currentLevel == ThinkingLevel.LOW) Color(0xFF111111) else Color(0xFF0A84FF)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = "推理强度",
+                fontSize = 19.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF111111)
+            )
+        }
+
+        // 下方胶囊滑块轨道
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(54.dp)
+                .clip(RoundedCornerShape(27.dp))
+                .background(animatedTrackColor)
+                .then(
+                    if (currentLevel == ThinkingLevel.LOW) {
+                        Modifier.border(1.dp, Color(0xFFD0D0D7), RoundedCornerShape(27.dp))
+                    } else Modifier
+                )
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
+                    detectTapGestures { offset ->
+                        val widthPx = size.width
+                        val fraction = (offset.x / widthPx).coerceIn(0f, 1f)
+                        val newIndex = when {
+                            fraction < 0.33f -> 0
+                            fraction < 0.67f -> 1
+                            else -> 2
+                        }
+                        onLevelSelected(ThinkingLevel.values()[newIndex])
+                    }
+                }
+                .pointerInput(enabled) {
+                    if (!enabled) return@pointerInput
+                    detectHorizontalDragGestures(
+                        onDragEnd = {},
+                        onHorizontalDrag = { change, _ ->
+                            change.consume()
+                            val widthPx = size.width
+                            val fraction = (change.position.x / widthPx).coerceIn(0f, 1f)
+                            val newIndex = when {
+                                fraction < 0.33f -> 0
+                                fraction < 0.67f -> 1
+                                else -> 2
+                            }
+                            if (newIndex != currentLevel.ordinal) {
+                                onLevelSelected(ThinkingLevel.values()[newIndex])
+                            }
+                        }
+                    )
+                },
+            contentAlignment = Alignment.CenterStart
+        ) {
+            val totalWidth = maxWidth
+            val thumbSize = 44.dp
+            val padding = 5.dp
+            val travelDistance = totalWidth - thumbSize - (padding * 2)
+
+            // 3 个刻度圆点
+            val isBlueTrack = currentLevel != ThinkingLevel.LOW
+            val tickDotColor = if (isBlueTrack) Color.White.copy(alpha = 0.55f) else Color(0xFFA0A0A8)
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = padding + thumbSize / 2),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(3) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .clip(CircleShape)
+                            .background(tickDotColor)
+                    )
+                }
+            }
+
+            // 白色可拉动滑块把手（Thumb）
+            val thumbOffset = padding + travelDistance * (animatedProgress / 2f)
+
+            Box(
+                modifier = Modifier
+                    .offset(x = thumbOffset)
+                    .size(thumbSize)
+                    .shadow(
+                        elevation = if (isBlueTrack) 3.dp else 2.dp,
+                        shape = CircleShape,
+                        spotColor = Color(0x33000000)
+                    )
+                    .background(Color.White, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                if (currentLevel == ThinkingLevel.LOW) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .border(2.5.dp, Color(0xFF0A84FF), CircleShape)
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -146,7 +322,8 @@ internal fun ModelConfigBottomSheet(
     modelSelectionEnabled: Boolean = true,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val families = remember(models) { groupChatModels(models) }
+    // 全量聚合与 Gemini 倒序排序
+    val families = remember(models) { groupAndSortChatModels(models) }
 
     // 找到当前选中的模型变体与所属模型族
     val currentVariant = remember(models, currentChosenModelId) {
@@ -190,6 +367,7 @@ internal fun ModelConfigBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -229,7 +407,7 @@ internal fun ModelConfigBottomSheet(
                 }
             }
 
-            // 主模型列表大卡片组（浅灰色大圆角卡片）
+            // 主模型列表大卡片组（浅灰色大圆角卡片，直接列表渲染，绝不嵌套内部 scrollView）
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -274,101 +452,63 @@ internal fun ModelConfigBottomSheet(
                 // 分割线
                 HorizontalDivider(color = Color.White, thickness = 1.dp)
 
-                // 各模型列表项
-                Box(modifier = Modifier.fillMaxWidth().heightIn(max = 280.dp)) {
-                    Column(
+                // 各模型列表项（全量直接展开渲染）
+                families.forEachIndexed { index, family ->
+                    val isFamilySelected = currentFamily?.baseKey == family.baseKey
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
+                            .clickable(enabled = modelSelectionEnabled) {
+                                // 选中此模型族时，优先保持当前思考档位对应的变体
+                                val matched = family.variants.firstOrNull { it.level == currentLevel }
+                                    ?: family.variants.firstOrNull { it.level == ThinkingLevel.HIGH }
+                                    ?: family.variants.first()
+                                onSelectModel(matched.modelId)
+                            }
+                            .padding(horizontal = 20.dp, vertical = 15.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        families.forEachIndexed { index, family ->
-                            val isFamilySelected = currentFamily?.baseKey == family.baseKey
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable(enabled = modelSelectionEnabled) {
-                                        // 选中此模型族时，优先保持当前思考档位对应的变体
-                                        val matched = family.variants.firstOrNull { it.level == currentLevel }
-                                            ?: family.variants.firstOrNull { it.level == ThinkingLevel.HIGH }
-                                            ?: family.variants.first()
-                                        onSelectModel(matched.modelId)
-                                    }
-                                    .padding(horizontal = 20.dp, vertical = 15.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text(
-                                    text = family.displayName,
-                                    fontSize = 16.sp,
-                                    fontWeight = if (isFamilySelected) FontWeight.Medium else FontWeight.Normal,
-                                    color = Color(0xFF111111),
-                                    modifier = Modifier.weight(1f)
-                                )
-                                if (isFamilySelected) {
-                                    Icon(
-                                        imageVector = Icons.Default.Check,
-                                        contentDescription = "已选择",
-                                        tint = Color(0xFF444444),
-                                        modifier = Modifier.size(22.dp)
-                                    )
-                                }
-                            }
-
-                            if (index < families.size - 1) {
-                                HorizontalDivider(color = Color.White, thickness = 1.dp)
-                            }
+                        Text(
+                            text = family.displayName,
+                            fontSize = 16.sp,
+                            fontWeight = if (isFamilySelected) FontWeight.Medium else FontWeight.Normal,
+                            color = Color(0xFF111111),
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (isFamilySelected) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "已选择",
+                                tint = Color(0xFF444444),
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
                     }
-                }
-            }
 
-            Spacer(Modifier.height(14.dp))
-
-            // 思考程度 / 速度 卡片
-            val availableLevels = currentFamily?.variants?.mapNotNull { it.level }?.distinct() ?: emptyList()
-            val hasThinkingLevels = availableLevels.size > 1
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFFEEEEEE))
-                    .clickable(enabled = modelSelectionEnabled && hasThinkingLevels) {
-                        // 点击切换思考档位（在可选档位之间循环）
-                        if (currentFamily != null && availableLevels.isNotEmpty()) {
-                            val nextIndex = (availableLevels.indexOf(currentLevel) + 1) % availableLevels.size
-                            val nextLevel = availableLevels[nextIndex]
-                            val targetVariant = currentFamily.variants.firstOrNull { it.level == nextLevel }
-                            targetVariant?.let { onSelectModel(it.modelId) }
-                        }
+                    if (index < families.size - 1) {
+                        HorizontalDivider(color = Color.White, thickness = 1.dp)
                     }
-                    .padding(horizontal = 20.dp, vertical = 16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "思考程度",
-                    fontSize = 15.sp,
-                    color = Color(0xFF111111),
-                    fontWeight = FontWeight.Normal
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = if (hasThinkingLevels) "${currentLevel.displayName}档" else "标准",
-                        fontSize = 15.sp,
-                        color = Color(0xFF666666),
-                        fontWeight = FontWeight.Normal
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Icon(
-                        imageVector = Icons.Filled.KeyboardArrowDown,
-                        contentDescription = "切换思考程度",
-                        tint = Color(0xFF777777),
-                        modifier = Modifier.size(18.dp)
-                    )
                 }
             }
 
             Spacer(Modifier.height(20.dp))
+
+            // 思考程度 / 推理强度 拖动滑块组件（GPT 风格大胶囊滑块）
+            val hasThinkingLevels = currentFamily?.variants?.any { it.level != null } == true
+            ThinkingLevelSlider(
+                currentLevel = currentLevel,
+                onLevelSelected = { newLevel ->
+                    if (currentFamily != null) {
+                        val targetVariant = currentFamily.variants.firstOrNull { it.level == newLevel }
+                            ?: currentFamily.variants.firstOrNull()
+                        targetVariant?.let { onSelectModel(it.modelId) }
+                    }
+                },
+                enabled = modelSelectionEnabled && hasThinkingLevels
+            )
+
+            Spacer(Modifier.height(24.dp))
 
             // 底部黑色“完成”大胶囊按钮
             Button(
@@ -389,7 +529,7 @@ internal fun ModelConfigBottomSheet(
                 )
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
