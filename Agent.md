@@ -5,6 +5,21 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-06 滑块已滑过区域蓝色高亮填充与弹窗高度平滑折叠过渡
+
+- **滑块轨道颜色规范（滑过去的地方才变蓝）**：
+  - 彻底修复此前轨道整根全蓝的问题，1:1 还原用户设计图规范；
+  - 底轨采用浅灰底色大胶囊（`Color(0xFFF2F2F7)`）与微弱浅灰边框；
+  - 激活轨道（已滑过区域 Active Track）：从最左端覆盖至当前 Thumb 中心位置，填充饱满科技蓝（`Color(0xFF0A84FF)`）；低档位（最左侧）为 0 宽度（全浅灰轨道，Thumb 为白底带亮蓝外环）；中档位（正中间）左半段为蓝色，右半段为浅灰色，蓝灰分界线被正中纯白 Thumb 完美遮盖；高档位（最右侧）在接近末端时平滑填满整根胶囊；
+  - 刻度圆点：单层统一 Row 布局，动态判定当前点是否落在蓝色激活区域内，落入蓝色区域显示为白色半透明点（`Color.White.copy(alpha = 0.55f)`），未滑过区域显示为浅灰色点（`Color(0xFFC7C7CC)`），Thumb 在当前档位正中覆盖刻度点，彻底消除错位与多余点。
+- **选择无思考模型时的高度折叠平滑过渡（消除高度塌陷）**：
+  - 为外层 `ModalBottomSheet` 内容容器 `Column` 接入 `Modifier.animateContentSize(animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow))`；
+  - 为滑块区域的 `AnimatedVisibility` 增加 `expandVertically` 与 `shrinkVertically` 垂直尺寸过渡（展开自顶部，收缩向顶部，配合 `fadeIn` / `fadeOut`）；
+  - 当用户选中 Claude 或 GPT 等无思考变体模型时，滑块平滑向上折叠淡出，整个 BottomSheet 内容高度连同下方的“完成”大按钮伴随平滑弹簧阻尼柔和上浮，彻底消除高度瞬间塌陷或跳变；切回 Gemini 时弹簧向下顺滑展开。
+- **验证与测试**：
+  - Gradle `:app:assembleDebug` 构建通过，9 项 JVM 单元测试全部通过；
+  - 安装至真实模拟器 `emulator-5554` 完整验证：高档整根全蓝（`slider_track_high.png`）、低档浅灰+蓝圈 Thumb（`slider_track_low.png`）、中档精准半蓝半灰（`slider_perfect_med.png`）、拖拽实时跟手渐变、切换 Claude 弹簧平滑折叠（`slider_claude_collapsed.png`，无高度塌陷）、切回 Gemini 顺滑展开（`slider_reexpanded.png`）、完成选择后输入栏标签精确联动（`slider_focused_badge.png`）。
+
 ### 2026-10-06 模型全量展示、Gemini倒序与真物理跟手滑块重构
 
 - **全量模型展示与倒序排序**：对网关返回的模型列表全量展示（绝不过滤任何模型模式），提取版本号排序，Gemini 系列倒序排在前面（如 3.8 Flash > 3.7 Flash > 3.6 Flash > 3.1 Pro），非 Gemini 模型（Claude, GPT-OSS等）排在后面全量呈现。

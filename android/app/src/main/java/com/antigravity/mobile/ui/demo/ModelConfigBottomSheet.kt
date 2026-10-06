@@ -1,11 +1,19 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutLinearInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -21,6 +29,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
@@ -235,13 +244,19 @@ internal fun ThinkingLevelSlider(
                 )
             }
 
-            // 蓝色大药丸胶囊轨道（与图 3 1:1 精确复刻）
+            // 当前滑动进度 0f .. 1f
+            val progress = (if (travelDistancePx > 0f) offsetX.value / travelDistancePx else 0f).coerceIn(0f, 1f)
+            val totalWidthPx = with(density) { totalWidth.toPx() }
+
+            // 滑块轨道容器（大药丸胶囊）
+            // 底层是浅灰底色 + 细微边框；滑过的区域（左侧至 Thumb 处）填充科技蓝
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(54.dp)
                     .clip(RoundedCornerShape(27.dp))
-                    .background(Color(0xFF0A84FF))
+                    .background(Color(0xFFF2F2F7))
+                    .border(1.dp, Color(0xFFE5E5EA), RoundedCornerShape(27.dp))
                     .pointerInput(enabled, travelDistancePx) {
                         if (!enabled) return@pointerInput
                         detectTapGestures { tapOffset ->
@@ -340,7 +355,31 @@ internal fun ThinkingLevelSlider(
                     },
                 contentAlignment = Alignment.CenterStart
             ) {
-                // 3 个刻度圆点（白色半透明）
+                // 1. 蓝色已滑过激活轨道（Active Track：滑过去的地方才变成蓝色）
+                val horizontalPaddingPx = with(density) { horizontalPadding.toPx() }
+                val thumbSizePx = with(density) { thumbSize.toPx() }
+                val thumbCenterPx = horizontalPaddingPx + offsetX.value + thumbSizePx / 2f
+                val activeWidthPx = when {
+                    progress <= 0.001f -> 0f
+                    progress >= 0.999f -> totalWidthPx
+                    progress >= 0.80f -> {
+                        val t = (progress - 0.80f) / 0.20f
+                        thumbCenterPx + (totalWidthPx - thumbCenterPx) * t
+                    }
+                    else -> thumbCenterPx
+                }
+                val activeWidthDp = with(density) { activeWidthPx.toDp() }
+
+                if (activeWidthPx > 0f) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .width(activeWidthDp)
+                            .background(Color(0xFF0A84FF))
+                    )
+                }
+
+                // 2. 3 个刻度圆点（根据是否被蓝色激活轨道覆盖，动态呈现白色半透明或未激活灰色）
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -348,29 +387,45 @@ internal fun ThinkingLevelSlider(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    repeat(3) {
+                    repeat(3) { index ->
+                        val dotColor = when (index) {
+                            0 -> if (activeWidthPx > 0f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
+                            1 -> if (progress >= 0.5f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
+                            2 -> if (progress >= 0.99f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
+                            else -> Color(0xFFC7C7CC)
+                        }
                         Box(
                             modifier = Modifier
                                 .size(7.dp)
                                 .clip(CircleShape)
-                                .background(Color.White.copy(alpha = 0.50f))
+                                .background(dotColor)
                         )
                     }
                 }
 
-                // 纯白实体大圆球把手（Thumb）
+                // 3. Thumb 把手（在低档时带蓝色边框，滑向右边时平滑变为纯白实体大圆球）
                 val currentThumbOffsetDp = with(density) { (horizontalPadding.toPx() + offsetX.value).toDp() }
+                val blueBorderAlpha = (1f - progress * 4f).coerceIn(0f, 1f)
 
                 Box(
                     modifier = Modifier
                         .offset(x = currentThumbOffsetDp)
                         .size(thumbSize)
                         .shadow(
-                            elevation = 4.dp,
+                            elevation = (3.dp + 1.5.dp * progress),
                             shape = CircleShape,
-                            spotColor = Color(0x40000000)
+                            spotColor = Color(0x35000000)
                         )
                         .background(Color.White, CircleShape)
+                        .then(
+                            if (blueBorderAlpha > 0f) {
+                                Modifier.border(
+                                    width = 2.5.dp,
+                                    color = Color(0xFF0A84FF).copy(alpha = blueBorderAlpha),
+                                    shape = CircleShape
+                                )
+                            } else Modifier
+                        )
                 )
             }
         }
@@ -441,6 +496,12 @@ internal fun ModelConfigBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .animateContentSize(
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMediumLow
+                    )
+                )
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding(),
@@ -566,13 +627,27 @@ internal fun ModelConfigBottomSheet(
                 }
             }
 
-            // 思考程度 / 推理强度 拖动滑块组件（仅当所选模型支持思考程度变体时展示，若选择 Claude 等模型则自动隐藏）
+            // 思考程度 / 推理强度 拖动滑块组件（仅当所选模型支持思考程度变体时展示，若选择 Claude 等模型则自动平滑收起高度与淡出）
             AnimatedVisibility(
                 visible = hasThinkingLevels,
-                enter = fadeIn(),
-                exit = fadeOut()
+                enter = fadeIn(animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing)) +
+                        expandVertically(
+                            animationSpec = spring(
+                                dampingRatio = Spring.DampingRatioLowBouncy,
+                                stiffness = Spring.StiffnessMediumLow
+                            ),
+                            expandFrom = Alignment.Top
+                        ),
+                exit = fadeOut(animationSpec = tween(durationMillis = 180, easing = FastOutLinearInEasing)) +
+                       shrinkVertically(
+                           animationSpec = spring(
+                               dampingRatio = Spring.DampingRatioNoBouncy,
+                               stiffness = Spring.StiffnessMediumLow
+                           ),
+                           shrinkTowards = Alignment.Top
+                       )
             ) {
-                Column {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(20.dp))
                     ThinkingLevelSlider(
                         currentLevel = currentLevel,
