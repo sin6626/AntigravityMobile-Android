@@ -247,16 +247,29 @@ internal fun ThinkingLevelSlider(
             // 当前滑动进度 0f .. 1f
             val progress = (if (travelDistancePx > 0f) offsetX.value / travelDistancePx else 0f).coerceIn(0f, 1f)
             val totalWidthPx = with(density) { totalWidth.toPx() }
+            val horizontalPaddingPx = with(density) { horizontalPadding.toPx() }
+            val thumbSizePx = with(density) { thumbSize.toPx() }
+            val trackHeight = 54.dp
+            val trackRadius = 27.dp
 
-            // 滑块轨道容器（大药丸胶囊）
-            // 底层是浅灰底色 + 细微边框；滑过的区域（左侧至 Thumb 处）填充科技蓝
+            // Thumb 中心绝对像素位置
+            val thumbCenterPx = horizontalPaddingPx + offsetX.value + thumbSizePx / 2f
+
+            // 蓝色激活胶囊宽度 = 从左边缘到 Thumb 中心 + 半个 Thumb 大小（让蓝色包住 Thumb 左半）
+            val activeWidthPx = (thumbCenterPx + thumbSizePx / 2f).coerceIn(0f, totalWidthPx)
+            val activeWidthDp = with(density) { activeWidthPx.toDp() }
+
+            // 灰色未激活胶囊：从 Thumb 中心 - 半个 Thumb 大小 到右边缘
+            val inactiveLeftPx = (thumbCenterPx - thumbSizePx / 2f).coerceIn(0f, totalWidthPx)
+            val inactiveLeftDp = with(density) { inactiveLeftPx.toDp() }
+            val inactiveWidthPx = (totalWidthPx - inactiveLeftPx).coerceAtLeast(0f)
+            val inactiveWidthDp = with(density) { inactiveWidthPx.toDp() }
+
+            // 轨道手势容器（透明，仅做手势检测区域）
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(54.dp)
-                    .clip(RoundedCornerShape(27.dp))
-                    .background(Color(0xFFF2F2F7))
-                    .border(1.dp, Color(0xFFE5E5EA), RoundedCornerShape(27.dp))
+                    .height(trackHeight)
                     .pointerInput(enabled, travelDistancePx) {
                         if (!enabled) return@pointerInput
                         detectTapGestures { tapOffset ->
@@ -291,7 +304,6 @@ internal fun ThinkingLevelSlider(
                             },
                             onDragEnd = {
                                 isDragging = false
-                                // 手指抬起时精准弹簧回弹吸附到最近刻度
                                 val currentPx = offsetX.value
                                 val nearestIndex = when {
                                     currentPx < travelDistancePx * 0.28f -> 0
@@ -338,12 +350,10 @@ internal fun ThinkingLevelSlider(
                             },
                             onHorizontalDrag = { change, dragAmount ->
                                 change.consume()
-                                // 1:1 绝对实时跟手位移
                                 val nextPx = (offsetX.value + dragAmount).coerceIn(0f, travelDistancePx)
                                 scope.launch {
                                     offsetX.snapTo(nextPx)
                                 }
-                                // 实时跟手预览最近档位更新文字反馈
                                 val nearestIndex = when {
                                     nextPx < travelDistancePx * 0.28f -> 0
                                     nextPx > travelDistancePx * 0.72f -> 2
@@ -355,31 +365,31 @@ internal fun ThinkingLevelSlider(
                     },
                 contentAlignment = Alignment.CenterStart
             ) {
-                // 1. 蓝色已滑过激活轨道（Active Track：滑过去的地方才变成蓝色）
-                val horizontalPaddingPx = with(density) { horizontalPadding.toPx() }
-                val thumbSizePx = with(density) { thumbSize.toPx() }
-                val thumbCenterPx = horizontalPaddingPx + offsetX.value + thumbSizePx / 2f
-                val activeWidthPx = when {
-                    progress <= 0.001f -> 0f
-                    progress >= 0.999f -> totalWidthPx
-                    progress >= 0.80f -> {
-                        val t = (progress - 0.80f) / 0.20f
-                        thumbCenterPx + (totalWidthPx - thumbCenterPx) * t
-                    }
-                    else -> thumbCenterPx
-                }
-                val activeWidthDp = with(density) { activeWidthPx.toDp() }
-
-                if (activeWidthPx > 0f) {
+                // 1. 灰色未激活胶囊（右侧独立圆角药丸，带细微边框）
+                if (inactiveWidthPx > 0f && progress < 0.999f) {
                     Box(
                         modifier = Modifier
-                            .fillMaxHeight()
+                            .offset(x = inactiveLeftDp)
+                            .width(inactiveWidthDp)
+                            .height(trackHeight)
+                            .clip(RoundedCornerShape(trackRadius))
+                            .background(Color(0xFFF2F2F7))
+                            .border(1.dp, Color(0xFFE0E0E5), RoundedCornerShape(trackRadius))
+                    )
+                }
+
+                // 2. 蓝色激活胶囊（左侧独立圆角药丸，两端都是完整圆角）
+                if (activeWidthPx > 0f && progress > 0.001f) {
+                    Box(
+                        modifier = Modifier
                             .width(activeWidthDp)
+                            .height(trackHeight)
+                            .clip(RoundedCornerShape(trackRadius))
                             .background(Color(0xFF0A84FF))
                     )
                 }
 
-                // 2. 3 个刻度圆点（根据是否被蓝色激活轨道覆盖，动态呈现白色半透明或未激活灰色）
+                // 3. 刻度圆点（在蓝色激活区域内为白色半透明，在灰色未激活区域内为灰色）
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -389,9 +399,9 @@ internal fun ThinkingLevelSlider(
                 ) {
                     repeat(3) { index ->
                         val dotColor = when (index) {
-                            0 -> if (activeWidthPx > 0f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
-                            1 -> if (progress >= 0.5f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
-                            2 -> if (progress >= 0.99f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
+                            0 -> if (progress > 0.01f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
+                            1 -> if (progress >= 0.45f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
+                            2 -> if (progress >= 0.95f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
                             else -> Color(0xFFC7C7CC)
                         }
                         Box(
@@ -403,7 +413,7 @@ internal fun ThinkingLevelSlider(
                     }
                 }
 
-                // 3. Thumb 把手（在低档时带蓝色边框，滑向右边时平滑变为纯白实体大圆球）
+                // 4. Thumb 把手（低档时带蓝色边框环，滑向右侧时渐变为纯白实心圆球）
                 val currentThumbOffsetDp = with(density) { (horizontalPadding.toPx() + offsetX.value).toDp() }
                 val blueBorderAlpha = (1f - progress * 4f).coerceIn(0f, 1f)
 
