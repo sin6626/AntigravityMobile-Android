@@ -5,6 +5,22 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-06 模型全量展示、Gemini倒序与真物理跟手滑块重构
+
+- **全量模型展示与倒序排序**：对网关返回的模型列表全量展示（绝不过滤任何模型模式），提取版本号排序，Gemini 系列倒序排在前面（如 3.8 Flash > 3.7 Flash > 3.6 Flash > 3.1 Pro），非 Gemini 模型（Claude, GPT-OSS等）排在后面全量呈现。
+- **移除嵌套滚动组件**：去掉模型列表灰色卡片内部的局部 `scrollView` 与 `heightIn(max = 280.dp)`，改为直接列表渲染，由外层 BottomSheet 统一响应手势，消除滑动冲突。
+- **重构真物理跟手“推理强度”滑块（`ThinkingLevelSlider`）**：
+  - 反思此前粗暴分段离散跳变造成的死板手感，彻底重构手势引擎；
+  - 采用 `Animatable` + `pointerInput`（`detectHorizontalDragGestures` 与 `detectTapGestures`），实现像素级 1:1 绝对实时跟手位移（`offsetX.snapTo`）；
+  - 手指抬起（`onDragEnd`）与点击刻度时，根据落点自动计算最近刻度点，并以平滑阻尼弹簧动画（`spring(dampingRatio = 0.75f, stiffness = 400f)`）吸附回弹；
+  - 固定 3 个档位（低、中、高），3 个白色半透明刻度圆点，大胶囊饱满亮蓝轨道（`0xFF0A84FF`）与纯白实心 Thumb；居中标题（`高 / 中 / 低 推理强度`）在拖拽时随当前指尖落点实时联动预览；
+- **模型思考变体条件渲染**：
+  - 识别所选模型变体是否有思考档位（`hasThinkingLevels = currentFamily?.variants?.any { it.level != null } == true`）；
+  - 当用户选中 Claude 或其他无思考程度的模型时，通过 `AnimatedVisibility` 彻底隐藏滑块，保持弹窗整洁清爽；当切回 Gemini 时平滑淡入滑块。
+- **构建与实机验证**：
+  - Gradle `:app:assembleDebug` 构建通过，9 项 JVM 单元测试全部通过；
+  - 在真实模拟器 `emulator-5554` 自动化与实机交互验证：Gemini 倒序排列、滑块真实物理拖拽吸附、切换 Claude 时滑块隐藏、切回 Gemini 时滑块恢复、完成选择后输入栏左下角模型标签（如 `Gemini 3.8 Flash 低`）实时联动更新。
+
 ### 2026-10-06 流式回复回到底部按钮闪烁
 
 - 根因是流式正文逐帧增高后，列表先暂时离开底部、再自动定位；按钮原来仅检查nearBottom，重复触发120ms淡入淡出。最小模拟器复现（2轮历史+30次长文本追加）失败：120帧采样有113帧存在按钮节点；临时状态探针记录29次nearBottom=false，followLatest一直为true，组件没有重建。

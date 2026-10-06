@@ -1,12 +1,11 @@
 package com.antigravity.mobile.ui.demo
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -25,10 +24,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.ChatModel
+import kotlinx.coroutines.launch
 
 enum class ThinkingLevel(val displayName: String, val shortName: String) {
     LOW("低", "低"),
@@ -155,7 +156,7 @@ internal fun formatGptModelBadge(model: ChatModel?): String {
 }
 
 /**
- * GPT 风格的思考程度（推理强度）大药丸可拉动滑块选择器
+ * 1:1 还原 GPT 风格真实物理跟手拖拽滑块（3个刻度：低/中/高）
  */
 @Composable
 internal fun ThinkingLevelSlider(
@@ -164,143 +165,213 @@ internal fun ThinkingLevelSlider(
     enabled: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val targetIndex = currentLevel.ordinal.toFloat()
-    val animatedProgress by animateFloatAsState(
-        targetValue = targetIndex,
-        animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
-        label = "thinking_progress"
-    )
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
 
-    val targetTrackColor = when (currentLevel) {
-        ThinkingLevel.HIGH -> Color(0xFF0A84FF)
-        ThinkingLevel.MEDIUM -> Color(0xFF2E82E6)
-        ThinkingLevel.LOW -> Color(0xFFE5E5EA)
-    }
-    val animatedTrackColor by animateColorAsState(
-        targetValue = if (enabled) targetTrackColor else Color(0xFFE5E5EA),
-        animationSpec = tween(250),
-        label = "thinking_track_color"
-    )
+    // 当前在拖拽过程中的预览档位（用于顶部文字实时响应）
+    var previewLevel by remember(currentLevel) { mutableStateOf(currentLevel) }
+    var isDragging by remember { mutableStateOf(false) }
 
-    Column(
+    BoxWithConstraints(
         modifier = modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+        contentAlignment = Alignment.Center
     ) {
-        // 顶部文本：“高 推理强度”（高高亮蓝色）
-        Row(
-            modifier = Modifier.padding(bottom = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            Text(
-                text = currentLevel.displayName,
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (currentLevel == ThinkingLevel.LOW) Color(0xFF111111) else Color(0xFF0A84FF)
-            )
-            Spacer(Modifier.width(4.dp))
-            Text(
-                text = "推理强度",
-                fontSize = 19.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF111111)
-            )
+        val totalWidth = maxWidth
+        val thumbSize = 44.dp
+        val horizontalPadding = 5.dp
+        val travelDistancePx = with(density) { (totalWidth - thumbSize - horizontalPadding * 2).toPx() }
+
+        // 三个刻度点的绝对位移 (px)
+        val tick0Px = 0f
+        val tick1Px = travelDistancePx / 2f
+        val tick2Px = travelDistancePx
+
+        // 连续位置 Animatable
+        val initialOffsetPx = when (currentLevel) {
+            ThinkingLevel.LOW -> tick0Px
+            ThinkingLevel.MEDIUM -> tick1Px
+            ThinkingLevel.HIGH -> tick2Px
+        }
+        val offsetX = remember { Animatable(initialOffsetPx) }
+
+        // 当外部 currentLevel 改变且用户未在主动拖拽时，弹簧滑向目标
+        LaunchedEffect(currentLevel, travelDistancePx) {
+            if (!isDragging) {
+                val target = when (currentLevel) {
+                    ThinkingLevel.LOW -> tick0Px
+                    ThinkingLevel.MEDIUM -> tick1Px
+                    ThinkingLevel.HIGH -> tick2Px
+                }
+                previewLevel = currentLevel
+                offsetX.animateTo(
+                    targetValue = target,
+                    animationSpec = spring(dampingRatio = 0.8f, stiffness = 420f)
+                )
+            }
         }
 
-        // 下方胶囊滑块轨道
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(27.dp))
-                .background(animatedTrackColor)
-                .then(
-                    if (currentLevel == ThinkingLevel.LOW) {
-                        Modifier.border(1.dp, Color(0xFFD0D0D7), RoundedCornerShape(27.dp))
-                    } else Modifier
-                )
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectTapGestures { offset ->
-                        val widthPx = size.width
-                        val fraction = (offset.x / widthPx).coerceIn(0f, 1f)
-                        val newIndex = when {
-                            fraction < 0.33f -> 0
-                            fraction < 0.67f -> 1
-                            else -> 2
-                        }
-                        onLevelSelected(ThinkingLevel.values()[newIndex])
-                    }
-                }
-                .pointerInput(enabled) {
-                    if (!enabled) return@pointerInput
-                    detectHorizontalDragGestures(
-                        onDragEnd = {},
-                        onHorizontalDrag = { change, _ ->
-                            change.consume()
-                            val widthPx = size.width
-                            val fraction = (change.position.x / widthPx).coerceIn(0f, 1f)
-                            val newIndex = when {
-                                fraction < 0.33f -> 0
-                                fraction < 0.67f -> 1
-                                else -> 2
-                            }
-                            if (newIndex != currentLevel.ordinal) {
-                                onLevelSelected(ThinkingLevel.values()[newIndex])
-                            }
-                        }
-                    )
-                },
-            contentAlignment = Alignment.CenterStart
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            val totalWidth = maxWidth
-            val thumbSize = 44.dp
-            val padding = 5.dp
-            val travelDistance = totalWidth - thumbSize - (padding * 2)
-
-            // 3 个刻度圆点
-            val isBlueTrack = currentLevel != ThinkingLevel.LOW
-            val tickDotColor = if (isBlueTrack) Color.White.copy(alpha = 0.55f) else Color(0xFFA0A0A8)
-
+            // 顶部居中文字：“高 推理强度”（实时预览当前手指靠近的档位，纯正 GPT 视觉）
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = padding + thumbSize / 2),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.padding(bottom = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
             ) {
-                repeat(3) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(tickDotColor)
-                    )
-                }
+                Text(
+                    text = previewLevel.displayName,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF0A84FF)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = "推理强度",
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF111111)
+                )
             }
 
-            // 白色可拉动滑块把手（Thumb）
-            val thumbOffset = padding + travelDistance * (animatedProgress / 2f)
-
+            // 蓝色大药丸胶囊轨道（与图 3 1:1 精确复刻）
             Box(
                 modifier = Modifier
-                    .offset(x = thumbOffset)
-                    .size(thumbSize)
-                    .shadow(
-                        elevation = if (isBlueTrack) 3.dp else 2.dp,
-                        shape = CircleShape,
-                        spotColor = Color(0x33000000)
-                    )
-                    .background(Color.White, CircleShape),
-                contentAlignment = Alignment.Center
+                    .fillMaxWidth()
+                    .height(54.dp)
+                    .clip(RoundedCornerShape(27.dp))
+                    .background(Color(0xFF0A84FF))
+                    .pointerInput(enabled, travelDistancePx) {
+                        if (!enabled) return@pointerInput
+                        detectTapGestures { tapOffset ->
+                            val tapX = (tapOffset.x - with(density) { (horizontalPadding + thumbSize / 2).toPx() })
+                                .coerceIn(0f, travelDistancePx)
+                            val snappedIndex = when {
+                                tapX < travelDistancePx * 0.28f -> 0
+                                tapX > travelDistancePx * 0.72f -> 2
+                                else -> 1
+                            }
+                            val targetLevel = ThinkingLevel.values()[snappedIndex]
+                            val targetPx = when (targetLevel) {
+                                ThinkingLevel.LOW -> tick0Px
+                                ThinkingLevel.MEDIUM -> tick1Px
+                                ThinkingLevel.HIGH -> tick2Px
+                            }
+                            previewLevel = targetLevel
+                            scope.launch {
+                                offsetX.animateTo(
+                                    targetValue = targetPx,
+                                    animationSpec = spring(dampingRatio = 0.75f, stiffness = 450f)
+                                )
+                                onLevelSelected(targetLevel)
+                            }
+                        }
+                    }
+                    .pointerInput(enabled, travelDistancePx) {
+                        if (!enabled) return@pointerInput
+                        detectHorizontalDragGestures(
+                            onDragStart = {
+                                isDragging = true
+                            },
+                            onDragEnd = {
+                                isDragging = false
+                                // 手指抬起时精准弹簧回弹吸附到最近刻度
+                                val currentPx = offsetX.value
+                                val nearestIndex = when {
+                                    currentPx < travelDistancePx * 0.28f -> 0
+                                    currentPx > travelDistancePx * 0.72f -> 2
+                                    else -> 1
+                                }
+                                val finalLevel = ThinkingLevel.values()[nearestIndex]
+                                val finalTargetPx = when (finalLevel) {
+                                    ThinkingLevel.LOW -> tick0Px
+                                    ThinkingLevel.MEDIUM -> tick1Px
+                                    ThinkingLevel.HIGH -> tick2Px
+                                }
+                                previewLevel = finalLevel
+                                scope.launch {
+                                    offsetX.animateTo(
+                                        targetValue = finalTargetPx,
+                                        animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f)
+                                    )
+                                    onLevelSelected(finalLevel)
+                                }
+                            },
+                            onDragCancel = {
+                                isDragging = false
+                                val currentPx = offsetX.value
+                                val nearestIndex = when {
+                                    currentPx < travelDistancePx * 0.28f -> 0
+                                    currentPx > travelDistancePx * 0.72f -> 2
+                                    else -> 1
+                                }
+                                val finalLevel = ThinkingLevel.values()[nearestIndex]
+                                val finalTargetPx = when (finalLevel) {
+                                    ThinkingLevel.LOW -> tick0Px
+                                    ThinkingLevel.MEDIUM -> tick1Px
+                                    ThinkingLevel.HIGH -> tick2Px
+                                }
+                                previewLevel = finalLevel
+                                scope.launch {
+                                    offsetX.animateTo(
+                                        targetValue = finalTargetPx,
+                                        animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f)
+                                    )
+                                    onLevelSelected(finalLevel)
+                                }
+                            },
+                            onHorizontalDrag = { change, dragAmount ->
+                                change.consume()
+                                // 1:1 绝对实时跟手位移
+                                val nextPx = (offsetX.value + dragAmount).coerceIn(0f, travelDistancePx)
+                                scope.launch {
+                                    offsetX.snapTo(nextPx)
+                                }
+                                // 实时跟手预览最近档位更新文字反馈
+                                val nearestIndex = when {
+                                    nextPx < travelDistancePx * 0.28f -> 0
+                                    nextPx > travelDistancePx * 0.72f -> 2
+                                    else -> 1
+                                }
+                                previewLevel = ThinkingLevel.values()[nearestIndex]
+                            }
+                        )
+                    },
+                contentAlignment = Alignment.CenterStart
             ) {
-                if (currentLevel == ThinkingLevel.LOW) {
-                    Box(
-                        modifier = Modifier
-                            .size(34.dp)
-                            .border(2.5.dp, Color(0xFF0A84FF), CircleShape)
-                    )
+                // 3 个刻度圆点（白色半透明）
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = horizontalPadding + thumbSize / 2),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    repeat(3) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(Color.White.copy(alpha = 0.50f))
+                        )
+                    }
                 }
+
+                // 纯白实体大圆球把手（Thumb）
+                val currentThumbOffsetDp = with(density) { (horizontalPadding.toPx() + offsetX.value).toDp() }
+
+                Box(
+                    modifier = Modifier
+                        .offset(x = currentThumbOffsetDp)
+                        .size(thumbSize)
+                        .shadow(
+                            elevation = 4.dp,
+                            shape = CircleShape,
+                            spotColor = Color(0x40000000)
+                        )
+                        .background(Color.White, CircleShape)
+                )
             }
         }
     }
@@ -349,6 +420,9 @@ internal fun ModelConfigBottomSheet(
     // 是否选中了默认项（首个推荐模型）
     val defaultModel = models.firstOrNull { it.id.contains("3.8-flash-high") } ?: models.firstOrNull()
     val isDefaultSelected = currentChosenModelId == null || currentChosenModelId == defaultModel?.id || currentChosenModelId == defaultModel?.model
+
+    // 判断当前选择的模型是否支持调节思考程度（如 Claude 没有思考程度选择，则隐藏滑块）
+    val hasThinkingLevels = currentFamily?.variants?.any { it.level != null } == true
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -492,21 +566,27 @@ internal fun ModelConfigBottomSheet(
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
-
-            // 思考程度 / 推理强度 拖动滑块组件（GPT 风格大胶囊滑块）
-            val hasThinkingLevels = currentFamily?.variants?.any { it.level != null } == true
-            ThinkingLevelSlider(
-                currentLevel = currentLevel,
-                onLevelSelected = { newLevel ->
-                    if (currentFamily != null) {
-                        val targetVariant = currentFamily.variants.firstOrNull { it.level == newLevel }
-                            ?: currentFamily.variants.firstOrNull()
-                        targetVariant?.let { onSelectModel(it.modelId) }
-                    }
-                },
-                enabled = modelSelectionEnabled && hasThinkingLevels
-            )
+            // 思考程度 / 推理强度 拖动滑块组件（仅当所选模型支持思考程度变体时展示，若选择 Claude 等模型则自动隐藏）
+            AnimatedVisibility(
+                visible = hasThinkingLevels,
+                enter = fadeIn(),
+                exit = fadeOut()
+            ) {
+                Column {
+                    Spacer(Modifier.height(20.dp))
+                    ThinkingLevelSlider(
+                        currentLevel = currentLevel,
+                        onLevelSelected = { newLevel ->
+                            if (currentFamily != null) {
+                                val targetVariant = currentFamily.variants.firstOrNull { it.level == newLevel }
+                                    ?: currentFamily.variants.firstOrNull()
+                                targetVariant?.let { onSelectModel(it.modelId) }
+                            }
+                        },
+                        enabled = modelSelectionEnabled
+                    )
+                }
+            }
 
             Spacer(Modifier.height(24.dp))
 
