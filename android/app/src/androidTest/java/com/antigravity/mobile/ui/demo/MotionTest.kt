@@ -324,7 +324,7 @@ class MotionTest {
             ModelConfigBottomSheet({}, models, selected.value, { selected.value = it }, false, null, {})
         }
         val slider = compose.onNodeWithContentDescription("推理强度")
-        slider.performScrollTo()
+        slider.assertIsDisplayed()
         screenshot("model-slider-medium.png")
         slider.performTouchInput { click(androidx.compose.ui.geometry.Offset(24f, centerY)) }
         compose.waitUntil(5_000) { selected.value.endsWith("-low") }
@@ -338,13 +338,55 @@ class MotionTest {
         slider.performTouchInput { click(center) }
         compose.waitUntil(5_000) { selected.value.endsWith("-medium") }
         compose.onNodeWithText("Gemini 3.7 Flash").performScrollTo().performClick()
-        slider.performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(24f, centerY)) }
+        slider.performTouchInput { click(androidx.compose.ui.geometry.Offset(24f, centerY)) }
         compose.waitUntil(5_000) { selected.value == "gemini-3.7-flash-low" }
         compose.onNodeWithText("Claude Opus 4.6 (Thinking)").performScrollTo().performClick()
         compose.waitForIdle()
         slider.assertDoesNotExist()
         compose.onNodeWithText("Gemini 3.8 Flash").performScrollTo().performClick()
-        slider.performScrollTo().assertIsDisplayed()
+        slider.assertIsDisplayed()
+    }
+
+    @Test fun modelChoiceIsSavedBeforeTheSnapAnimationOrDismissal() {
+        val models = ThinkingLevel.entries.map {
+            ChatModel("gemini-${it.name.lowercase()}", "Gemini (${it.name.lowercase().replaceFirstChar(Char::uppercase)})", "MODEL_FIXTURE", true)
+        }
+        val selected = mutableStateOf("gemini-high")
+        val open = mutableStateOf(true)
+        compose.setContent {
+            if (open.value) ModelConfigBottomSheet({ open.value = false }, models,
+                selected.value, { selected.value = it }, false, null, {})
+        }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithContentDescription("推理强度").performTouchInput { click(center) }
+            compose.runOnIdle { assertEquals("Choice must commit before animation", "gemini-medium", selected.value) }
+            compose.onNodeWithText("完成").performClick()
+            compose.runOnIdle { assertFalse(open.value); assertEquals("gemini-medium", selected.value) }
+        } finally { compose.mainClock.autoAdvance = true }
+    }
+
+    @Test fun modelSheetKeepsDoneStillWhileThinkingControlsFade() {
+        val models = listOf(ChatModel("gemini-high", "Gemini (High)", "MODEL_FIXTURE", true),
+            ChatModel("claude", "Claude", "MODEL_FIXTURE", false))
+        val selected = mutableStateOf("gemini-high")
+        compose.setContent { ModelConfigBottomSheet({}, models, selected.value, { selected.value = it }, false, null, {}) }
+        val done = compose.onNodeWithText("完成")
+        val y = done.fetchSemanticsNode().boundsInWindow.top
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNodeWithText("Claude").performClick()
+            repeat(30) {
+                compose.mainClock.advanceTimeByFrame()
+                assertEquals("Done must stay anchored throughout collapse", y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
+            }
+            compose.onNodeWithText("Gemini").performClick()
+            repeat(30) {
+                compose.mainClock.advanceTimeByFrame()
+                assertEquals("Done must stay anchored throughout expansion", y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
+            }
+        } finally { compose.mainClock.autoAdvance = true }
     }
 
     private fun screenshot(name: String) {

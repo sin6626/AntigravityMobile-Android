@@ -1,17 +1,12 @@
 package com.antigravity.mobile.ui.demo
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutLinearInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -177,6 +172,7 @@ internal fun ThinkingLevelSlider(
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
     val selectLevel by rememberUpdatedState(onLevelSelected)
+    val committedLevel by rememberUpdatedState(currentLevel)
     val blue = Color(0xFF2166F5)
 
     // 当前在拖拽过程中的预览档位（用于顶部文字实时响应）
@@ -235,6 +231,7 @@ internal fun ThinkingLevelSlider(
                 Text(
                     text = previewLevel.displayName,
                     fontSize = 19.sp,
+                    lineHeight = 23.sp,
                     fontWeight = FontWeight.Bold,
                     color = blue
                 )
@@ -242,6 +239,7 @@ internal fun ThinkingLevelSlider(
                 Text(
                     text = "推理强度",
                     fontSize = 19.sp,
+                    lineHeight = 23.sp,
                     fontWeight = FontWeight.Bold,
                     color = Color(0xFF111111)
                 )
@@ -286,12 +284,12 @@ internal fun ThinkingLevelSlider(
                                 ThinkingLevel.HIGH -> tick2Px
                             }
                             previewLevel = targetLevel
+                            selectLevel(targetLevel)
                             scope.launch {
                                 offsetX.animateTo(
                                     targetValue = targetPx,
                                     animationSpec = spring(dampingRatio = 0.75f, stiffness = 450f)
                                 )
-                                selectLevel(targetLevel)
                             }
                         }
                     }
@@ -316,35 +314,22 @@ internal fun ThinkingLevelSlider(
                                     ThinkingLevel.HIGH -> tick2Px
                                 }
                                 previewLevel = finalLevel
+                                selectLevel(finalLevel)
                                 scope.launch {
                                     offsetX.animateTo(
                                         targetValue = finalTargetPx,
                                         animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f)
                                     )
-                                    selectLevel(finalLevel)
                                 }
                             },
                             onDragCancel = {
                                 isDragging = false
-                                val currentPx = offsetX.value
-                                val nearestIndex = when {
-                                    currentPx < travelDistancePx * 0.28f -> 0
-                                    currentPx > travelDistancePx * 0.72f -> 2
-                                    else -> 1
-                                }
-                                val finalLevel = ThinkingLevel.values()[nearestIndex]
-                                val finalTargetPx = when (finalLevel) {
-                                    ThinkingLevel.LOW -> tick0Px
-                                    ThinkingLevel.MEDIUM -> tick1Px
-                                    ThinkingLevel.HIGH -> tick2Px
-                                }
-                                previewLevel = finalLevel
+                                previewLevel = committedLevel
                                 scope.launch {
                                     offsetX.animateTo(
-                                        targetValue = finalTargetPx,
+                                        targetValue = committedLevel.ordinal * travelDistancePx / 2f,
                                         animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f)
                                     )
-                                    selectLevel(finalLevel)
                                 }
                             },
                             onHorizontalDrag = { change, dragAmount ->
@@ -421,6 +406,7 @@ internal fun ModelConfigBottomSheet(
     modelsError: String?,
     onRetryModels: () -> Unit,
     modelSelectionEnabled: Boolean = true,
+    onDone: () -> Unit = onDismiss,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // 全量聚合与 Gemini 倒序排序
@@ -471,13 +457,6 @@ internal fun ModelConfigBottomSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .animateContentSize(
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioNoBouncy,
-                        stiffness = Spring.StiffnessMediumLow
-                    )
-                )
-                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -492,7 +471,7 @@ internal fun ModelConfigBottomSheet(
             )
 
             // 加载与错误状态提示
-            if (isLoadingModels || modelsError != null) {
+            if (models.isEmpty() && (isLoadingModels || modelsError != null)) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -517,12 +496,14 @@ internal fun ModelConfigBottomSheet(
                 }
             }
 
-            // 主模型列表大卡片组（浅灰色大圆角卡片，直接列表渲染，绝不嵌套内部 scrollView）
+            // 仅列表滚动，底部滑块与完成按钮保持位置。
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .weight(1f, fill = false)
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color(0xFFEEEEEE))
+                    .verticalScroll(rememberScrollState())
             ) {
                 // 第一项：“默认”
                 Row(
@@ -602,39 +583,27 @@ internal fun ModelConfigBottomSheet(
                 }
             }
 
-            // 思考程度 / 推理强度 拖动滑块组件（仅当所选模型支持思考程度变体时展示，若选择 Claude 等模型则自动平滑收起高度与淡出）
-            AnimatedVisibility(
-                visible = hasThinkingLevels,
-                enter = fadeIn(animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing)) +
-                        expandVertically(
-                            animationSpec = spring(
-                                dampingRatio = Spring.DampingRatioLowBouncy,
-                                stiffness = Spring.StiffnessMediumLow
-                            ),
-                            expandFrom = Alignment.Top
-                        ),
-                exit = fadeOut(animationSpec = tween(durationMillis = 180, easing = FastOutLinearInEasing)) +
-                       shrinkVertically(
-                           animationSpec = spring(
-                               dampingRatio = Spring.DampingRatioNoBouncy,
-                               stiffness = Spring.StiffnessMediumLow
-                           ),
-                           shrinkTowards = Alignment.Top
-                       )
-            ) {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Spacer(Modifier.height(20.dp))
-                    ThinkingLevelSlider(
-                        currentLevel = currentLevel,
-                        onLevelSelected = { newLevel ->
-                            if (currentFamily != null) {
-                                val targetVariant = currentFamily.variants.firstOrNull { it.level == newLevel }
-                                    ?: currentFamily.variants.firstOrNull()
-                                targetVariant?.let { onSelectModel(it.modelId) }
-                            }
-                        },
-                        enabled = modelSelectionEnabled
-                    )
+            // 保留滑块区域高度，切换模型仅淡入淡出，完成按钮和面板锚点不参与尺寸动画。
+            Box(Modifier.fillMaxWidth().height(106.dp + with(LocalDensity.current) { 23.sp.toDp() })) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = hasThinkingLevels,
+                    enter = fadeIn(animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing)),
+                    exit = fadeOut(animationSpec = tween(durationMillis = 180, easing = FastOutLinearInEasing)),
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.height(20.dp))
+                        ThinkingLevelSlider(
+                            currentLevel = currentLevel,
+                            onLevelSelected = { newLevel ->
+                                if (currentFamily != null) {
+                                    val targetVariant = currentFamily.variants.firstOrNull { it.level == newLevel }
+                                        ?: currentFamily.variants.firstOrNull()
+                                    targetVariant?.let { onSelectModel(it.modelId) }
+                                }
+                            },
+                            enabled = modelSelectionEnabled && hasThinkingLevels
+                        )
+                    }
                 }
             }
 
@@ -642,7 +611,7 @@ internal fun ModelConfigBottomSheet(
 
             // 底部黑色“完成”大胶囊按钮
             Button(
-                onClick = onDismiss,
+                onClick = onDone,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),

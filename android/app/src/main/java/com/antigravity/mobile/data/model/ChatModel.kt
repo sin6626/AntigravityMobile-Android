@@ -1,7 +1,9 @@
 package com.antigravity.mobile.data.model
 
 import kotlinx.serialization.json.*
+import kotlinx.serialization.Serializable
 
+@Serializable
 data class ChatModel(val id: String, val label: String, val model: String, val supportsImages: Boolean)
 
 /** Account-scoped GetUserStatus catalog, with no hardcoded model aliases. */

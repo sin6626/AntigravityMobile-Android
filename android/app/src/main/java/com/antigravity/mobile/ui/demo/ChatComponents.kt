@@ -55,6 +55,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -382,6 +384,7 @@ internal fun Composer(
     modelBadge: String? = null,
     onOpenModelConfig: () -> Unit = {},
     modelEnabled: Boolean = true,
+    inputFocusRequester: FocusRequester? = null,
 ) {
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isRunning && !isStopping
     var focused by remember { mutableStateOf(false) }
@@ -426,7 +429,9 @@ internal fun Composer(
                 }
                 ComposerTextField(draft, onDraftChange, onSend, canSend,
                     if (activeConversation) "回复 Multigravity" else "询问 Multigravity",
-                    Modifier.weight(1f).padding(vertical = 12.dp).onFocusChanged { focused = it.isFocused }, expanded)
+                    Modifier.weight(1f).padding(vertical = 12.dp)
+                        .then(inputFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
+                        .onFocusChanged { focused = it.isFocused }, expanded)
                 AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
                     exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
                     Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {

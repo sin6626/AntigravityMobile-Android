@@ -29,6 +29,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.encodeToString
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.io.File
@@ -150,6 +152,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(draft = prefs.getDraftText(NEW_CHAT_DRAFT))
         restoreDraftImages(NEW_CHAT_DRAFT)
         if (prefs.isPaired()) {
+            val cachedModels = runCatching {
+                Json.decodeFromString<List<ChatModel>>(prefs.cachedModelsJson ?: "[]")
+            }.getOrDefault(emptyList())
+            _state.value = _state.value.copy(models = cachedModels, selectedModelId = prefs.selectedModelId)
             connectionManager.startMonitoring(prefs, viewModelScope)
             prefs.lastConversationId?.takeUnless { it.startsWith("local:") || prefs.isDeletedConversation(it) }?.let(::openConversation)
             refreshConversations()
@@ -462,6 +468,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val selected = models.firstOrNull { it.id == prefs.selectedModelId }
                     ?: models.firstOrNull { it.id == DEFAULT_CHAT_MODEL } ?: models.first()
                 prefs.selectedModelId = selected.id
+                prefs.cachedModelsJson = Json.encodeToString(models)
                 _state.value = _state.value.copy(models = models, selectedModelId = selected.id,
                     isLoadingModels = false, modelsError = null)
             }, onFailure = { error ->

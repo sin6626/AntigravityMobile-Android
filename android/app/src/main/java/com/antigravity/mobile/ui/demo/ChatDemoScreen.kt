@@ -62,6 +62,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -73,6 +75,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.graphics.graphicsLayer
@@ -120,6 +123,15 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var showRename by rememberSaveable { mutableStateOf(false) }
     var renameTitle by rememberSaveable { mutableStateOf("") }
     var modelPickerOpen by remember { mutableStateOf(false) }
+    val composerFocusRequester = remember { FocusRequester() }
+    var focusAfterModelDone by remember { mutableIntStateOf(0) }
+    LaunchedEffect(focusAfterModelDone) {
+        if (focusAfterModelDone > 0) {
+            withFrameNanos { }
+            composerFocusRequester.requestFocus()
+            keyboardController?.show()
+        }
+    }
     val chosenModelId = state.modelOverrideId ?: if (state.selectedConversationId == null) state.selectedModelId else state.activeModelId
     val chosenModel = state.models.firstOrNull { it.id == chosenModelId || it.model == chosenModelId }
     val modelLabel = chosenModel?.label ?: "选择模型"
@@ -532,10 +544,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             shadowAlpha = alphaFactor,
                             modelBadge = gptModelBadge,
                             onOpenModelConfig = {
+                                focusManager.clearFocus()
+                                keyboardController?.hide()
                                 modelPickerOpen = true
-                                viewModel.refreshModels()
+                                if (state.models.isEmpty()) viewModel.refreshModels()
                             },
                             modelEnabled = modelEnabled,
+                            inputFocusRequester = composerFocusRequester,
                         )
                     }
                     Spacer(Modifier.height(23.dp))
@@ -554,6 +569,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 modelsError = state.modelsError,
                 onRetryModels = viewModel::refreshModels,
                 modelSelectionEnabled = modelEnabled,
+                onDone = { modelPickerOpen = false; focusAfterModelDone++ },
             )
         }
         state.revertMessage?.let { message ->

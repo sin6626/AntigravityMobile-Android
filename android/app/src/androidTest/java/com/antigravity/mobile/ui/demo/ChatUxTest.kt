@@ -32,6 +32,105 @@ import kotlin.concurrent.thread
 class ChatUxTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
+    @Test fun cachedModelsOpenImmediatelyAndStayAvailableWhenRefreshFails() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "cache-token" }
+            val store = ViewModelStore()
+            val first = ChatViewModel(app).also { store.put("first-cache", it) }
+            val requested = CountDownLatch(1); val release = CountDownLatch(1)
+            try {
+                compose.waitUntil(10_000) { first.state.value.models.size == 3 }
+                compose.runOnIdle { store.clear() }
+                gateway.block = { if (it.contains("GetUserStatus")) { requested.countDown(); release.await(10, TimeUnit.SECONDS) } }
+                val restored = ChatViewModel(app).also { store.put("restored-cache", it) }
+                assertEquals("Catalog must be restored before its refresh returns", 3, restored.state.value.models.size)
+                assertTrue(requested.await(5, TimeUnit.SECONDS))
+                compose.setContent { ChatDemoScreen(restored, {}) }
+                compose.onNode(hasSetTextAction()).performClick()
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.onNodeWithText("Claude fixture").assertIsDisplayed()
+                compose.onNodeWithText("加载模型列表中…").assertDoesNotExist()
+                compose.onNodeWithText("Claude fixture").performClick()
+                release.countDown()
+                compose.waitUntil(10_000) { !restored.state.value.isLoadingModels }
+                assertEquals("claude-fixture", restored.state.value.selectedModelId)
+                gateway.failurePath = "GetUserStatus"
+                compose.runOnIdle { restored.refreshModels() }
+                compose.waitUntil(10_000) { restored.state.value.modelsError != null }
+                assertEquals(3, restored.state.value.models.size)
+                val reads = gateway.requests.count { it.first.contains("GetUserStatus") }
+                repeat(2) {
+                    compose.onNodeWithText("完成").performClick()
+                    compose.onNodeWithContentDescription("选择模型").performClick()
+                    compose.onNodeWithText("Claude fixture").assertIsDisplayed()
+                    compose.onNodeWithText("加载模型列表中…").assertDoesNotExist()
+                }
+                assertEquals("Opening a cached catalog must not fetch again", reads,
+                    gateway.requests.count { it.first.contains("GetUserStatus") })
+                compose.runOnIdle { store.clear() }
+                prefs.deviceToken = "another-pairing"
+                val rePaired = ChatViewModel(app).also { store.put("other-cache", it) }
+                compose.waitUntil(10_000) { rePaired.state.value.modelsError != null }
+                assertTrue(rePaired.state.value.models.isEmpty())
+                assertNull(prefs.cachedModelsJson)
+            } finally { release.countDown(); compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun rapidModelDoneFocusesComposerAndSwipeDismissKeepsTheChoice() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.thinkingVariants = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "focus-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("model-focus", vm) }
+            try {
+                compose.waitUntil(10_000) { vm.state.value.models.size == 5 }
+                compose.activityRule.scenario.onActivity { activity ->
+                    androidx.core.view.WindowCompat.setDecorFitsSystemWindows(activity.window, false)
+                    activity.window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+                }
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.onNode(hasSetTextAction()).performClick()
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.waitForIdle()
+                compose.mainClock.autoAdvance = false
+                try {
+                    compose.onNodeWithContentDescription("推理强度").performTouchInput { click(center) }
+                    compose.runOnIdle { assertEquals("gemini-3.8-flash-medium", vm.state.value.selectedModelId) }
+                    compose.onNodeWithText("完成").performClick()
+                } finally { compose.mainClock.autoAdvance = true }
+                compose.onNode(hasSetTextAction()).assertIsFocused()
+                compose.waitUntil(5_000) { compose.activity.window.decorView.rootWindowInsets
+                    ?.isVisible(android.view.WindowInsets.Type.ime()) == true }
+                compose.onNode(hasSetTextAction()).performTextInput("直接输入，未发送")
+                assertEquals("直接输入，未发送", vm.state.value.draft)
+                compose.waitUntil(5_000) {
+                    val window = compose.activity.window.decorView
+                    val imeBottom = window.rootWindowInsets?.getInsets(android.view.WindowInsets.Type.ime())?.bottom ?: 0
+                    compose.onNodeWithContentDescription("选择模型").fetchSemanticsNode().boundsInWindow.bottom <= window.height - imeBottom + 1
+                }
+                saveScreenshot("model-done-keyboard.png")
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.onNodeWithContentDescription("推理强度").performTouchInput {
+                    swipe(center, androidx.compose.ui.geometry.Offset(24f, centerY), 150)
+                }
+                compose.runOnIdle { assertEquals("gemini-3.8-flash-low", vm.state.value.selectedModelId) }
+                compose.onNodeWithText("配置").performTouchInput {
+                    swipe(center, center + androidx.compose.ui.geometry.Offset(0f, 900f), 250)
+                }
+                compose.waitUntil(5_000) { compose.onAllNodesWithText("配置").fetchSemanticsNodes().isEmpty() }
+                assertEquals("gemini-3.8-flash-low", vm.state.value.selectedModelId)
+                compose.onNode(hasSetTextAction()).performClick()
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.onNodeWithContentDescription("推理强度").assert(
+                    SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "低"))
+                assertFalse(gateway.requests.any { it.first.contains("SendUserCascadeMessage") })
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun projectCreationAndModelChoiceKeepMembershipDraftAndFailureState() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -1767,6 +1866,7 @@ class ChatUxTest {
             }
         }
         @Volatile var management = false
+        @Volatile var thinkingVariants = false
         @Volatile var projectFixture = false
         @Volatile var createdProject = false
         @Volatile var activeModel = "gemini-3.8-flash-high"
@@ -1841,7 +1941,9 @@ class ChatUxTest {
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
                                 path.contains("GetUserStatus") -> """{"userStatus":{"planStatus":{"planInfo":{"teamsTier":"PRO"}},"cascadeModelConfigData":{"clientModelConfigs":[
-                                    {"modelId":"gemini-3.8-flash-high","label":"Gemini fixture","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M318"},"supportsImages":true,"allowedTiers":["PRO"]},
+                                    {"modelId":"gemini-3.8-flash-high","label":"Gemini fixture${if (thinkingVariants) " (High)" else ""}","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M318"},"supportsImages":true,"allowedTiers":["PRO"]},
+                                    ${if (thinkingVariants) """{"modelId":"gemini-3.8-flash-medium","label":"Gemini fixture (Medium)","modelOrAlias":{"model":"MODEL_MEDIUM"},"supportsImages":true,"allowedTiers":["PRO"]},
+                                    {"modelId":"gemini-3.8-flash-low","label":"Gemini fixture (Low)","modelOrAlias":{"model":"MODEL_LOW"},"supportsImages":true,"allowedTiers":["PRO"]},""" else ""}
                                     {"modelId":"claude-fixture","label":"Claude fixture","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M26"},"supportsImages":true,"allowedTiers":["PRO"]},
                                     {"modelId":"text-fixture","label":"Text fixture","modelOrAlias":{"model":"MODEL_TEXT"}},
                                     {"modelId":"restricted","label":"Restricted fixture","modelOrAlias":{"model":"MODEL_HIDDEN"},"allowedTiers":["ENTERPRISE"]}

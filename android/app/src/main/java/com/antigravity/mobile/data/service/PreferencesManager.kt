@@ -119,6 +119,10 @@ class PreferencesManager(context: Context) {
     var deviceToken: String?
         get() = securePrefs?.getString(KEY_DEVICE_TOKEN, null)
         set(value) {
+            if (deviceToken != value) {
+                cachedModelsJson = null
+                selectedModelId = null
+            }
             val sp = securePrefs
             if (sp != null) {
                 if (value != null) {
@@ -234,6 +238,10 @@ class PreferencesManager(context: Context) {
     var selectedModelId: String?
         get() = prefs.getString("android_selected_model", null)
         set(value) = prefs.edit().putString("android_selected_model", value).apply()
+
+    var cachedModelsJson: String?
+        get() = prefs.getString("android_cached_models", null)
+        set(value) = prefs.edit().putString("android_cached_models", value).apply()
 
     var pendingSendTarget: String?
         get() = prefs.getString("android_pending_send_target", null)
