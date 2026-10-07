@@ -13,7 +13,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -29,11 +28,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -165,7 +165,7 @@ internal fun formatGptModelBadge(model: ChatModel?): String {
 }
 
 /**
- * 1:1 还原 GPT 风格真实物理跟手拖拽滑块（3个刻度：低/中/高）
+ * 白色外层胶囊与内嵌蓝色滑轨，保留低/中/高三个实际档位。
  */
 @Composable
 internal fun ThinkingLevelSlider(
@@ -176,18 +176,21 @@ internal fun ThinkingLevelSlider(
 ) {
     val scope = rememberCoroutineScope()
     val density = LocalDensity.current
+    val selectLevel by rememberUpdatedState(onLevelSelected)
+    val blue = Color(0xFF2166F5)
 
     // 当前在拖拽过程中的预览档位（用于顶部文字实时响应）
-    var previewLevel by remember(currentLevel) { mutableStateOf(currentLevel) }
+    var previewLevel by remember { mutableStateOf(currentLevel) }
     var isDragging by remember { mutableStateOf(false) }
 
     BoxWithConstraints(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center
     ) {
-        val totalWidth = maxWidth
-        val thumbSize = 44.dp
-        val horizontalPadding = 5.dp
+        val outerPadding = 12.dp
+        val totalWidth = maxWidth - outerPadding * 2
+        val thumbSize = 40.dp
+        val horizontalPadding = 4.dp
         val travelDistancePx = with(density) { (totalWidth - thumbSize - horizontalPadding * 2).toPx() }
 
         // 三个刻度点的绝对位移 (px)
@@ -233,7 +236,7 @@ internal fun ThinkingLevelSlider(
                     text = previewLevel.displayName,
                     fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF0A84FF)
+                    color = blue
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
@@ -247,29 +250,25 @@ internal fun ThinkingLevelSlider(
             // 当前滑动进度 0f .. 1f
             val progress = (if (travelDistancePx > 0f) offsetX.value / travelDistancePx else 0f).coerceIn(0f, 1f)
             val totalWidthPx = with(density) { totalWidth.toPx() }
-            val horizontalPaddingPx = with(density) { horizontalPadding.toPx() }
-            val thumbSizePx = with(density) { thumbSize.toPx() }
-            val trackHeight = 54.dp
-            val trackRadius = 27.dp
+            val trackHeight = 48.dp
+            val trackRadius = trackHeight / 2
+            val thumbOffsetPx = offsetX.value.coerceIn(0f, travelDistancePx)
 
-            // Thumb 中心绝对像素位置
-            val thumbCenterPx = horizontalPaddingPx + offsetX.value + thumbSizePx / 2f
-
-            // 蓝色激活胶囊宽度 = 从左边缘到 Thumb 中心 + 半个 Thumb 大小（让蓝色包住 Thumb 左半）
-            val activeWidthPx = (thumbCenterPx + thumbSizePx / 2f).coerceIn(0f, totalWidthPx)
+            // 蓝色右端圆心与白色滑块同心，四周始终保留4dp蓝色包边。
+            val activeWidthPx = (thumbOffsetPx + with(density) { trackHeight.toPx() }).coerceIn(0f, totalWidthPx)
             val activeWidthDp = with(density) { activeWidthPx.toDp() }
 
-            // 灰色未激活胶囊：从 Thumb 中心 - 半个 Thumb 大小 到右边缘
-            val inactiveLeftPx = (thumbCenterPx - thumbSizePx / 2f).coerceIn(0f, totalWidthPx)
-            val inactiveLeftDp = with(density) { inactiveLeftPx.toDp() }
-            val inactiveWidthPx = (totalWidthPx - inactiveLeftPx).coerceAtLeast(0f)
-            val inactiveWidthDp = with(density) { inactiveWidthPx.toDp() }
-
-            // 轨道手势容器（透明，仅做手势检测区域）
+            Surface(modifier = Modifier.fillMaxWidth(), color = Color.White,
+                shape = CircleShape, shadowElevation = 1.dp) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(outerPadding)
                     .height(trackHeight)
+                    .semantics {
+                        contentDescription = "推理强度"
+                        stateDescription = previewLevel.displayName
+                    }
                     .pointerInput(enabled, travelDistancePx) {
                         if (!enabled) return@pointerInput
                         detectTapGestures { tapOffset ->
@@ -292,7 +291,7 @@ internal fun ThinkingLevelSlider(
                                     targetValue = targetPx,
                                     animationSpec = spring(dampingRatio = 0.75f, stiffness = 450f)
                                 )
-                                onLevelSelected(targetLevel)
+                                selectLevel(targetLevel)
                             }
                         }
                     }
@@ -322,7 +321,7 @@ internal fun ThinkingLevelSlider(
                                         targetValue = finalTargetPx,
                                         animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f)
                                     )
-                                    onLevelSelected(finalLevel)
+                                    selectLevel(finalLevel)
                                 }
                             },
                             onDragCancel = {
@@ -345,7 +344,7 @@ internal fun ThinkingLevelSlider(
                                         targetValue = finalTargetPx,
                                         animationSpec = spring(dampingRatio = 0.75f, stiffness = 400f)
                                     )
-                                    onLevelSelected(finalLevel)
+                                    selectLevel(finalLevel)
                                 }
                             },
                             onHorizontalDrag = { change, dragAmount ->
@@ -365,78 +364,44 @@ internal fun ThinkingLevelSlider(
                     },
                 contentAlignment = Alignment.CenterStart
             ) {
-                // 1. 灰色未激活胶囊（右侧独立圆角药丸，带细微边框）
-                if (inactiveWidthPx > 0f && progress < 0.999f) {
-                    Box(
-                        modifier = Modifier
-                            .offset(x = inactiveLeftDp)
-                            .width(inactiveWidthDp)
-                            .height(trackHeight)
-                            .clip(RoundedCornerShape(trackRadius))
-                            .background(Color(0xFFF2F2F7))
-                            .border(1.dp, Color(0xFFE0E0E5), RoundedCornerShape(trackRadius))
-                    )
-                }
-
-                // 2. 蓝色激活胶囊（左侧独立圆角药丸，两端都是完整圆角）
-                if (activeWidthPx > 0f && progress > 0.001f) {
+                // 内嵌蓝色胶囊；低档位也包住滑块，而不是单独给滑块画描边。
                     Box(
                         modifier = Modifier
                             .width(activeWidthDp)
                             .height(trackHeight)
                             .clip(RoundedCornerShape(trackRadius))
-                            .background(Color(0xFF0A84FF))
+                            .background(blue)
                     )
-                }
 
-                // 3. 刻度圆点（在蓝色激活区域内为白色半透明，在灰色未激活区域内为灰色）
+                // 圆点中心与三个滑块落点一致。
+                val dotSize = 6.dp
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = horizontalPadding + thumbSize / 2),
+                        .padding(horizontal = horizontalPadding + thumbSize / 2 - dotSize / 2),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     repeat(3) { index ->
-                        val dotColor = when (index) {
-                            0 -> if (progress > 0.01f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
-                            1 -> if (progress >= 0.45f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
-                            2 -> if (progress >= 0.95f) Color.White.copy(alpha = 0.55f) else Color(0xFFC7C7CC)
-                            else -> Color(0xFFC7C7CC)
-                        }
+                        val dotColor = if (index / 2f <= progress) Color.White.copy(alpha = 0.28f) else Color(0xFFC7C7CC)
                         Box(
                             modifier = Modifier
-                                .size(7.dp)
+                                .size(dotSize)
                                 .clip(CircleShape)
                                 .background(dotColor)
                         )
                     }
                 }
 
-                // 4. Thumb 把手（低档时带蓝色边框环，滑向右侧时渐变为纯白实心圆球）
-                val currentThumbOffsetDp = with(density) { (horizontalPadding.toPx() + offsetX.value).toDp() }
-                val blueBorderAlpha = (1f - progress * 4f).coerceIn(0f, 1f)
+                val currentThumbOffsetDp = horizontalPadding + with(density) { thumbOffsetPx.toDp() }
 
                 Box(
                     modifier = Modifier
                         .offset(x = currentThumbOffsetDp)
                         .size(thumbSize)
-                        .shadow(
-                            elevation = (3.dp + 1.5.dp * progress),
-                            shape = CircleShape,
-                            spotColor = Color(0x35000000)
-                        )
                         .background(Color.White, CircleShape)
-                        .then(
-                            if (blueBorderAlpha > 0f) {
-                                Modifier.border(
-                                    width = 2.5.dp,
-                                    color = Color(0xFF0A84FF).copy(alpha = blueBorderAlpha),
-                                    shape = CircleShape
-                                )
-                            } else Modifier
-                        )
                 )
+            }
             }
         }
     }

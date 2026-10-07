@@ -17,6 +17,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.data.model.ChatModel
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import com.antigravity.mobile.ui.chat.PendingImage
 import org.junit.Assert.*
@@ -63,7 +64,8 @@ class MotionTest {
             Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White),
                 contentAlignment = Alignment.Center) {
                 Composer(Modifier.onGloballyPositioned { bounds = it.boundsInWindow() },
-                    active.value, "", emptyList(), {}, {}, {}, {}, false, {})
+                    activeConversation = active.value, draft = "", attachments = emptyList(),
+                    onDraftChange = {}, onRemoveImage = {}, onSend = {}, isSending = false, onUnsupported = {})
             }
         }
         fun shadowDarkness(): Int {
@@ -306,6 +308,43 @@ class MotionTest {
             compose.mainClock.autoAdvance = false
             appendChunks(5, showButton = false)
         } finally { compose.mainClock.autoAdvance = true }
+    }
+
+    @Test fun modelSliderTapsAndDragsKeepTheSelectedFamilyAndPreview() {
+        val models = listOf("3.8 Flash", "3.7 Flash", "3.6 Flash", "3.1 Pro").flatMap { name ->
+            ThinkingLevel.entries.map { level ->
+                val id = "gemini-${name.lowercase().replace(' ', '-')}-${level.name.lowercase()}"
+                ChatModel(id, "Gemini $name (${level.name.lowercase().replaceFirstChar { it.uppercase() }})", "MODEL_FIXTURE", true)
+            }
+        } + listOf("Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B").map {
+            ChatModel(it, it, "MODEL_FIXTURE", false)
+        }
+        val selected = mutableStateOf(models.first { it.id.endsWith("-medium") }.id)
+        compose.setContent {
+            ModelConfigBottomSheet({}, models, selected.value, { selected.value = it }, false, null, {})
+        }
+        val slider = compose.onNodeWithContentDescription("推理强度")
+        slider.performScrollTo()
+        screenshot("model-slider-medium.png")
+        slider.performTouchInput { click(androidx.compose.ui.geometry.Offset(24f, centerY)) }
+        compose.waitUntil(5_000) { selected.value.endsWith("-low") }
+        slider.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "低"))
+        screenshot("model-slider-low.png")
+        slider.performTouchInput { swipe(androidx.compose.ui.geometry.Offset(24f, centerY),
+            androidx.compose.ui.geometry.Offset(width - 24f, centerY), 400) }
+        compose.waitUntil(5_000) { selected.value.endsWith("-high") }
+        slider.assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "高"))
+        screenshot("model-slider-high.png")
+        slider.performTouchInput { click(center) }
+        compose.waitUntil(5_000) { selected.value.endsWith("-medium") }
+        compose.onNodeWithText("Gemini 3.7 Flash").performScrollTo().performClick()
+        slider.performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(24f, centerY)) }
+        compose.waitUntil(5_000) { selected.value == "gemini-3.7-flash-low" }
+        compose.onNodeWithText("Claude Opus 4.6 (Thinking)").performScrollTo().performClick()
+        compose.waitForIdle()
+        slider.assertDoesNotExist()
+        compose.onNodeWithText("Gemini 3.8 Flash").performScrollTo().performClick()
+        slider.performScrollTo().assertIsDisplayed()
     }
 
     private fun screenshot(name: String) {
