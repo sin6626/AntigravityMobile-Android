@@ -26,13 +26,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 @Composable
 internal fun ConversationSkeleton(
     modifier: Modifier = Modifier,
-    bottomSpace: Dp = 24.dp,
+    bottomPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
 ) {
     val transition = rememberInfiniteTransition(label = "skeleton_shimmer")
     val translateAnim by transition.animateFloat(
@@ -69,7 +68,7 @@ internal fun ConversationSkeleton(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState(), enabled = false)
-            .padding(start = 18.dp, end = 18.dp, top = 22.dp, bottom = bottomSpace),
+            .padding(start = 18.dp, end = 18.dp, top = 22.dp).padding(bottomPadding),
         verticalArrangement = Arrangement.spacedBy(28.dp),
     ) {
         // 第一轮：用户提问气泡骨架

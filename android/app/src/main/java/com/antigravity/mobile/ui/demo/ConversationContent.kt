@@ -124,6 +124,7 @@ internal fun ConversationContent(
     entranceReady: Boolean = true,
     allowRevert: Boolean = true,
     topSpace: androidx.compose.ui.unit.Dp = 0.dp,
+    bottomPadding: PaddingValues = PaddingValues(bottom = bottomSpace),
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -184,7 +185,7 @@ internal fun ConversationContent(
     if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         ConversationSkeleton(
             modifier = modifier.padding(top = topSpace),
-            bottomSpace = bottomSpace,
+            bottomPadding = bottomPadding,
         )
         return
     }
@@ -211,7 +212,14 @@ internal fun ConversationContent(
             LazyColumn(
                 modifier = Modifier.fillMaxSize().then(entrance),
                 state = listState,
-                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = topSpace + 18.dp, bottom = bottomSpace),
+                contentPadding = remember(topSpace, bottomPadding) {
+                    object : PaddingValues {
+                        override fun calculateLeftPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 18.dp
+                        override fun calculateRightPadding(layoutDirection: androidx.compose.ui.unit.LayoutDirection) = 18.dp
+                        override fun calculateTopPadding() = topSpace + 18.dp
+                        override fun calculateBottomPadding() = bottomPadding.calculateBottomPadding()
+                    }
+                },
             ) {
                 if (hasMore) item(key = "load-older", contentType = "load-older") {
                     DisableSelection {
@@ -264,7 +272,9 @@ internal fun ConversationContent(
         }
         // 流式文字变高到自动定位完成之间，也会暂时离开底部；仍在跟随时不播放按钮入场。
         AnimatedVisibility(visible = positioned && !followLatest && !nearBottom,
-            modifier = Modifier.align(Alignment.BottomCenter).offset(y = -bottomSpace),
+            modifier = Modifier.align(Alignment.BottomCenter).offset {
+                androidx.compose.ui.unit.IntOffset(0, -bottomPadding.calculateBottomPadding().roundToPx())
+            },
             enter = fadeIn(tween(120)), exit = fadeOut(tween(120))) {
             Surface(shape = CircleShape, color = Color.White, shadowElevation = 3.dp) {
                 Box(Modifier.size(48.dp).semantics { contentDescription = "回到最新消息" }

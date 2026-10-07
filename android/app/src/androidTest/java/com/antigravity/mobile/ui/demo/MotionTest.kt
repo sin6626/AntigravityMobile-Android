@@ -370,7 +370,7 @@ class MotionTest {
     @Test fun modelSheetKeepsDoneStillWhileThinkingControlsFade() {
         val models = listOf("3.8 Flash", "3.7 Flash", "3.6 Flash", "3.1 Pro").map {
             ChatModel("gemini-$it-high", "Gemini $it (High)", "MODEL_FIXTURE", true)
-        } + listOf("Claude Sonnet", "Claude Opus", "GPT-OSS").map {
+        } + listOf("Claude Sonnet 4.6 (Thinking)", "Claude Opus 4.6 (Thinking)", "GPT-OSS 120B").map {
             ChatModel(it, it, "MODEL_FIXTURE", false)
         }
         val selected = mutableStateOf(models.first().id)
@@ -379,12 +379,15 @@ class MotionTest {
         val list = compose.onNode(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange))
         val y = done.fetchSemanticsNode().boundsInWindow.top
         val listBounds = list.fetchSemanticsNode().boundsInWindow
+        val sheetTop = compose.onNodeWithText("配置").fetchSemanticsNode().boundsInWindow.top
         compose.mainClock.autoAdvance = false
         try {
-            compose.onNodeWithText("Claude Sonnet").performClick()
+            compose.onNodeWithText("Claude Sonnet 4.6 (Thinking)").performClick()
             val bottoms = mutableListOf<Float>()
             repeat(30) {
                 compose.mainClock.advanceTimeByFrame()
+                assertEquals("Sheet top must not jitter during switching", sheetTop,
+                    compose.onNodeWithText("配置").fetchSemanticsNode().boundsInWindow.top, 0f)
                 assertEquals("Done must stay anchored throughout collapse", y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
                 val bounds = list.fetchSemanticsNode().boundsInWindow
                 assertEquals("List top must stay anchored", listBounds.top, bounds.top, 1f)
@@ -397,15 +400,19 @@ class MotionTest {
             compose.onNodeWithText("Gemini 3.8 Flash").performClick()
             repeat(30) {
                 compose.mainClock.advanceTimeByFrame()
+                assertEquals("Sheet top must not jitter while Gemini controls appear", sheetTop,
+                    compose.onNodeWithText("配置").fetchSemanticsNode().boundsInWindow.top, 0f)
                 assertEquals("Done must stay anchored throughout expansion", y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
             }
             assertEquals(listBounds.bottom, list.fetchSemanticsNode().boundsInWindow.bottom, 1f)
             // Reverse an unfinished transition without moving the sheet or the footer.
-            compose.onNodeWithText("Claude Sonnet").performClick()
+            compose.onNodeWithText("Claude Sonnet 4.6 (Thinking)").performClick()
             compose.mainClock.advanceTimeBy(96)
             compose.onNodeWithText("Gemini 3.8 Flash").performClick()
             repeat(30) {
                 compose.mainClock.advanceTimeByFrame()
+                assertEquals("Rapid reversal must keep the sheet top fixed", sheetTop,
+                    compose.onNodeWithText("配置").fetchSemanticsNode().boundsInWindow.top, 0f)
                 assertEquals(y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
             }
             assertEquals(listBounds.bottom, list.fetchSemanticsNode().boundsInWindow.bottom, 1f)

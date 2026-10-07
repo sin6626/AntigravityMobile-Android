@@ -454,8 +454,12 @@ internal fun ModelConfigBottomSheet(
     fun rowPadding(index: Int, vertical: Dp): Modifier {
         val count = families.size + 1
         val extra = reclaimedHeightPx / count + if (index < reclaimedHeightPx % count) 1 else 0
-        return with(density) { Modifier.padding(start = 20.dp, end = 20.dp,
-            top = vertical + (extra / 2).toDp(), bottom = vertical + (extra - extra / 2).toDp()) }
+        return with(density) {
+            // 先量化基础边距；半像素基础值混入动画后会因浮点误差在相邻像素间跳动。
+            val base = vertical.roundToPx()
+            Modifier.padding(start = 20.dp, end = 20.dp,
+                top = (base + extra / 2).toDp(), bottom = (base + extra - extra / 2).toDp())
+        }
     }
 
     ModalBottomSheet(

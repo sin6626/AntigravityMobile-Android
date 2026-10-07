@@ -64,6 +64,14 @@
 - 日志与截图在忽略目录`android/design/.verification/`：`model-ux-red.log`、`model-ux-green.log`、`model-ux-fix-build.log`、`model-ux-ime.log`与`model-done-keyboard.png`。最新版安装至用户已打开的emulator-5554，本轮未关闭/重启模拟器，未操作真机或Go网关。
 - 列表填空位改前原生测试失败4.858秒，修复后Debug应用/测试包、9项单测和4项模拟器回归通过23.624秒；逐帧核对顶部/完成按钮固定、连续展开/收回、中途反向切换，快速完成和键盘继续通过。真实MainActivity连接58901两态截图已检查，完整显示卡片、滑块及柔影；未发送消息，恢复原Gemini 3.8 Flash高档选择。证据为`model-list-fill-{red,green}.log`、`model-list-fill-build.log`及`model-list-{gemini,claude}-live.png`，只更新模拟器APK。
 
+## 2026-10-07 模型过渡与键盘性能复验
+
+- 真机560dpi的基础行边距落在半像素上，与动画增量混合换算导致多行舍入不一致；面板顶部短暂偏移5～14px。基础边距先取整再分配整数增量，最终Release切换录像71帧顶部均为422px。保留列表填空位、滑块过渡与完成按钮固定。
+- 键盘及输入框形变高度改为布局阶段读取，使用现有Compose原生imePadding、MutableWindowInsets及PaddingValues，避免每帧重组整页；消息、骨架屏与返回最新按钮统一避让。平台机制参见[WindowInsets API](https://developer.android.com/reference/kotlin/androidx/compose/foundation/layout/WindowInsets)。
+- Debug/Release/测试包与9项JVM单测通过；真实分辨率/密度的模拟器6项回归通过39.735秒，覆盖两向过渡/反转、滑块操作、快速完成与键盘、下滑保留、返回与流式阅读。模拟器已恢复原显示设置，未关闭或重启。真机Release已安装并核对APK SHA256，原生完成后聚焦与键盘确认正常，未发送消息。
+- 真机冷启动采样：键盘0/520帧超时、P95 9ms；首次面板1/265帧超时、P95 12ms。窗口创建还有一个超时首帧，不能宣称绝对零掉帧；与改前Debug的比较包含构建类型差异。
+- 真机当前两条网关入口不可达，旧LAN连接失败、公网超时；电脑网关健康正常。历史没有加载，因此本次性能数字不能代表长历史场景。临时关闭VPN复测的授权待用户答复，保持现有网络/配对/Go服务。录像与统计在忽略目录model-jitter-*、phone-*-gfx.txt。
+
 ## 第5项暂缓
 
 用户尚未选择推送或后台连接方式，明确要求先不做。因此通知权限申请、常驻后台服务、Firebase接入及通知直达会话均未作为本轮交付；确定接收方式后再实施，不将现有通知类视为该项已完成。

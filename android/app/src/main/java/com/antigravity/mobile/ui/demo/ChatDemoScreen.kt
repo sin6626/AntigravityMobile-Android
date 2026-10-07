@@ -61,6 +61,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.withFrameNanos
@@ -90,7 +91,7 @@ import com.antigravity.mobile.ui.chat.InteractionPanel
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -98,15 +99,20 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val density = LocalDensity.current
-    val keyboardHeight = with(density) { WindowInsets.ime.getBottom(this).toDp() }
-    var keyboardWasVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(keyboardHeight) {
-        val visible = keyboardHeight > 0.dp
-        if (keyboardWasVisible && !visible) focusManager.clearFocus()
-        keyboardWasVisible = visible
+    val imeInsets = WindowInsets.ime
+    val keyboardVisible by remember(density, imeInsets) {
+        derivedStateOf { imeInsets.getBottom(density) > 0 }
     }
-    var composerHeightPx by remember { mutableStateOf(0) }
-    val composerHeight = with(density) { composerHeightPx.toDp() }
+    var keyboardWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(keyboardVisible) {
+        if (keyboardWasVisible && !keyboardVisible) focusManager.clearFocus()
+        keyboardWasVisible = keyboardVisible
+    }
+    val composerInsets = remember { MutableWindowInsets() }
+    val composerPadding = composerInsets.asPaddingValues()
+    val conversationPadding = remember(density) {
+        composerInsets.add(WindowInsets(bottom = with(density) { 23.dp.roundToPx() }))
+    }.asPaddingValues()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     var pairingSettingsOpen by rememberSaveable { mutableStateOf(false) }
     var pairSuccessAtOpen by rememberSaveable { mutableStateOf(0) }
@@ -315,8 +321,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                 entranceReady = !drawerState.isOpen,
                                 allowRevert = !state.isSending && !state.isReverting && state.selectedConversationId !in state.busyConversations,
                                 topSpace = topBarHeight,
-                                bottomSpace = composerHeight + keyboardHeight + 23.dp,
-                                modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                                bottomPadding = conversationPadding,
+                                modifier = Modifier.fillMaxSize().imePadding().pointerInput(Unit) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                                         var travel = 0f
@@ -405,7 +411,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         modifier = Modifier.fillMaxSize(),
                     )
                 } else {
-                    Column(Modifier.fillMaxSize().padding(bottom = composerHeight + keyboardHeight).pointerInput(Unit) {
+                    Column(Modifier.fillMaxSize().padding(composerPadding).imePadding().pointerInput(Unit) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
                             var horizontal = 0f
@@ -496,7 +502,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Column(
-                    modifier = Modifier.onSizeChanged { composerHeightPx = it.height },
+                    modifier = Modifier.onSizeChanged { composerInsets.insets = WindowInsets(bottom = it.height) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     state.pendingInteraction?.let { interaction ->
@@ -654,7 +660,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     }
     BackHandler {
         when {
-            keyboardHeight > 0.dp -> {
+            keyboardVisible -> {
                 focusManager.clearFocus()
                 keyboardController?.hide()
             }
