@@ -1,12 +1,10 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutLinearInEasing
-import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
@@ -23,7 +21,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -31,9 +31,11 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.ChatModel
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 enum class ThinkingLevel(val displayName: String, val shortName: String) {
     LOW("低", "低"),
@@ -439,6 +441,22 @@ internal fun ModelConfigBottomSheet(
 
     // 判断当前选择的模型是否支持调节思考程度（如 Claude 没有思考程度选择，则隐藏滑块）
     val hasThinkingLevels = currentFamily?.variants?.any { it.level != null } == true
+    val density = LocalDensity.current
+    // 6dp额外留白容纳文字字体边距与胶囊柔影，过渡裁切不能截掉正常状态的下沿。
+    val thinkingHeightPx = with(density) { (112.dp + 23.sp.toDp()).roundToPx() }
+    val thinkingPresence by animateFloatAsState(
+        targetValue = if (hasThinkingLevels) 1f else 0f,
+        animationSpec = tween(260, easing = FastOutSlowInEasing),
+        label = "modelThinkingSpace",
+    )
+    val reclaimedHeightPx = (thinkingHeightPx * (1f - thinkingPresence)).roundToInt()
+    // 按整数像素分配腾出的高度，列表增加多少，滑块就减少多少，避免完成按钮因舍入抖动。
+    fun rowPadding(index: Int, vertical: Dp): Modifier {
+        val count = families.size + 1
+        val extra = reclaimedHeightPx / count + if (index < reclaimedHeightPx % count) 1 else 0
+        return with(density) { Modifier.padding(start = 20.dp, end = 20.dp,
+            top = vertical + (extra / 2).toDp(), bottom = vertical + (extra - extra / 2).toDp()) }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -512,7 +530,7 @@ internal fun ModelConfigBottomSheet(
                         .clickable(enabled = modelSelectionEnabled && defaultModel != null) {
                             defaultModel?.let { onSelectModel(it.id) }
                         }
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                        .then(rowPadding(0, 14.dp)),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
@@ -556,7 +574,7 @@ internal fun ModelConfigBottomSheet(
                                     ?: family.variants.first()
                                 onSelectModel(matched.modelId)
                             }
-                            .padding(horizontal = 20.dp, vertical = 15.dp),
+                            .then(rowPadding(index + 1, 15.dp)),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
@@ -583,14 +601,12 @@ internal fun ModelConfigBottomSheet(
                 }
             }
 
-            // 保留滑块区域高度，切换模型仅淡入淡出，完成按钮和面板锚点不参与尺寸动画。
-            Box(Modifier.fillMaxWidth().height(106.dp + with(LocalDensity.current) { 23.sp.toDp() })) {
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = hasThinkingLevels,
-                    enter = fadeIn(animationSpec = tween(durationMillis = 220, easing = LinearOutSlowInEasing)),
-                    exit = fadeOut(animationSpec = tween(durationMillis = 180, easing = FastOutLinearInEasing)),
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
+            // 与列表共用同一个进度；滑块消失时列表填满空间，整个面板和完成按钮保持位置。
+            Box(Modifier.fillMaxWidth()
+                .height(with(density) { (thinkingHeightPx - reclaimedHeightPx).toDp() })
+                .clipToBounds().graphicsLayer { alpha = thinkingPresence }) {
+                if (hasThinkingLevels || thinkingPresence > 0f) {
+                    Column(modifier = Modifier.fillMaxWidth().wrapContentHeight(Alignment.Top, unbounded = true)) {
                         Spacer(Modifier.height(20.dp))
                         ThinkingLevelSlider(
                             currentLevel = currentLevel,

@@ -368,24 +368,47 @@ class MotionTest {
     }
 
     @Test fun modelSheetKeepsDoneStillWhileThinkingControlsFade() {
-        val models = listOf(ChatModel("gemini-high", "Gemini (High)", "MODEL_FIXTURE", true),
-            ChatModel("claude", "Claude", "MODEL_FIXTURE", false))
-        val selected = mutableStateOf("gemini-high")
+        val models = listOf("3.8 Flash", "3.7 Flash", "3.6 Flash", "3.1 Pro").map {
+            ChatModel("gemini-$it-high", "Gemini $it (High)", "MODEL_FIXTURE", true)
+        } + listOf("Claude Sonnet", "Claude Opus", "GPT-OSS").map {
+            ChatModel(it, it, "MODEL_FIXTURE", false)
+        }
+        val selected = mutableStateOf(models.first().id)
         compose.setContent { ModelConfigBottomSheet({}, models, selected.value, { selected.value = it }, false, null, {}) }
         val done = compose.onNodeWithText("完成")
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange))
         val y = done.fetchSemanticsNode().boundsInWindow.top
+        val listBounds = list.fetchSemanticsNode().boundsInWindow
         compose.mainClock.autoAdvance = false
         try {
-            compose.onNodeWithText("Claude").performClick()
+            compose.onNodeWithText("Claude Sonnet").performClick()
+            val bottoms = mutableListOf<Float>()
             repeat(30) {
                 compose.mainClock.advanceTimeByFrame()
                 assertEquals("Done must stay anchored throughout collapse", y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
+                val bounds = list.fetchSemanticsNode().boundsInWindow
+                assertEquals("List top must stay anchored", listBounds.top, bounds.top, 1f)
+                assertTrue("List must grow continuously", bottoms.lastOrNull()?.let { bounds.bottom >= it - 1 } ?: true)
+                bottoms.add(bounds.bottom)
             }
-            compose.onNodeWithText("Gemini").performClick()
+            assertTrue("List must fill the hidden thinking controls' space", bottoms.last() > listBounds.bottom + 100f)
+            assertTrue("List must animate through intermediate heights", bottoms.filter { it > listBounds.bottom + 1 && it < bottoms.last() - 1 }.distinct().size > 2)
+            screenshot("model-list-claude-filled.png")
+            compose.onNodeWithText("Gemini 3.8 Flash").performClick()
             repeat(30) {
                 compose.mainClock.advanceTimeByFrame()
                 assertEquals("Done must stay anchored throughout expansion", y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
             }
+            assertEquals(listBounds.bottom, list.fetchSemanticsNode().boundsInWindow.bottom, 1f)
+            // Reverse an unfinished transition without moving the sheet or the footer.
+            compose.onNodeWithText("Claude Sonnet").performClick()
+            compose.mainClock.advanceTimeBy(96)
+            compose.onNodeWithText("Gemini 3.8 Flash").performClick()
+            repeat(30) {
+                compose.mainClock.advanceTimeByFrame()
+                assertEquals(y, done.fetchSemanticsNode().boundsInWindow.top, 1f)
+            }
+            assertEquals(listBounds.bottom, list.fetchSemanticsNode().boundsInWindow.bottom, 1f)
         } finally { compose.mainClock.autoAdvance = true }
     }
 
