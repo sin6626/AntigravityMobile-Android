@@ -70,7 +70,7 @@
 - 键盘及输入框形变高度改为布局阶段读取，使用现有Compose原生imePadding、MutableWindowInsets及PaddingValues，避免每帧重组整页；消息、骨架屏与返回最新按钮统一避让。平台机制参见[WindowInsets API](https://developer.android.com/reference/kotlin/androidx/compose/foundation/layout/WindowInsets)。
 - Debug/Release/测试包与9项JVM单测通过；真实分辨率/密度的模拟器6项回归通过39.735秒，覆盖两向过渡/反转、滑块操作、快速完成与键盘、下滑保留、返回与流式阅读。模拟器已恢复原显示设置，未关闭或重启。真机Release已安装并核对APK SHA256，原生完成后聚焦与键盘确认正常，未发送消息。
 - 真机冷启动采样：键盘0/520帧超时、P95 9ms；首次面板1/265帧超时、P95 12ms。窗口创建还有一个超时首帧，不能宣称绝对零掉帧；与改前Debug的比较包含构建类型差异。
-- 真机当前两条网关入口不可达，旧LAN连接失败、公网超时；电脑网关健康正常。历史没有加载，因此本次性能数字不能代表长历史场景。临时关闭VPN复测的授权待用户答复，保持现有网络/配对/Go服务。录像与统计在忽略目录model-jitter-*、phone-*-gfx.txt。
+- 采样时真机两条网关入口不可达，旧LAN连接失败、公网超时；电脑网关健康正常。历史没有加载，因此本次性能数字不能代表长历史场景。2026-10-08用户自行复验认可并要求提交，无需关闭VPN，保持现有网络/配对/Go服务。录像与统计在忽略目录model-jitter-*、phone-*-gfx.txt。
 
 ## 第5项暂缓
 
