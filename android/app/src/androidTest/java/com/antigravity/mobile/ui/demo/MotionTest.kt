@@ -30,6 +30,41 @@ class MotionTest {
     })
     private val baseline get() = InstrumentationRegistry.getArguments().getString("motionBaseline") == "true"
 
+    @Test fun composerPlusMenuAnimatesReversesAndStopsDismissedActions() {
+        val open = mutableStateOf(false)
+        var picks = 0
+        compose.setContent {
+            Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.White), contentAlignment = Alignment.Center) {
+                ComposerPlusMenu(open.value, { open.value = false }, {}, {}, { picks++; open.value = false })
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread { open.value = true }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(48)
+            val early = compose.onNodeWithText("图片文件").fetchSemanticsNode().boundsInWindow.width
+            compose.mainClock.advanceTimeBy(180)
+            val resting = compose.onNodeWithText("图片文件").fetchSemanticsNode().boundsInWindow.width
+            assertTrue("Plus menu must have intermediate entry frames: $early / $resting", early < resting - 1)
+            screenshot("plus-menu-resting.png")
+            compose.runOnUiThread { open.value = false }
+            compose.mainClock.advanceTimeByFrame()
+            compose.mainClock.advanceTimeBy(32)
+            compose.onNodeWithText("图片文件").assertDoesNotExist()
+            compose.runOnUiThread { open.value = true }
+            compose.mainClock.advanceTimeByFrame()
+            val reversed = compose.onNodeWithText("图片文件").fetchSemanticsNode().boundsInWindow.width
+            assertTrue("Reopening must continue the partial transition", reversed < resting - 1)
+            compose.mainClock.advanceTimeBy(180)
+            compose.onNodeWithText("图片文件").performClick()
+            compose.mainClock.advanceTimeByFrame()
+            compose.onNodeWithText("图片文件").assertDoesNotExist()
+            assertEquals(1, picks)
+            compose.mainClock.advanceTimeBy(180)
+        } finally { compose.mainClock.autoAdvance = true }
+    }
+
     @Test fun grayHighlightNeverDarkensDuringPressOrRelease() {
         val highlighted = mutableStateOf(false)
         compose.setContent {

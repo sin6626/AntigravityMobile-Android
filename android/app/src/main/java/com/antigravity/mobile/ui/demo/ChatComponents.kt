@@ -264,7 +264,9 @@ internal fun ComposerPlusMenu(
     onPickImage: () -> Unit,
     onPickFile: () -> Unit,
 ) {
-    if (!expanded) return
+    val visibility = remember { MutableTransitionState(false) }
+    visibility.targetState = expanded
+    if (!expanded && visibility.isIdle && !visibility.currentState) return
 
     val density = LocalDensity.current
     // 向上弹出定位在加号按钮上方
@@ -274,14 +276,31 @@ internal fun ComposerPlusMenu(
         alignment = Alignment.TopStart,
         offset = IntOffset(x = 0, y = offsetY),
         onDismissRequest = onDismissRequest,
-        properties = PopupProperties(focusable = true)
+        properties = PopupProperties(focusable = expanded)
     ) {
+        AnimatedVisibility(visibility, enter = EnterTransition.None, exit = ExitTransition.None) {
+        val progress by transition.animateFloat(
+            transitionSpec = { tween(if (targetState == EnterExitState.Visible) 160 else 100) }, label = "plus menu appearance") {
+            if (it == EnterExitState.Visible) 1f else 0f
+        }
+        val shape = RoundedCornerShape(26.dp)
         Surface(
             modifier = Modifier
                 .width(185.dp)
-                .shadow(16.dp, RoundedCornerShape(26.dp), spotColor = Color(0x33000000))
-                .border(1.dp, Color(0xFFEEEEEE), RoundedCornerShape(26.dp)),
-            shape = RoundedCornerShape(26.dp),
+                .graphicsLayer {
+                    alpha = progress
+                    scaleX = .96f + .04f * progress
+                    scaleY = scaleX
+                    transformOrigin = TransformOrigin(0f, 1f)
+                    compositingStrategy = CompositingStrategy.ModulateAlpha
+                    this.shape = shape
+                    shadowElevation = 16.dp.toPx() * progress
+                    ambientShadowColor = Color.Black.copy(alpha = progress)
+                    spotShadowColor = Color(0x33000000).copy(alpha = .2f * progress)
+                }
+                .border(1.dp, Color(0xFFEEEEEE), shape)
+                .then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier),
+            shape = shape,
             color = Color.White
         ) {
             Column(
@@ -291,6 +310,7 @@ internal fun ComposerPlusMenu(
                 PlusMenuItem(
                     icon = Icons.Outlined.PhotoCamera,
                     label = "拍照",
+                    enabled = expanded,
                     onClick = {
                         onDismissRequest()
                         onTakePhoto()
@@ -303,6 +323,7 @@ internal fun ComposerPlusMenu(
                 PlusMenuItem(
                     icon = Icons.Outlined.Image,
                     label = "照片",
+                    enabled = expanded,
                     onClick = {
                         onDismissRequest()
                         onPickImage()
@@ -315,12 +336,14 @@ internal fun ComposerPlusMenu(
                 PlusMenuItem(
                     icon = Icons.Outlined.AttachFile,
                     label = "图片文件",
+                    enabled = expanded,
                     onClick = {
                         onDismissRequest()
                         onPickFile()
                     }
                 )
             }
+        }
         }
     }
 }
@@ -329,13 +352,14 @@ internal fun ComposerPlusMenu(
 private fun PlusMenuItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
+    enabled: Boolean,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
