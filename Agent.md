@@ -5,6 +5,13 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-13 桌面端功能对齐审计
+
+- 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
+- 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
+- 已确认的手机端半成品包括：多选审批明确要求回电脑处理；方案 Artifact 有协议和文件预览，但 Android 没有接入 `proceedArtifact` 审批；后台任务、排队消息删除/立即发送、配额与文件下载已有客户端或网关接口，但缺少 Android 完整入口；普通文件发送协议尚未确认，当前加号菜单的“文件”仍只读取 JPEG/PNG/WebP/GIF。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
+
 ### 2026-10-13 按用户要求修正附件菜单命名
 
 - 用户指出“照片”和“图片文件”造成重复感，明确要求第二项为“图片”、第三项保留“文件”。现菜单为“拍照 / 图片 / 文件”，取消上一轮把能力限制写入入口名称的做法，保留布局、图标、阴影、开合动画与原选择器行为。
