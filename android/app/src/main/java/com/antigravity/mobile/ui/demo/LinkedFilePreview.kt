@@ -96,7 +96,7 @@ internal fun filePreviewKind(uri: String): FilePreviewKind {
     return when (filename.substringAfterLast('.', "").lowercase()) {
         "md", "markdown", "mdown", "mkd" -> FilePreviewKind.MARKDOWN
         "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif", "heic", "heif" -> FilePreviewKind.IMAGE
-        "pdf", "zip", "gz", "tar", "7z", "rar", "exe", "dll", "so", "ttf", "otf", "woff", "woff2", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "mp4", "mov", "mp3", "wav" -> FilePreviewKind.UNSUPPORTED
+        "pdf", "zip", "gz", "tar", "7z", "rar", "exe", "dll", "so", "ttf", "otf", "woff", "woff2", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "mp4", "mov", "webm", "mp3", "wav" -> FilePreviewKind.UNSUPPORTED
         else -> if (fileCodeLanguage(filename).isNotBlank()) FilePreviewKind.CODE else FilePreviewKind.TEXT
     }
 }

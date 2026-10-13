@@ -36,6 +36,7 @@ internal fun mimeTypeForFilename(name: String): String {
         "m4a" -> "audio/mp4"
         "mp4" -> "video/mp4"
         "mov" -> "video/quicktime"
+        "webm" -> "video/webm"
         "zip" -> "application/zip"
         "gz" -> "application/gzip"
         "tar" -> "application/x-tar"

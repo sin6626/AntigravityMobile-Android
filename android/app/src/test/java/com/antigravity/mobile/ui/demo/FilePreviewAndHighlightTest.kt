@@ -12,6 +12,8 @@ class FilePreviewAndHighlightTest {
         assertEquals("截图.PNG", previewFileName("file:///h:/Project/%E6%88%AA%E5%9B%BE.PNG"))
         assertEquals(FilePreviewKind.CODE, filePreviewKind("file:///h:/Project/MainActivity.kt"))
         assertEquals(FilePreviewKind.UNSUPPORTED, filePreviewKind("file:///h:/Project/sample.pdf"))
+        assertEquals(FilePreviewKind.UNSUPPORTED, filePreviewKind("file:///h:/Project/browser-recording.webm"))
+        assertEquals("可使用系统应用播放，也可以保存或分享此文件", unsupportedPreviewHint("browser-recording.webm"))
         assertEquals(FilePreviewKind.TEXT, filePreviewKind("file:///h:/Project/notes.txt"))
         assertEquals("file:///h:/Project/screenshots/a%20b.png", resolveDocumentLink("file:///h:/Project/Agent.md", "screenshots/a b.png"))
         assertEquals("file:///h:/Main.kt#L5", resolveDocumentLink("file:///h:/Project/Agent.md", "../Main.kt#L5"))
