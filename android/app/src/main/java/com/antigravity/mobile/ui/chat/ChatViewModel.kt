@@ -33,6 +33,7 @@ import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
 import com.antigravity.mobile.data.service.PreferencesManager
 import com.antigravity.mobile.data.service.StoredDraftFile
+import com.antigravity.mobile.data.service.safeDownloadedFilename
 import com.antigravity.mobile.data.service.StreamWebSocketClient
 import com.antigravity.mobile.data.service.ConnectionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -49,6 +50,7 @@ import kotlinx.serialization.encodeToString
 import java.io.ByteArrayOutputStream
 import java.util.UUID
 import java.io.File
+import java.security.MessageDigest
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 data class ChatUiState(
@@ -192,6 +194,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun linkedImageRequest(raw: String): ImageRequest = api.mediaImageRequest(raw, _state.value.selectedConversationId)
     suspend fun fetchLinkedFile(uri: String): Result<FileContentResponse> =
         api.fetchFileContent(uri.substringBefore('#'), _state.value.selectedConversationId)
+    suspend fun downloadLinkedFile(uri: String, displayName: String): Result<File> {
+        val cleanUri = uri.substringBefore('#')
+        val key = MessageDigest.getInstance("SHA-256").digest(cleanUri.toByteArray())
+            .take(8).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val directory = File(getApplication<Application>().cacheDir, "antigravity_documents/$key")
+        val target = File(directory, safeDownloadedFilename(displayName))
+        return api.downloadFile(cleanUri, target, _state.value.selectedConversationId)
+    }
     val gatewayUrl: String? get() = prefs.gatewayBaseUrl
 
     init {

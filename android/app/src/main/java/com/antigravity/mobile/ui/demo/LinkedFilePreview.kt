@@ -144,11 +144,6 @@ internal fun LinkedFilePreview(
     val state by viewModel.state.collectAsState()
     val isPlanReview = fullScreen && state.canProceed && state.proceedArtifactUri == uri
     val kind = remember(uri) { filePreviewKind(uri) }
-    if (kind == FilePreviewKind.IMAGE) {
-        ImageViewer(viewModel.linkedImageRequest(uri.substringBefore('#')), viewModel.mediaImageLoader,
-            "文件图片预览", onDismiss)
-        return
-    }
     val imageRequest = remember(uri, viewModel) { { target: String -> viewModel.linkedImageRequest(resolveDocumentLink(uri, target)) as Any } }
     var file by remember(uri) { mutableStateOf<FileContentResponse?>(null) }
     var error by remember(uri) { mutableStateOf<String?>(null) }
@@ -193,7 +188,11 @@ internal fun LinkedFilePreview(
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 when {
                     kind == FilePreviewKind.IMAGE -> FileImagePreview(uri, viewModel, Modifier.fillMaxSize())
-                    kind == FilePreviewKind.UNSUPPORTED -> Text("暂不支持预览此文件类型", color = SecondaryInk)
+                    kind == FilePreviewKind.UNSUPPORTED -> Text(
+                        unsupportedPreviewHint(previewFileName(uri)),
+                        color = SecondaryInk,
+                        lineHeight = 22.sp,
+                    )
                     error != null -> Column {
                         Text(error.orEmpty(), color = Color(0xFFB3261E))
                         TextButton(onClick = { attempt++ }) { Text("重试", color = AccentBlue) }
@@ -212,6 +211,12 @@ internal fun LinkedFilePreview(
                     }
                 }
             }
+            LinkedFileActions(
+                uri = uri,
+                filename = file?.filename ?: previewFileName(uri),
+                showOpen = kind == FilePreviewKind.UNSUPPORTED,
+                viewModel = viewModel,
+            )
             if (isPlanReview) {
                 AnimatedVisibility(
                     visible = state.planCommentDraft.comments.isNotEmpty() ||

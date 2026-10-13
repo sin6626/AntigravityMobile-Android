@@ -1056,11 +1056,15 @@ class ApiClient(
         onProgress: ((progress: Float, written: Long, total: Long) -> Unit)? = null
     ): Result<java.io.File> = withContext(Dispatchers.IO) {
         try {
-            val resolvedUrl = resolveMediaURL(uri)
+            val resolvedUrl = resolveMediaURL(uri, cascadeId)
+            val gateway = currentBaseUrl?.toHttpUrlOrNull()
+            val target = resolvedUrl.toHttpUrlOrNull()
+                ?: return@withContext Result.failure(IllegalArgumentException("无效的文件地址"))
             val request = Request.Builder()
-                .url(resolvedUrl)
+                .url(target)
                 .apply {
-                    prefs.deviceToken?.takeIf { it.isNotBlank() }?.let { token ->
+                    if (gateway != null && gateway.scheme == target.scheme && gateway.host == target.host && gateway.port == target.port)
+                        prefs.deviceToken?.takeIf { it.isNotBlank() }?.let { token ->
                         header("Authorization", "Bearer $token")
                     }
                 }
@@ -1075,24 +1079,29 @@ class ApiClient(
 
                 targetFile.parentFile?.mkdirs()
                 val tempFile = java.io.File(targetFile.parentFile, "${targetFile.name}.tmp")
-                tempFile.outputStream().use { output ->
-                    body.byteStream().use { input ->
-                        val buffer = ByteArray(8192)
-                        var bytesWritten = 0L
-                        var read: Int
-                        while (input.read(buffer).also { read = it } != -1) {
-                            output.write(buffer, 0, read)
-                            bytesWritten += read
-                            if (totalLength > 0 && onProgress != null) {
-                                val progress = (bytesWritten.toFloat() / totalLength.toFloat()).coerceIn(0f, 1f)
-                                onProgress(progress, bytesWritten, totalLength)
+                try {
+                    tempFile.outputStream().use { output ->
+                        body.byteStream().use { input ->
+                            val buffer = ByteArray(8192)
+                            var bytesWritten = 0L
+                            var read: Int
+                            while (input.read(buffer).also { read = it } != -1) {
+                                output.write(buffer, 0, read)
+                                bytesWritten += read
+                                if (totalLength > 0 && onProgress != null) {
+                                    val progress = (bytesWritten.toFloat() / totalLength.toFloat()).coerceIn(0f, 1f)
+                                    onProgress(progress, bytesWritten, totalLength)
+                                }
                             }
+                            output.flush()
                         }
-                        output.flush()
                     }
+                    if (targetFile.exists() && !targetFile.delete()) error("无法替换旧文件")
+                    if (!tempFile.renameTo(targetFile)) error("无法完成文件保存")
+                } catch (error: Exception) {
+                    tempFile.delete()
+                    throw error
                 }
-                if (targetFile.exists()) targetFile.delete()
-                tempFile.renameTo(targetFile)
                 Result.success(targetFile)
             }
         } catch (e: Exception) {

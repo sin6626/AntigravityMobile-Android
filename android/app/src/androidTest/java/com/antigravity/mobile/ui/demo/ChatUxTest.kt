@@ -1636,9 +1636,40 @@ class ChatUxTest {
                 compose.runOnIdle { linked.value = true; showing.value = true }
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("文件图片预览").fetchSemanticsNodes().any {
                     it.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) { "" }.startsWith("已加载") } }
-                compose.onNodeWithText("关闭").assertDoesNotExist()
-                InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+                compose.onNodeWithContentDescription("保存文件").assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                compose.onNodeWithContentDescription("分享文件").assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                compose.onNodeWithText("关闭").performClick()
                 compose.waitUntil(5_000) { !showing.value }
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun unsupportedFilesOfferSystemOpenSaveAndShare() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("file-actions", vm) }
+            try {
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "A" && !vm.state.value.isLoadingMessages }
+                compose.setContent { LinkedFilePreview("file:///test/report.pdf", vm, onDismiss = {}) }
+                compose.onNodeWithText("可使用系统应用预览，也可以保存或分享此文件").assertIsDisplayed()
+                for (label in listOf("保存文件", "分享文件", "使用其他应用打开文件")) {
+                    compose.onNodeWithContentDescription(label)
+                        .assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                        .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                }
+                val downloaded = runBlocking { vm.downloadLinkedFile("file:///test/report.pdf", "../report.pdf").getOrThrow() }
+                assertEquals("report.pdf", downloaded.name)
+                assertEquals("PDF-DATA", downloaded.readText())
+                val requestPath = gateway.requests.last { it.first.startsWith("/api/v1/files/raw") }.first
+                assertTrue(requestPath.contains("cascade_id=A"))
+                saveScreenshot("linked-file-system-actions.png")
             } finally { compose.runOnIdle { store.clear() } }
         }
     }
@@ -2625,6 +2656,7 @@ class ChatUxTest {
                                     .put("filename", "plan.md")
                                     .put("content", "# 开发方案\n\n" + (1..60).joinToString("\n\n") { "步骤 $it" })
                                     .toString()
+                                path.startsWith("/api/v1/files/raw") -> "PDF-DATA"
                                 management && path.contains("GetAllCascadeTrajectories") -> {
                                     val summaries = JSONObject()
                                     for (key in if (createdProject) listOf("A", "B", "C") else listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)

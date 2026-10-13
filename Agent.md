@@ -540,3 +540,9 @@ android/app/src/main/java/com/antigravity/mobile/
 - “提交反馈”只发送定位评论并让代理修订，不附带批准；“继续执行”会按桌面端行为把待提交评论与整份批准合并。提交中禁用冲突动作，失败保留全部内容，成功清理草稿并等待新方案。
 - Go 网关对 `artifactComments` 的短时去重改为完整 JSON 哈希，同一 Artifact 上范围或文字不同的评论不会互相吞掉。聚焦 Go 测试、Android 单测、Debug/AndroidTest 构建通过；API 37 模拟器的评论恢复、失败重试、独立提交和原 Proceed 回归均通过。视觉截图位于忽略目录 `android/design/.verification/feature-10/plan-positioned-comments.png`。
 - 当前源码已部署到主网关 58900/PID 17048 与管理网关 58901/PID 43492，SHA256 为 `41A431D6F51FDBB925B26EE5ECBA067D39C587AB0202D7EF71DC409538EBD18E`；主 Cloudflare PID 42728。本地两端、公网和模拟器到 58901 的健康检查均为 200。
+
+### 2026-10-13 文件与 Artifact 阅读操作
+- `LinkedFilePreview` 继续原生显示 Markdown、代码、文本与可缩放图片；所有类型新增保存和系统分享，PDF、Office、音频与视频显示清楚的能力说明并提供系统打开/播放。三个操作均为 48 dp 原生按钮，下载期间只在当前按钮显示进度，失败留在预览页。
+- 文件使用既有 `/api/v1/files/raw` 下载到按 URI 隔离的应用缓存，再通过 FileProvider 只读授权；保存使用系统 CreateDocument，用户自行选择位置。文件名经过目录分隔符和控制字符清理，MIME 对 PDF、Office、常见文本、图片、音视频和压缩包做确定性映射。
+- `ApiClient.downloadFile` 现传递当前会话 ID，使用单文件 `.tmp` 原子替换并检查删除/重命名结果；设备令牌仅附加到与当前网关同源的请求，外部链接不会收到凭据。没有新增第三方依赖，也没有在 Compose 内实现 Office/PDF/音视频解析器。
+- Android 单测、Debug/AndroidTest 构建和 API 37 三项仪器回归通过，覆盖 PDF 操作区、真实下载内容与 `cascade_id`、图片缩放/关闭和方案评论。截图位于忽略目录 `android/design/.verification/feature-11/linked-file-system-actions.png`。本功能不改 Go 网关，58900/58901 继续运行上一提交已部署的版本。

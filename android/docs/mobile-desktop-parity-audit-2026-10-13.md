@@ -44,8 +44,8 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 已完成。`@` 检索、独立胶囊、草稿恢复和结构化 `file/directory` 发送均已接入 | `/gateway/workspace/context`、`DraftComposerContext`、`SendUserCascadeMessageRequest.items` | 保持回归 |
 | Planning / Fast 与审阅策略 | 2.17 已有 `/plan` 和计划审阅策略；当前文档另有 Planning / Fast 说明 | 缺失。新会话只传工作区、提示、模型和项目，没有模式或策略字段 | `ApiClient.kt:399-437` | P1，待本机枚举 |
 | 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 斜杠命令已完成真实目录发现、独立胶囊和结构化发送；Skills / Rules 独立管理入口仍未实现 | `/gateway/commands`、`Composer`、`ContextScopeItem.slashCommand` | P2 剩管理入口 |
-| 文件和 Artifact 阅读 | 文件树、Markdown、媒体、Artifact 和浏览器录制 | 部分完成。聊天文件链接可预览 Markdown、代码、文本和图片；PDF、Office、音视频直接显示不支持 | `LinkedFilePreview.kt:55-82,119-179` | P1 |
-| 下载、分享与导出 | 2.19.1 可把渲染 Markdown 导出 PDF，文件与媒体有保存入口 | 部分完成。`downloadFile` 已存在但 Android 没有调用，预览页只有复制原文和关闭 | `ApiClient.kt:903-950`、`LinkedFilePreview.kt:139-174` | P1 |
+| 文件和 Artifact 阅读 | 文件树、Markdown、媒体、Artifact 和浏览器录制 | 已完成手机适配范围：Markdown、代码、文本和图片原生阅读；PDF、Office、音视频下载后交给系统兼容应用预览或播放 | `LinkedFilePreview.kt`、`LinkedFileActions.kt` | 保持回归；不内嵌 Office 阅读器 |
+| 下载、分享与导出 | 2.19.1 可把渲染 Markdown 导出 PDF，文件与媒体有保存入口 | 已完成文件与 Artifact 的系统保存、分享；图片同样支持。Android 直接保存 Markdown 原文件，未另造渲染 PDF 管线 | `ApiClient.downloadFile`、`LinkedFileActions.kt`、`FileProvider` | 保持回归 |
 | diff 审阅与评论 | 文件 diff、Review Changes、评论与 Git 操作 | 缺失。Android 会请求回退预览作为执行前置条件，但确认框没有展示文件或 diff，更没有当前工作区变更审阅和定位评论 | `ChatDemoScreen.kt:585-619`、`ChatViewModel.kt:788-860` | P1，待协议 |
 | 会话撤回 | 2.19.1 支持只撤回会话 | 已完成会话与文件两种回退范围，并保留草稿和图片 | `ChatViewModel.kt:788-860` | 保持回归 |
 | 模型额度 | 模型和额度受账号方案限制 | 部分完成。客户端已有读取和刷新配额接口，但没有 Android 调用和页面 | `ApiClient.kt:270-315` | P2 |
@@ -143,8 +143,12 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
     - 聚焦 Go 测试、Android 单测、Debug/AndroidTest 构建及 API 37 两条仪器测试通过；主网关 58900、管理网关 58901、主公网和模拟器链路均已部署并健康。
 
 11. `feat(android): 扩展文件与 Artifact 阅读操作`
+    - **已于 2026-10-13 完成。**
     - 普通文件增加下载和系统分享；PDF、Office、音频、视频按平台能力选择系统预览或下载说明。
     - 浏览器录制先提供可播放与下载，再考虑评论。不要在 Compose 内重造 Office 阅读器。
+    - 所有预览页提供 48 dp 的保存、分享操作；PDF、Office 与音视频额外提供系统打开或播放。文件先经带鉴权的网关原始流写入隔离缓存，再用 FileProvider 临时授权；系统“创建文档”负责用户选择保存位置。
+    - 下载沿用网关原始流、Range 与敏感路径保护，并补齐会话 ID；设备令牌只发送给当前网关同源地址。临时文件采用原子替换，失败时清理单个 `.tmp` 文件并保留预览页重试。
+    - 没有增加内嵌 Office/PDF/媒体依赖，也没有把 Markdown 渲染为另一份 PDF；Android 分享/保存原始 Artifact，避免内容与桌面源文件不一致。
 
 12. `feat(android): 添加当前变更 diff 审阅`
     - 与“回退到某条消息”使用不同标题、颜色和确认文案。
