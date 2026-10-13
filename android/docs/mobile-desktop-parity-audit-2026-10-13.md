@@ -12,7 +12,7 @@
 2. 排队消息、后台任务和子代理状态。
 3. 电脑工作区上下文与普通文件附件。
 4. Artifact、文件和 diff 的审阅、评论、下载或分享。
-5. Planning / Fast、斜杠命令、语音、额度和电脑设置状态。
+5. `/plan` 规划入口、计划审阅策略、语音、额度和电脑设置状态。
 
 Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会话、发起任务、审阅计划和 Artifact、收到完成或待输入通知。它适合作为手机体验参照，不代表本项目可以直接复用其私有接口。[Remote Control](https://antigravity.google/docs/remote-control/)
 
@@ -42,7 +42,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 查看与导航已完成：直属子代理、状态、步骤、父子层级、进入只读轨迹和逐级返回均已接入；定向消息仍待公开调用契约 | `/gateway/subagents`、`SubagentsPanel.kt`、`ChatViewModel.openSubagent` | P0 剩定向消息协议 |
 | 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 已完成。文件选择、模型 MIME 校验、8 MB 单文件草稿、进程/失败恢复、普通与排队发送、文件胶囊和无障碍均已接入；使用 `media[].mimeType/displayName/inlineData` | `ChatViewModel.addFile/send`、`PreferencesManager`、`ApiClient.sendMessage`、`ClientModelConfig.supportedMimeTypes` | 保持回归；多文件/文件夹不在 2.19.1 范围 |
 | 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 已完成。`@` 检索、独立胶囊、草稿恢复和结构化 `file/directory` 发送均已接入 | `/gateway/workspace/context`、`DraftComposerContext`、`SendUserCascadeMessageRequest.items` | 保持回归 |
-| Planning / Fast 与审阅策略 | 2.17 已有 `/plan` 和计划审阅策略；当前文档另有 Planning / Fast 说明 | 缺失。新会话只传工作区、提示、模型和项目，没有模式或策略字段 | `ApiClient.kt:399-437` | P1，待本机枚举 |
+| 规划入口与计划审阅策略 | 2.19.1 已移除旧 Planning/Fast 开关，以 `/plan` 进入规划；全局策略为 Always Ask / Always Proceed | 已完成。发送前显示直接/规划，规划复用真实 `/plan` 命令；可读取并更新电脑全局审阅策略 | `/gateway/preferences/plan-review`、`WorkModeBottomSheet.kt`、`ChatViewModel.selectPlanningMode` | 保持回归 |
 | 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 斜杠命令已完成真实目录发现、独立胶囊和结构化发送；Skills / Rules 独立管理入口仍未实现 | `/gateway/commands`、`Composer`、`ContextScopeItem.slashCommand` | P2 剩管理入口 |
 | 文件和 Artifact 阅读 | 文件树、Markdown、媒体、Artifact 和浏览器录制 | 已完成手机适配范围：Markdown、代码、文本和图片原生阅读；PDF、Office、音视频下载后交给系统兼容应用预览或播放 | `LinkedFilePreview.kt`、`LinkedFileActions.kt` | 保持回归；不内嵌 Office 阅读器 |
 | 下载、分享与导出 | 2.19.1 可把渲染 Markdown 导出 PDF，文件与媒体有保存入口 | 已完成文件与 Artifact 的系统保存、分享；图片同样支持。Android 直接保存 Markdown 原文件，未另造渲染 PDF 管线 | `ApiClient.downloadFile`、`LinkedFileActions.kt`、`FileProvider` | 保持回归 |
@@ -160,9 +160,11 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 
 ### 第三批：模式与管理
 
-13. `feat(android): 添加会话模式和计划审阅策略`
-    - Planning / Fast 与模型推理强度分开展示，发送前能看到当前模式。
-    - 官方页面与发布记录对策略数量描述不同。必须从本机和网关确认枚举后实现。
+13. `feat(android): 添加规划入口和计划审阅策略`
+    - **已于 2026-10-13 完成。**
+    - 本机 2.19.1 已移除旧 Planning/Fast 开关；手机端发送前显示“直接/规划”，规划从真实斜杠命令目录选择 `/plan`，不伪造已删除的会话模式。
+    - 桌面当前 UI 只开放 `ALWAYS`（总是询问）和 `TURBO`（自动继续）；手机端同步同一全局配置，并清楚警示自动继续会跳过人工确认。
+    - 工作方式和全局策略分区展示，包含 48 dp 触控区、180 ms 选中反馈、加载、失败保留、重试、完成动作和 TalkBack 描述。
 
 14. `feat(android): 展示模型额度与恢复时间`
     - 复用现有配额接口，呈现剩余比例、重置时间和刷新失败。第三方多账号切换另立功能，不混入额度提交。
@@ -181,7 +183,6 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 根据项目约束，以下字段没有文档或真实请求样本时不能开始页面写入逻辑：
 
 - 普通文件上游是否另有限制单文件大小或多文件数量；Android 首版先限制为单个小文件，上传字段、文件名、MIME、模型能力和落盘恢复方式已经确认。
-- Planning / Fast 与计划审阅策略的本机枚举。
 - `@` 文件引用、Skills、Rules 和斜杠命令的结构化请求对象。
 - diff 的 Accept、Reject、Git discard、stage 和 commit 动作对象；读取与定位评论对象已经确认并接入。
 - 子代理定向消息的公开 HTTP/RPC 入口和停止目标。身份与父子关系已经由轨迹元数据确认并接入。

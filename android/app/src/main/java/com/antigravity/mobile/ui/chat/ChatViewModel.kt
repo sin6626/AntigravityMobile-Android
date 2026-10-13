@@ -32,6 +32,7 @@ import com.antigravity.mobile.data.model.ConversationDiffResponse
 import com.antigravity.mobile.data.model.DiffCommentDraft
 import com.antigravity.mobile.data.model.DiffCommentDraftState
 import com.antigravity.mobile.data.model.DiffSide
+import com.antigravity.mobile.data.model.PlanReviewPreference
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
@@ -125,6 +126,12 @@ data class ChatUiState(
     val workspaceUri: String = "",
     val workspaceContexts: List<WorkspaceContextItem> = emptyList(),
     val slashCommand: SlashCommandDefinition? = null,
+    val planReviewPreference: PlanReviewPreference? = null,
+    val isLoadingPlanReviewPreference: Boolean = false,
+    val isUpdatingPlanReviewPreference: Boolean = false,
+    val isSelectingWorkMode: Boolean = false,
+    val workModeError: String? = null,
+    val planReviewPolicySuccessCount: Int = 0,
     val contextSuggestions: List<WorkspaceContextItem> = emptyList(),
     val commandSuggestions: List<SlashCommandDefinition> = emptyList(),
     val isLoadingContextSuggestions: Boolean = false,
@@ -816,6 +823,117 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         saveComposerContext(draftKey)
     }
 
+    fun loadPlanReviewPreference() {
+        if (_state.value.isLoadingPlanReviewPreference) return
+        val token = prefs.deviceToken
+        _state.value = _state.value.copy(isLoadingPlanReviewPreference = true, workModeError = null)
+        viewModelScope.launch {
+            api.fetchPlanReviewPreference().fold(onSuccess = { preference ->
+                if (prefs.deviceToken == token) _state.value = _state.value.copy(
+                    planReviewPreference = preference,
+                    isLoadingPlanReviewPreference = false,
+                    workModeError = null,
+                )
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(
+                    isLoadingPlanReviewPreference = false,
+                    workModeError = error.message ?: "读取计划审阅策略失败",
+                )
+            })
+        }
+    }
+
+    fun updatePlanReviewPolicy(policy: String) {
+        if (policy !in setOf("ALWAYS", "TURBO") || _state.value.isUpdatingPlanReviewPreference) return
+        val token = prefs.deviceToken
+        _state.value = _state.value.copy(isUpdatingPlanReviewPreference = true, workModeError = null)
+        viewModelScope.launch {
+            api.updatePlanReviewPreference(policy).fold(onSuccess = { preference ->
+                if (prefs.deviceToken == token) {
+                    val current = _state.value
+                    _state.value = current.copy(
+                        planReviewPreference = preference,
+                        isUpdatingPlanReviewPreference = false,
+                        workModeError = null,
+                        planReviewPolicySuccessCount = current.planReviewPolicySuccessCount + 1,
+                    )
+                }
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(
+                    isUpdatingPlanReviewPreference = false,
+                    workModeError = error.message ?: "更新计划审阅策略失败",
+                )
+            })
+        }
+    }
+
+    fun selectPlanningMode(enabled: Boolean) {
+        val current = _state.value
+        if (!enabled) {
+            if (current.slashCommand?.info?.name.equals("plan", ignoreCase = true)) {
+                _state.value = current.copy(slashCommand = null, workModeError = null)
+                saveComposerContext(draftKey)
+            } else {
+                _state.value = current.copy(workModeError = null)
+            }
+            return
+        }
+        if (current.slashCommand?.info?.name.equals("plan", ignoreCase = true) || current.isSelectingWorkMode) return
+        val model = current.models.firstOrNull {
+            it.id == (current.modelOverrideId ?: current.activeModelId ?: current.selectedModelId) ||
+                it.model == (current.modelOverrideId ?: current.activeModelId ?: current.selectedModelId)
+        }
+        if (model == null) {
+            _state.value = current.copy(workModeError = current.modelsError ?: "请等待模型列表加载完成")
+            return
+        }
+        val token = prefs.deviceToken
+        val visit = conversationVisit
+        val conversationId = current.selectedConversationId
+        val workspaceUri = current.workspaceUri
+        val key = draftKey
+        _state.value = current.copy(isSelectingWorkMode = true, workModeError = null)
+        viewModelScope.launch {
+            api.fetchSlashCommands(conversationId, workspaceUri, model.model).fold(onSuccess = { commands ->
+                if (prefs.deviceToken != token || conversationVisit != visit ||
+                    _state.value.selectedConversationId != conversationId || draftKey != key) return@fold
+                val command = commands.firstOrNull { it.info.name.equals("plan", ignoreCase = true) }
+                when {
+                    command == null -> _state.value = _state.value.copy(
+                        isSelectingWorkMode = false,
+                        workModeError = "电脑端当前没有提供 /plan 命令",
+                    )
+                    command.arguments.any { it.required && it.defaultValue.isBlank() } ->
+                        _state.value = _state.value.copy(
+                            isSelectingWorkMode = false,
+                            workModeError = "/plan 需要填写参数，手机端暂不能执行",
+                        )
+                    else -> {
+                        _state.value = _state.value.copy(
+                            slashCommand = command,
+                            commandSuggestions = emptyList(),
+                            isSelectingWorkMode = false,
+                            workModeError = null,
+                        )
+                        saveComposerContext(key)
+                    }
+                }
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token || conversationVisit != visit ||
+                    _state.value.selectedConversationId != conversationId || draftKey != key) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(
+                    isSelectingWorkMode = false,
+                    workModeError = error.message ?: "读取 /plan 命令失败",
+                )
+            })
+        }
+    }
+
     fun clearComposerSuggestions() {
         contextSuggestionsJob?.cancel()
         commandSuggestionsJob?.cancel()
@@ -922,6 +1040,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
+            planReviewPreference = null, isLoadingPlanReviewPreference = false,
+            isUpdatingPlanReviewPreference = false, isSelectingWorkMode = false, workModeError = null,
         )
     }
 
@@ -1170,6 +1290,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             nextMessageOffset = 0,
             error = null,
             messagesError = null, olderMessagesError = null,
+            isSelectingWorkMode = false, workModeError = null,
         )
         stream.connect(id)
         loadMessages(id)
@@ -1255,6 +1376,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             nextMessageOffset = 0,
             error = null,
             messagesError = null, olderMessagesError = null,
+            isSelectingWorkMode = false, workModeError = null,
         )
     }
 

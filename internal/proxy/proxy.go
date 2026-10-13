@@ -334,6 +334,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.HandleCascadeDiffs(w, r)
 		return
 	}
+	if r.URL.Path == "/gateway/preferences/plan-review" {
+		p.HandlePlanReviewPreference(w, r)
+		return
+	}
 	if r.URL.Path == "/gateway/cascade/revert/preview" {
 		p.HandleCascadeRevertPreview(w, r)
 		return

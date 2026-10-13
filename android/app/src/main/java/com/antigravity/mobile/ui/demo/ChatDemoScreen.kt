@@ -148,6 +148,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var showRename by rememberSaveable { mutableStateOf(false) }
     var renameTitle by rememberSaveable { mutableStateOf("") }
     var modelPickerOpen by remember { mutableStateOf(false) }
+    var workModeOpen by remember { mutableStateOf(false) }
     val composerFocusRequester = remember { FocusRequester() }
     var focusAfterModelDone by remember { mutableIntStateOf(0) }
     LaunchedEffect(focusAfterModelDone) {
@@ -169,6 +170,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var observedProceedSuccess by remember { mutableIntStateOf(state.proceedSuccessCount) }
     var observedPlanCommentSuccess by remember { mutableIntStateOf(state.planCommentSuccessCount) }
     var observedDiffCommentSuccess by remember { mutableIntStateOf(state.diffCommentSuccessCount) }
+    var observedPlanReviewPolicySuccess by remember { mutableIntStateOf(state.planReviewPolicySuccessCount) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var tempPhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -192,6 +194,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     }
     LaunchedEffect(state.selectedConversationId) {
         modelPickerOpen = false
+        workModeOpen = false
         showDeleteConfirm = false
         showRename = false
         if (state.selectedConversationId == null && openedFromArchive) {
@@ -253,6 +256,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             snackbar.showSnackbar("变更反馈已提交，代理正在处理")
         }
         observedDiffCommentSuccess = state.diffCommentSuccessCount
+    }
+    LaunchedEffect(state.planReviewPolicySuccessCount) {
+        if (state.planReviewPolicySuccessCount > observedPlanReviewPolicySuccess) {
+            snackbar.showSnackbar("计划审阅策略已同步到电脑")
+        }
+        observedPlanReviewPolicySuccess = state.planReviewPolicySuccessCount
     }
     val returnFromConversation: () -> Unit = {
         viewModel.closeConversation()
@@ -694,6 +703,16 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                 if (state.models.isEmpty()) viewModel.refreshModels()
                             },
                             modelEnabled = modelEnabled,
+                            workModeLabel = if (state.slashCommand?.info?.name.equals("plan", true)) "规划" else "直接",
+                            workModeDescription = if (state.slashCommand?.info?.name.equals("plan", true))
+                                "工作方式，先规划" else "工作方式，直接执行",
+                            onOpenWorkMode = {
+                                focusManager.clearFocus()
+                                keyboardController?.hide()
+                                workModeOpen = true
+                                viewModel.loadPlanReviewPreference()
+                            },
+                            workModeEnabled = modelEnabled,
                             inputFocusRequester = composerFocusRequester,
                         )
                     }
@@ -726,6 +745,21 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 onRetryModels = viewModel::refreshModels,
                 modelSelectionEnabled = modelEnabled,
                 onDone = { modelPickerOpen = false; focusAfterModelDone++ },
+            )
+        }
+        if (workModeOpen && state.isPaired) {
+            WorkModeBottomSheet(
+                onDismiss = { workModeOpen = false },
+                planningSelected = state.slashCommand?.info?.name.equals("plan", true),
+                currentCommandName = state.slashCommand?.info?.name,
+                onSelectPlanning = viewModel::selectPlanningMode,
+                preference = state.planReviewPreference,
+                loadingPreference = state.isLoadingPlanReviewPreference,
+                updatingPreference = state.isUpdatingPlanReviewPreference,
+                selectingMode = state.isSelectingWorkMode,
+                error = state.workModeError,
+                onRetry = viewModel::loadPlanReviewPreference,
+                onSelectPolicy = viewModel::updatePlanReviewPolicy,
             )
         }
         state.revertMessage?.let { message ->

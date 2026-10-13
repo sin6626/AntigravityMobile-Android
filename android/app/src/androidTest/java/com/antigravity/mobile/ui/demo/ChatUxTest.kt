@@ -2536,6 +2536,48 @@ class ChatUxTest {
         }
     }
 
+    @Test fun workModeUsesPlanCommandAndUpdatesDesktopReviewPolicy() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            val prefs = PreferencesManager(app).apply {
+                clear(); gatewayBaseUrl = gateway.url; deviceToken = "work-mode-token"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("work-mode", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.models.isNotEmpty() }
+                compose.onNode(hasSetTextAction()).performClick()
+                compose.onNodeWithContentDescription("工作方式，直接执行")
+                    .assertIsDisplayed().assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f)).performClick()
+                compose.waitUntil(10_000) { vm.state.value.planReviewPreference != null }
+                compose.onNodeWithText("计划审阅策略 · 电脑全局").assertIsDisplayed()
+                compose.onNodeWithContentDescription("工作方式，先规划").performClick()
+                compose.waitUntil(10_000) { vm.state.value.slashCommand?.info?.name == "plan" }
+                assertEquals("plan", prefs.loadDraftComposerContext("android_new_chat").slashCommand?.info?.name)
+
+                gateway.failurePath = "/gateway/preferences/plan-review"
+                compose.onNodeWithContentDescription("计划审阅策略，自动继续").performClick()
+                compose.waitUntil(10_000) { vm.state.value.workModeError != null }
+                assertEquals("ALWAYS", vm.state.value.planReviewPreference?.policy)
+                gateway.failurePath = null
+                compose.onNodeWithContentDescription("计划审阅策略，自动继续").performClick()
+                compose.waitUntil(10_000) { vm.state.value.planReviewPreference?.policy == "TURBO" }
+                compose.onNodeWithContentDescription("计划审阅策略，自动继续").assertIsSelected()
+                val update = gateway.requests.last { it.first == "/gateway/preferences/plan-review" && it.second.isNotBlank() }
+                assertEquals("TURBO", JSONObject(update.second).getString("policy"))
+                saveScreenshot("work-mode-plan-review.png")
+
+                compose.onNodeWithContentDescription("工作方式，直接执行").performClick()
+                compose.waitUntil(5_000) { vm.state.value.slashCommand == null }
+                compose.onNodeWithText("完成").performClick()
+                compose.waitUntil(5_000) {
+                    compose.onAllNodesWithText("计划审阅策略 · 电脑全局").fetchSemanticsNodes().isEmpty()
+                }
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2578,6 +2620,7 @@ class ChatUxTest {
         @Volatile var taskFixture = false
         @Volatile var subagentFixture = false
         @Volatile var diffFixture = false
+        @Volatile var planReviewPolicy = "ALWAYS"
         private val deletedQueueIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val stoppedTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private fun queuedMessagesJson(): String {
@@ -2652,6 +2695,9 @@ class ChatUxTest {
                                     "MODEL_TEXT" -> activeModel = "text-fixture"
                                 }
                             }
+                            if (failurePath?.let(path::contains) != true && path == "/gateway/preferences/plan-review" && requestBody.isNotBlank()) {
+                                planReviewPolicy = JSONObject(requestBody).getString("policy")
+                            }
                             if (liveStream && path.startsWith("/gateway/cascade/stream") && failurePath?.let(path::contains) != true) {
                                 val accept = android.util.Base64.encodeToString(java.security.MessageDigest.getInstance("SHA-1")
                                     .digest((webSocketKey + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").toByteArray()), android.util.Base64.NO_WRAP)
@@ -2695,6 +2741,7 @@ class ChatUxTest {
                                 path.startsWith("/api/v1/auth/endpoints") -> """{"endpoints":$endpointsJson,"platform":"windows"}"""
                                 path.startsWith("/gateway/workspace/context") -> """{"workspaceUri":"file:///test/project","items":[{"type":"file","name":"ChatViewModel.kt","relativePath":"src/ChatViewModel.kt","rootName":"project","rootUri":"file:///test/project","uri":"file:///test/project/src/ChatViewModel.kt","size":42,"scopeItem":{"file":{"absoluteUri":"file:///test/project/src/ChatViewModel.kt","workspaceUrisToRelativePaths":{"file:///test/project":"src/ChatViewModel.kt"},"numFiles":1,"numBytes":42}}}]}"""
                                 path.startsWith("/gateway/commands") -> """{"commands":[{"info":{"name":"plan","modelFacingText":"<PLAN />","type":"SLASH_COMMAND_TYPE_SYSTEM","icon":"ballot"},"title":"plan","description":"先制定方案"}]}"""
+                                path == "/gateway/preferences/plan-review" -> """{"policy":"$planReviewPolicy","planningCommand":"plan","planningModeToggleSupported":false}"""
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 path.startsWith("/gateway/subagents") -> if (subagentFixture && path.contains("parentId=A")) """{"subagents":[
                                     {"id":"sub-running","parentConversationId":"A","rootConversationId":"A","title":"检查登录动效","status":"RUNNING","stepCount":6,"nestingDepth":1},

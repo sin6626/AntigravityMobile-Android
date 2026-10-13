@@ -9,7 +9,7 @@
 
 - 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
 - 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
-- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作和当前变更 diff 定位评论现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的主线包括会话模式、额度、语音转写和电脑 MCP/权限只读状态。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作、当前变更 diff 定位评论和 `/plan` 规划入口/计划审阅策略现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的主线包括额度、语音转写和电脑 MCP/权限只读状态。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
 - 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
 
 ### 2026-10-13 待审方案与继续执行
@@ -553,3 +553,10 @@ android/app/src/main/java/com/antigravity/mobile/
 - 桌面协议确认 `FileDiffComment.diffCommentInfos`：删除行写 `originalSelection`，新增行写 `modifiedSelection`，`startLine` 为零基、`endLine` 为尾后行。多文件评论按 URI 分组后放入 `fileDiffComments[]`；短时去重覆盖完整定位评论，失败不清草稿。
 - Go 聚焦测试、Android 单测、Debug/AndroidTest 构建及 API 37 仪器测试通过。仪器测试覆盖入口、定位、48 dp、关闭恢复与请求形状；截图位于忽略目录 `android/design/.verification/feature-12/current-changes-positioned-comment.png`。Accept、Reject、discard、stage 和 commit 未找到独立可验证动作契约，继续保留为后续任务。
 - 当前源码已部署到主网关 58900/PID 19744 与管理网关 58901/PID 39116，SHA256 为 `E000427CF61B116B7D965914FC0D9B4C923B2F048C5EF3B32BD479F4A554D917`；主 Cloudflare PID 15372。本地两端、公网、模拟器到 58901 的健康检查均为 200；58901 真实读取 73 个会话并在第 2 个会话返回 8 个普通文件 diff，仅执行只读验证。
+
+### 2026-10-13 规划入口与计划审阅策略
+- 本机 Antigravity 2.19.1 桌面源码明确移除了旧 Planning/Fast 切换，并提示用户通过 `/plan` 生成方案。Android 因此不伪造会话模式枚举：输入框聚焦后显示“直接/规划”，选择规划时从真实 `GetSlashCommands` 目录查找 `/plan` 并保存为当前会话草稿命令。
+- 桌面当前只展示 `ARTIFACT_REVIEW_MODE_ALWAYS` 与 `ARTIFACT_REVIEW_MODE_TURBO`。网关新增鉴权后的 `/gateway/preferences/plan-review`：读取仅解析 `~/.gemini/config/config.json` 的该字段，写入严格调用桌面 `JetboxWriteState.userConfig.userSettings.artifactReviewMode`，不返回其他电脑配置。
+- 工作方式面板把单条消息的“直接执行/先规划”和电脑全局的“总是询问/自动继续”分区展示；自动继续使用琥珀警示并明确会跳过人工确认。所有选项至少 48 dp，选中态 180 ms 过渡，含读取、切换、失败保留、重试和明确完成动作；切换会话时迟到响应不会修改新会话草稿。
+- Go 聚焦测试、Android Debug/AndroidTest 构建及 API 37 端到端仪器测试通过，覆盖真实 `/plan` 目录、失败留态、策略重试、完整请求和草稿持久化；视觉截图位于忽略目录 `android/design/.verification/feature-13/work-mode-plan-review.png`。全量 Go 测试仍有既有 Windows 盘符大小写断言和 WebSocket 偶发断连失败，本功能聚焦用例通过。
+- 同一 SHA256 `5FE8ADB7D8D47F5A772DB65707439C3B1AB40CE4F673EE1A1D06659B7BABD33C` 二进制已部署到主网关 58900/PID 27292 与管理网关 58901/PID 52024，Cloudflare PID 2144；本地、公网和模拟器健康检查均为 200。真实桌面只执行 `ALWAYS` 到 `ALWAYS` 的幂等写入并读回成功，没有启动会话或发送消息。

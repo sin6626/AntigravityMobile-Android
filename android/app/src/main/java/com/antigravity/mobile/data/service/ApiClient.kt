@@ -454,6 +454,35 @@ class ApiClient(
         } catch (error: Exception) { Result.failure(error) }
     }
 
+    suspend fun fetchPlanReviewPreference(): Result<PlanReviewPreference> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        try {
+            client.newCall(buildAuthorizedRequest("$baseUrl/gateway/preferences/plan-review").get().build()).await().use { response ->
+                when {
+                    response.code == 401 -> Result.failure(GatewayAuthorizationException())
+                    !response.isSuccessful -> Result.failure(RuntimeException("读取计划审阅策略失败: HTTP ${response.code}"))
+                    else -> Result.success(json.decodeFromString<PlanReviewPreference>(response.body?.string() ?: "{}"))
+                }
+            }
+        } catch (error: Exception) { Result.failure(error) }
+    }
+
+    suspend fun updatePlanReviewPreference(policy: String): Result<PlanReviewPreference> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val payload = buildJsonObject { put("policy", policy) }
+        try {
+            val request = buildAuthorizedRequest("$baseUrl/gateway/preferences/plan-review")
+                .put(payload.toString().toRequestBody(jsonMediaType)).build()
+            client.newCall(request).await().use { response ->
+                when {
+                    response.code == 401 -> Result.failure(GatewayAuthorizationException())
+                    !response.isSuccessful -> Result.failure(RuntimeException("更新计划审阅策略失败: HTTP ${response.code}"))
+                    else -> Result.success(json.decodeFromString<PlanReviewPreference>(response.body?.string() ?: "{}"))
+                }
+            }
+        } catch (error: Exception) { Result.failure(error) }
+    }
+
     /** Create a new cascade session. */
     suspend fun createCascade(
         workspaceUri: String,

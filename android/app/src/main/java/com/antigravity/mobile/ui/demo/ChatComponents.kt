@@ -24,6 +24,7 @@ import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -432,6 +433,10 @@ internal fun Composer(
     modelBadge: String? = null,
     onOpenModelConfig: () -> Unit = {},
     modelEnabled: Boolean = true,
+    workModeLabel: String? = null,
+    workModeDescription: String = "",
+    onOpenWorkMode: () -> Unit = {},
+    workModeEnabled: Boolean = true,
     inputFocusRequester: FocusRequester? = null,
 ) {
     val trigger = remember(draft) { composerTrigger(draft) }
@@ -546,7 +551,11 @@ internal fun Composer(
                             active = expanded,
                             modelBadge = modelBadge,
                             onOpenModelConfig = onOpenModelConfig,
-                            modelEnabled = modelEnabled
+                            modelEnabled = modelEnabled,
+                            workModeLabel = workModeLabel,
+                            workModeDescription = workModeDescription,
+                            onOpenWorkMode = onOpenWorkMode,
+                            workModeEnabled = workModeEnabled,
                         )
                         ComposerPlusMenu(
                             expanded = plusMenuOpen && expanded,
@@ -699,11 +708,31 @@ private fun ComposerActions(
     active: Boolean,
     modelBadge: String?,
     onOpenModelConfig: () -> Unit,
-    modelEnabled: Boolean
+    modelEnabled: Boolean,
+    workModeLabel: String?,
+    workModeDescription: String,
+    onOpenWorkMode: () -> Unit,
+    workModeEnabled: Boolean,
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         ComposerIcon("add", "添加附件与操作", 32, onOpenPlusMenu, active)
         Spacer(Modifier.weight(1f))
+        if (!workModeLabel.isNullOrBlank()) {
+            val modeColor by animateColorAsState(
+                if (workModeLabel == "规划") AccentBlue else SecondaryInk,
+                tween(180), label = "work mode color",
+            )
+            Box(
+                Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
+                    .clickable(enabled = active && workModeEnabled, onClick = onOpenWorkMode)
+                    .semantics { contentDescription = workModeDescription }
+                    .padding(horizontal = 8.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(workModeLabel, color = modeColor, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            }
+            Spacer(Modifier.width(2.dp))
+        }
         if (!modelBadge.isNullOrBlank()) {
             Text(
                 text = modelBadge,
