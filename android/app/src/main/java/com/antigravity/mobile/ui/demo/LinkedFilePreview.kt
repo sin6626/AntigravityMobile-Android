@@ -10,9 +10,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -34,6 +38,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,7 +122,13 @@ internal fun MarkdownImage(uri: String, title: String?) {
 }
 
 @Composable
-internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss: () -> Unit) {
+internal fun LinkedFilePreview(
+    uri: String,
+    viewModel: ChatViewModel,
+    listState: LazyListState? = null,
+    fullScreen: Boolean = false,
+    onDismiss: () -> Unit,
+) {
     val kind = remember(uri) { filePreviewKind(uri) }
     if (kind == FilePreviewKind.IMAGE) {
         ImageViewer(viewModel.linkedImageRequest(uri.substringBefore('#')), viewModel.mediaImageLoader,
@@ -136,9 +148,14 @@ internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss:
         }
     }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.padding(horizontal = 16.dp).fillMaxWidth()
-            .height((LocalConfiguration.current.screenHeightDp * 0.85f).dp)
-            .background(Color.White, RoundedCornerShape(20.dp)).padding(18.dp),
+        val container = if (fullScreen) {
+            Modifier.fillMaxSize().background(Color.White).statusBarsPadding().navigationBarsPadding().padding(18.dp)
+        } else {
+            Modifier.padding(horizontal = 16.dp).fillMaxWidth()
+                .height((LocalConfiguration.current.screenHeightDp * 0.85f).dp)
+                .background(Color.White, RoundedCornerShape(20.dp)).padding(18.dp)
+        }
+        Column(container,
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             DisableSelection {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -160,7 +177,7 @@ internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss:
                         TextButton(onClick = { attempt++ }) { Text("重试", color = AccentBlue) }
                     }
                     file != null -> CompositionLocalProvider(LocalRichImageRequest provides imageRequest) {
-                        FileTextPreview(file!!, Modifier.fillMaxSize())
+                        FileTextPreview(file!!, Modifier.fillMaxSize(), listState)
                     }
                     else -> Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
@@ -177,8 +194,13 @@ internal fun LinkedFilePreview(uri: String, viewModel: ChatViewModel, onDismiss:
 }
 
 @Composable
-internal fun FileTextPreview(file: FileContentResponse, modifier: Modifier = Modifier) {
+internal fun FileTextPreview(
+    file: FileContentResponse,
+    modifier: Modifier = Modifier,
+    listState: LazyListState? = null,
+) {
     val kind = filePreviewKind(file.filename)
+    val defaultListState = rememberLazyListState()
     var blocks by remember(file.content) { mutableStateOf<List<Node>?>(null) }
     LaunchedEffect(file.content, kind) {
         if (kind == FilePreviewKind.MARKDOWN) blocks = withContext(Dispatchers.Default) { parseMarkdownBlocks(file.content) }
@@ -188,7 +210,11 @@ internal fun FileTextPreview(file: FileContentResponse, modifier: Modifier = Mod
         return
     }
     SelectionContainer(modifier) {
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(
+            modifier = Modifier.semantics { contentDescription = "文件内容" },
+            state = listState ?: defaultListState,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
             when {
                 kind == FilePreviewKind.MARKDOWN -> itemsIndexed(blocks.orEmpty()) { _, block -> MarkdownBlock(block) }
                 kind == FilePreviewKind.CODE -> item { CodeBlock(file.content, fileCodeLanguage(file.filename)) }

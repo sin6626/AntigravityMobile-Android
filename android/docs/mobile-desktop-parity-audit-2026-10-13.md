@@ -35,7 +35,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 模型与推理强度 | 每模型 Low / Medium / High，切换对后续执行生效 | 已完成主要选择体验，模型目录来自后端 | `ModelConfigBottomSheet.kt:41-43`、`ChatViewModel.kt:461-493` | 保持回归 |
 | 单选权限与问答 | 命令权限、确认和澄清问题 | 部分完成，单选和自由输入可提交 | `InteractionPanel.kt`、`ChatViewModel.kt:880-904` | P0 |
 | 多选问答 | 电脑可呈现多选问题 | 缺失。界面明确写“请在电脑端处理”，ViewModel 直接拒绝提交 | `InteractionPanel.kt:54-57`、`ChatViewModel.kt:885` | P0，待协议 |
-| 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 部分完成。网关返回 `canProceed` 与 `proceedArtifactUri`，客户端也有 `proceedArtifact`，但 UI 状态没有接入 | `StreamPayload.kt:149-150`、`ApiClient.kt:735-779`、`ChatViewModel.kt:192-202` | P0 |
+| 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 整份方案审阅与 Proceed 已完成：卡片、全屏阅读、滚动位置、提交/失败恢复均已接入；定位评论仍待协议 | `StreamPayload.kt`、`ApiClient.proceedArtifact`、`ChatViewModel.proceedArtifact`、`PlanReviewPanel` | P0 剩定位评论 |
 | 计划定位评论 | 对计划选区评论并要求代理修订 | 缺失。当前只有文件阅读，没有选区评论模型和回传入口 | `LinkedFilePreview.kt`、`Interaction.kt` | P0，待协议 |
 | 运行中排队消息 | Queue、Send Now、编辑和删除 | 部分完成。网关和 Android 模型都有队列数据，API 也有删除与 `deliveryStrategy`，但状态没有接入；运行中发送按钮只执行停止 | `StreamPayload.kt:91-101,145`、`ApiClient.kt:532-633`、`ChatComponents.kt:413,565` | P0 |
 | 后台任务 | 查看任务、命令、状态并单独停止 | 部分完成。数据模型和停止接口已存在，没有 Android 状态和卡片 | `StreamPayload.kt:103-128,146`、`ApiClient.kt:663-688` | P0 |
@@ -77,6 +77,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 ### 第一批：审批和运行控制
 
 1. `feat(android): 展示待审方案并支持继续执行`
+   - **已于 2026-10-13 完成。**
    - 在输入框上方显示清楚的待审卡片，包含计划标题、来源会话和“查看方案”。
    - 用全屏阅读页打开已有 Markdown 预览。关闭后保留滚动位置，Proceed 显示提交中、成功和失败恢复。
    - 卡片出现与消失使用高度和透明度连续过渡；运行状态变化时不抢正文滚动位置。减少动态效果时直接切换最终状态。

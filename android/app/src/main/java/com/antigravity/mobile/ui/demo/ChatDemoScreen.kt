@@ -5,6 +5,12 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
 import java.io.File
@@ -39,6 +45,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.AlertDialog
@@ -88,6 +95,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import com.antigravity.mobile.ui.chat.PairingScreen
 import com.antigravity.mobile.ui.chat.InteractionPanel
+import com.antigravity.mobile.ui.chat.PlanReviewPanel
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -121,6 +129,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var openedFromProject by rememberSaveable { mutableStateOf(false) }
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val projectListState = rememberLazyListState()
+    var planPreviewOpen by rememberSaveable(state.selectedConversationId, state.proceedArtifactUri) { mutableStateOf(false) }
+    val planPreviewListState = rememberSaveable(
+        state.selectedConversationId,
+        state.proceedArtifactUri,
+        saver = LazyListState.Saver,
+    ) { LazyListState() }
     var archivedOpen by rememberSaveable { mutableStateOf(false) }
     var openedFromArchive by rememberSaveable { mutableStateOf(false) }
     var renameConversationId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -147,6 +161,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val retryProjectModels: (() -> Unit)? = if (modelEnabled && state.models.isEmpty() && !state.isLoadingModels)
         viewModel::refreshModels else null
     val snackbar = remember { SnackbarHostState() }
+    var observedProceedSuccess by remember { mutableIntStateOf(state.proceedSuccessCount) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var tempPhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -212,6 +227,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             snackbar.showSnackbar(it)
             viewModel.clearError()
         }
+    }
+    LaunchedEffect(state.proceedSuccessCount) {
+        if (state.proceedSuccessCount > observedProceedSuccess) {
+            snackbar.showSnackbar("方案已批准，正在继续执行")
+        }
+        observedProceedSuccess = state.proceedSuccessCount
     }
     val returnFromConversation: () -> Unit = {
         viewModel.closeConversation()
@@ -509,6 +530,22 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     modifier = Modifier.onSizeChanged { composerInsets.insets = WindowInsets(bottom = it.height) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    AnimatedVisibility(
+                        visible = state.canProceed && !state.proceedArtifactUri.isNullOrBlank(),
+                        enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
+                        exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
+                    ) {
+                        val uri = state.proceedArtifactUri.orEmpty()
+                        PlanReviewPanel(
+                            filename = previewFileName(uri),
+                            conversationTitle = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.title
+                                ?: "当前会话",
+                            isProceeding = state.isProceedingArtifact,
+                            error = state.proceedError,
+                            onView = { if (uri.isNotBlank()) planPreviewOpen = true },
+                            onProceed = viewModel::proceedArtifact,
+                        )
+                    }
                     state.pendingInteraction?.let { interaction ->
                         InteractionPanel(
                             interaction = interaction,
@@ -569,6 +606,15 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.align(Alignment.BottomCenter))
+        state.proceedArtifactUri?.takeIf { planPreviewOpen }?.let { uri ->
+            LinkedFilePreview(
+                uri = uri,
+                viewModel = viewModel,
+                onDismiss = { planPreviewOpen = false },
+                listState = planPreviewListState,
+                fullScreen = true,
+            )
+        }
         if (modelPickerOpen && state.isPaired) {
             ModelConfigBottomSheet(
                 onDismiss = { modelPickerOpen = false },

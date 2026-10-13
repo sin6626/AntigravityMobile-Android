@@ -60,6 +60,11 @@ data class ChatUiState(
     val streamingMessageId: String? = null,
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
+    val canProceed: Boolean = false,
+    val proceedArtifactUri: String? = null,
+    val isProceedingArtifact: Boolean = false,
+    val proceedError: String? = null,
+    val proceedSuccessCount: Int = 0,
     val conversations: List<ConversationItem> = emptyList(),
     val projects: List<ProjectItem> = emptyList(),
     val models: List<ChatModel> = emptyList(),
@@ -189,12 +194,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     latestAgent.effectiveText.isNotEmpty() &&
                     latestAgent.effectiveText != previousText && latestAgent.effectiveText.startsWith(previousText)
                 val outgoing = reconcileOutgoing(previous.outgoing, update.cascadeId, nextMessages)
+                val planChanged = previous.proceedArtifactUri != update.proceedArtifactUri
                 _state.value = _state.value.copy(
                     messages = nextMessages,
                     outgoing = outgoing,
                     isRunning = running || outgoing.any { it.conversationId == update.cascadeId },
                     streamingMessageId = if (running && (growing || previous.streamingMessageId == latestAgent?.id)) latestAgent?.id else null,
                     pendingInteraction = update.pendingInteraction,
+                    canProceed = update.canProceed,
+                    proceedArtifactUri = update.proceedArtifactUri,
+                    isProceedingArtifact = if (planChanged) false else previous.isProceedingArtifact,
+                    proceedError = if (planChanged || !update.canProceed) null else previous.proceedError,
                     activeModelId = update.activeModel ?: previous.activeModelId,
                     isLoadingMessages = false, messagesError = null,
                     hasMoreMessages = if (previous.isLoadingMessages || update.isFullSnapshot) update.hasMore else previous.hasMoreMessages,
@@ -335,7 +345,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             activeModelId = null, modelOverrideId = null, creatingProjectKey = null,
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
             messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
-            isLoadingMessages = false,
+            isLoadingMessages = false, canProceed = false, proceedArtifactUri = null,
+            isProceedingArtifact = false, proceedError = null,
         )
     }
 
@@ -542,6 +553,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             streamingMessageId = null,
             isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
+            canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
@@ -580,6 +592,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             revertMessage = null, revertPreview = null, revertError = null, isLoadingRevert = false, isReverting = false,
             isRunning = false,
             pendingInteraction = null,
+            canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
@@ -842,7 +855,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     stream.disconnect()
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
                         draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
-                        pendingInteraction = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
+                        pendingInteraction = null, canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
+                        proceedError = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
                     stream.connect(id); loadMessages(id)
                 } else if (draftKey == id) {
                     _state.value = _state.value.copy(draft = text, attachments = draftAttachments[id].orEmpty())
@@ -905,6 +919,42 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun proceedArtifact() {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        val uri = current.proceedArtifactUri?.takeIf { current.canProceed && it.isNotBlank() } ?: return
+        if (current.isProceedingArtifact) return
+        val visit = conversationVisit
+        val model = current.modelOverrideId?.let { selected ->
+            current.models.firstOrNull { it.id == selected || it.model == selected }?.model
+        }
+        _state.value = current.copy(isProceedingArtifact = true, proceedError = null)
+        viewModelScope.launch {
+            api.proceedArtifact(id, uri, model).fold(
+                onSuccess = {
+                    if (conversationVisit != visit) return@fold
+                    val latest = _state.value
+                    _state.value = latest.copy(
+                        canProceed = false,
+                        proceedArtifactUri = null,
+                        isProceedingArtifact = false,
+                        proceedError = null,
+                        proceedSuccessCount = latest.proceedSuccessCount + 1,
+                        isRunning = true,
+                    )
+                    loadMessages(id)
+                },
+                onFailure = { error ->
+                    if (conversationVisit != visit) return@fold
+                    _state.value = _state.value.copy(
+                        isProceedingArtifact = false,
+                        proceedError = error.message ?: "继续执行失败",
+                    )
+                },
+            )
+        }
+    }
+
     private fun loadMessages(id: String): Job {
         messagesJob?.takeIf { it.isActive }?.let { return it }
         val visit = conversationVisit
@@ -919,12 +969,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val merged = if (changed) mergeMessages(payload.messages.orEmpty(), current.messages)
                             else mergeMessages(current.messages, payload.messages.orEmpty())
                         val outgoing = reconcileOutgoing(current.outgoing, id, merged)
+                        val incomingPlanUri = if (changed) current.proceedArtifactUri else payload.proceedArtifactUri
+                        val planChanged = current.proceedArtifactUri != incomingPlanUri
                         _state.value = _state.value.copy(
                             messages = merged,
                             outgoing = outgoing,
                             isRunning = (if (changed) current.isRunning else payload.status.contains("RUNNING", ignoreCase = true)) ||
                                 outgoing.any { it.conversationId == id },
                             pendingInteraction = if (changed) current.pendingInteraction else payload.pendingInteraction,
+                            canProceed = if (changed) current.canProceed else payload.canProceed,
+                            proceedArtifactUri = incomingPlanUri,
+                            isProceedingArtifact = if (planChanged) false else current.isProceedingArtifact,
+                            proceedError = if (planChanged || (!changed && !payload.canProceed)) null else current.proceedError,
                             activeModelId = if (changed) current.activeModelId else payload.activeModel ?: current.activeModelId,
                             isLoadingMessages = false,
                             hasMoreMessages = payload.hasMore,

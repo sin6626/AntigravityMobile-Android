@@ -1953,6 +1953,71 @@ class ChatUxTest {
         assertEquals(1, submitted)
     }
 
+    @Test fun pendingPlanCanBeReadRetriedAndProceeded() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.planFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("plan-review", vm) }
+            val proceedStarted = CountDownLatch(1)
+            val proceedRelease = CountDownLatch(1)
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.canProceed && !vm.state.value.isLoadingMessages }
+                compose.onNodeWithText("方案等待审阅").assertIsDisplayed()
+                compose.onNodeWithText("文件：plan.md").assertIsDisplayed()
+                saveScreenshot("pending-plan-review.png")
+                compose.onNodeWithText("查看方案").performClick()
+                compose.waitUntil(10_000) { gateway.requests.any { it.first.startsWith("/api/v1/files/content") } }
+                compose.waitUntil(10_000) { compose.onAllNodesWithText("开发方案").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("开发方案").assertIsDisplayed()
+                saveScreenshot("pending-plan-fullscreen.png")
+                compose.onNodeWithContentDescription("文件内容").performScrollToIndex(35)
+                compose.onNodeWithText("步骤 35").assertIsDisplayed()
+                compose.onNodeWithText("关闭").performClick()
+                compose.onNodeWithText("查看方案").performClick()
+                compose.onNodeWithText("步骤 35").assertIsDisplayed()
+                compose.onNodeWithText("关闭").performClick()
+
+                gateway.failurePath = "SendUserCascadeMessage"
+                gateway.block = { path -> if (path.contains("SendUserCascadeMessage")) {
+                    proceedStarted.countDown()
+                    proceedRelease.await(10, TimeUnit.SECONDS)
+                } }
+                compose.onNodeWithText("继续执行").performClick()
+                assertTrue(proceedStarted.await(5, TimeUnit.SECONDS))
+                compose.onNode(SemanticsMatcher.expectValue(
+                    androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "正在提交",
+                )).assertIsDisplayed()
+                proceedRelease.countDown()
+                compose.waitUntil(10_000) { vm.state.value.proceedError != null && !vm.state.value.isProceedingArtifact }
+                compose.onNodeWithText("方案等待审阅").assertIsDisplayed()
+                compose.onNodeWithText("继续执行").assertIsDisplayed()
+                val failed = JSONObject(gateway.requests.last { it.first.contains("SendUserCascadeMessage") }.second)
+                val comment = failed.getJSONArray("artifactComments").getJSONObject(0)
+                assertEquals("file:///test/plan.md", comment.getString("artifactUri"))
+                assertEquals("fullFile", comment.getJSONObject("scope").getString("case"))
+                assertEquals(1, comment.getInt("approvalStatus"))
+
+                gateway.failurePath = null
+                gateway.block = {}
+                compose.onNodeWithText("继续执行").performClick()
+                compose.waitUntil(10_000) { gateway.planProceeded && !vm.state.value.canProceed }
+                compose.onNodeWithText("方案等待审阅").assertDoesNotExist()
+                compose.onNodeWithText("方案已批准，正在继续执行").assertIsDisplayed()
+            } finally {
+                proceedRelease.countDown()
+                compose.runOnIdle { store.clear() }
+            }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -1985,6 +2050,8 @@ class ChatUxTest {
         @Volatile var userImage = false
         @Volatile var running = false
         @Volatile var previewFiles = 0
+        @Volatile var planFixture = false
+        @Volatile var planProceeded = false
         private fun image(width: Int, height: Int) = java.io.ByteArrayOutputStream().let { output ->
             val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.BLUE)
@@ -2023,6 +2090,7 @@ class ChatUxTest {
                             if (failurePath?.let(path::contains) != true && (path == "/gateway/cascade/new" || path == "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage")) {
                                 val request = JSONObject(requestBody)
                                 if (path == "/gateway/cascade/new" && request.optString("projectId") == "p") createdProject = true
+                                if ((request.optJSONArray("artifactComments")?.length() ?: 0) > 0) planProceeded = true
                                 when (request.optString("model")) {
                                     "MODEL_PLACEHOLDER_M318" -> activeModel = "gemini-3.8-flash-high"
                                     "MODEL_PLACEHOLDER_M26" -> activeModel = "claude-fixture"
@@ -2065,7 +2133,12 @@ class ChatUxTest {
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id"}"""
+                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"}}"""
+                                path.startsWith("/api/v1/files/content") -> JSONObject()
+                                    .put("uri", "file:///test/plan.md")
+                                    .put("filename", "plan.md")
+                                    .put("content", "# 开发方案\n\n" + (1..60).joinToString("\n\n") { "步骤 $it" })
+                                    .toString()
                                 management && path.contains("GetAllCascadeTrajectories") -> {
                                     val summaries = JSONObject()
                                     for (key in if (createdProject) listOf("A", "B", "C") else listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
