@@ -98,6 +98,8 @@ import com.antigravity.mobile.ui.chat.InteractionPanel
 import com.antigravity.mobile.ui.chat.PlanReviewPanel
 import com.antigravity.mobile.ui.chat.QueuedMessagesPanel
 import com.antigravity.mobile.ui.chat.RunningTasksPanel
+import com.antigravity.mobile.ui.chat.SubagentsPanel
+import com.antigravity.mobile.ui.chat.SubagentReadOnlyBar
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -368,9 +370,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         GradientTopBar(topBarHeight) {
                             Box(Modifier.onSizeChanged { topBarHeight = with(density) { it.height.toDp() } }) {
                                 ConversationTopBar(
-                                    returnToProjects = openedFromProject || openedFromArchive,
-                                    leadingDescription = if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
-                                    onLeading = if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
+                                    returnToProjects = state.activeSubagent != null || openedFromProject || openedFromArchive,
+                                    leadingDescription = if (state.activeSubagent != null) "返回父会话" else if (openedFromArchive) "返回归档列表" else if (openedFromProject) "返回项目列表" else "打开菜单",
+                                    onLeading = if (state.activeSubagent != null) viewModel::returnToSubagentParent
+                                        else if (openedFromArchive) ({ viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false })
                                         else if (openedFromProject) returnFromConversation else openDrawer,
                                     onNewChat = {
                                         projectsSelected = false
@@ -384,12 +387,14 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                         showRename = true
                                     },
                                     onDelete = { deleteConversationId = state.selectedConversationId; showDeleteConfirm = true },
-                                    title = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.displayTitle ?: "未命名会话",
+                                    title = state.activeSubagent?.displayTitle
+                                        ?: state.conversations.firstOrNull { it.id == state.selectedConversationId }?.displayTitle
+                                        ?: "未命名会话",
                                     isPinned = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isPinned == true,
                                     isArchived = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isArchived == true,
                                     onPin = { state.selectedConversationId?.let { id -> viewModel.setPinned(id, state.conversations.firstOrNull { it.id == id }?.isPinned != true) } },
                                     onArchive = { state.selectedConversationId?.let { id -> viewModel.setArchived(id, state.conversations.firstOrNull { it.id == id }?.isArchived != true) } },
-                                    actionsEnabled = !state.selectedConversationId.orEmpty().startsWith("local:") &&
+                                    actionsEnabled = state.activeSubagent == null && !state.selectedConversationId.orEmpty().startsWith("local:") &&
                                         state.selectedConversationId !in state.busyConversations && !state.isReverting,
                                 )
                             }
@@ -557,6 +562,19 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         )
                     }
                     AnimatedVisibility(
+                        visible = state.subagents.isNotEmpty() || state.subagentsError != null,
+                        enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
+                        exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
+                    ) {
+                        SubagentsPanel(
+                            subagents = state.subagents,
+                            isLoading = state.isLoadingSubagents,
+                            error = state.subagentsError,
+                            onOpen = viewModel::openSubagent,
+                            onRetry = viewModel::refreshSubagents,
+                        )
+                    }
+                    AnimatedVisibility(
                         visible = state.runningTasks.isNotEmpty(),
                         enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
                         exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
@@ -582,7 +600,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onDelete = viewModel::deleteQueuedMessage,
                         )
                     }
-                    Box(
+                    if (state.activeSubagent != null) {
+                        SubagentReadOnlyBar()
+                    } else Box(
                         modifier = Modifier
                             .fillMaxWidth(widthFactor)
                             .graphicsLayer {
@@ -750,6 +770,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 focusManager.clearFocus()
                 keyboardController?.hide()
             }
+            state.activeSubagent != null -> viewModel.returnToSubagentParent()
             archivedOpen -> archivedOpen = false
             state.selectedConversationId != null && openedFromArchive -> { viewModel.closeConversation(); archivedOpen = true; openedFromArchive = false }
             drawerState.isOpen -> scope.launch { drawerState.close() }

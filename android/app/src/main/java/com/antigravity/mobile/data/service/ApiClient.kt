@@ -395,6 +395,24 @@ class ApiClient(
         } catch (error: Exception) { Result.failure(error) }
     }
 
+    suspend fun fetchSubagents(parentId: String): Result<List<SubagentItem>> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val url = "$baseUrl/gateway/subagents".toHttpUrlOrNull()?.newBuilder()
+            ?.addQueryParameter("parentId", parentId)?.build()
+            ?: return@withContext Result.failure(IllegalArgumentException("网关地址无效"))
+        try {
+            val req = buildAuthorizedRequest(url.toString()).get().build()
+            client.newCall(req).await().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(RuntimeException("获取子代理失败: HTTP ${response.code}"))
+                }
+                Result.success(json.decodeFromString<SubagentsResponse>(response.body?.string() ?: "{}").subagents)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     /** Create a new cascade session. */
     suspend fun createCascade(
         workspaceUri: String,

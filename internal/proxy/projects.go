@@ -846,7 +846,16 @@ func fetchProjectsFromStateDB() []ProjectItem {
 }
 
 type upstreamTrajectorySummaryItem struct {
-	LastModifiedTime   string `json:"lastModifiedTime"`
+	FullTitle        string `json:"fullTitle"`
+	Summary          string `json:"summary"`
+	Status           string `json:"status"`
+	StepCount        int    `json:"stepCount"`
+	LastModifiedTime string `json:"lastModifiedTime"`
+	NeedsInput       bool   `json:"needsInput"`
+	HasError         bool   `json:"hasError"`
+	Annotations      *struct {
+		Title string `json:"title"`
+	} `json:"annotations"`
 	TrajectoryMetadata *struct {
 		WorkspaceUris        []string    `json:"workspaceUris"`
 		ParentConversationID string      `json:"parentConversationId,omitempty"`
@@ -1510,4 +1519,3 @@ func getNumberAsInt(val interface{}) (int, bool) {
 		return 0, false
 	}
 }
-

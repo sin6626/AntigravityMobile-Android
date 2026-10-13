@@ -71,4 +71,6 @@ Google 将 Antigravity IDE、独立 Antigravity 2.0、CLI、IDE 扩展分别发�
 
 ## 本记录的核验限制
 
-仅使用 Google 官方文档和官方发布说明，并已打开核查正文。当前文档可能继续变化，引用用于证明官方能力，无法代替本机版本与网关 API 验证。本文未验证 Android / Go 实现，未操作真实会话，未上传文件、发出审批、撤回代码、改桌面设置或启用官方远程控制。
+本机 2.19.1 二进制补充核验确认了子代理元数据和内部工具形态：会话摘要包含 `parentConversationId`、`rootConversationId`、`nestingDepth`、`subagentSpec` / `agentScript`；内部 `send_message` 工具使用 `Recipient` 和 `Message`，其中 Recipient 可为会话 ID 或 `@children`。当前只发现内部工具执行入口，没有发现可由 Android 安全调用的等价 HTTP/RPC，因此移动端只接入子代理查看和轨迹导航，不据此猜测定向消息请求。
+
+官方能力部分仅使用 Google 官方文档和官方发布说明，并已打开核查正文；协议边界另以本机二进制符号和仓库源码交叉确认。当前文档可能继续变化，引用用于证明官方能力，无法代替真实请求验证。本文未操作真实会话，未上传文件、发出审批、撤回代码、改桌面设置或启用官方远程控制。

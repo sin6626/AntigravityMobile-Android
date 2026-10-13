@@ -2224,6 +2224,52 @@ class ChatUxTest {
         }
     }
 
+    @Test fun subagentsCanBeExpandedOpenedAndReturnedWithoutExposingUnverifiedMessaging() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.subagentFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("subagents", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.subagents.size == 2 }
+                compose.onNodeWithText("2 个直属子代理").assertIsDisplayed()
+                compose.onNodeWithText("检查登录动效").assertIsDisplayed()
+                compose.onNodeWithText("等待用户选择").assertIsDisplayed()
+                compose.onNodeWithContentDescription("收起子代理").performClick()
+                compose.onNodeWithText("检查登录动效").assertDoesNotExist()
+                compose.onNodeWithContentDescription("展开子代理").performClick()
+                compose.onNodeWithText("检查登录动效").assertIsDisplayed()
+                saveScreenshot("subagents.png")
+
+                compose.onNodeWithContentDescription("查看子代理 检查登录动效，运行中").performClick()
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "sub-running" }
+                compose.onNodeWithContentDescription("返回父会话").assertIsDisplayed()
+                compose.onNodeWithContentDescription("子代理执行记录，仅供查看").assertIsDisplayed()
+                compose.onNode(hasSetTextAction()).assertDoesNotExist()
+                compose.onNodeWithContentDescription("返回父会话").performClick()
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "A" && vm.state.value.activeSubagent == null }
+
+                gateway.failurePath = "/gateway/subagents"
+                compose.runOnIdle { vm.refreshSubagents() }
+                compose.waitUntil(10_000) { vm.state.value.subagentsError != null }
+                compose.onNodeWithContentDescription("重试加载子代理").assertIsDisplayed()
+                gateway.failurePath = null
+                compose.onNodeWithContentDescription("重试加载子代理").performClick()
+                compose.waitUntil(10_000) { vm.state.value.subagentsError == null }
+                assertTrue(gateway.requests.any { it.first == "/gateway/subagents?parentId=A" })
+            } finally {
+                compose.runOnIdle { store.clear() }
+            }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2264,6 +2310,7 @@ class ChatUxTest {
         @Volatile var queuedDraftText: String? = null
         @Volatile var sentNowText: String? = null
         @Volatile var taskFixture = false
+        @Volatile var subagentFixture = false
         private val deletedQueueIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val stoppedTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private fun queuedMessagesJson(): String {
@@ -2365,7 +2412,8 @@ class ChatUxTest {
                                     stoppedTaskIds += JSONObject(requestBody).getString("taskId")
                                 }
                             }
-                            val id = if (path.contains("cascadeId=A")) "A" else "B"
+                            val id = Regex("[?&]cascadeId=([^&]+)").find(path)?.groupValues?.get(1)
+                                ?: if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
                                 path.contains("GetUserStatus") -> """{"userStatus":{"planStatus":{"planInfo":{"teamsTier":"PRO"}},"cascadeModelConfigData":{"clientModelConfigs":[
                                     {"modelId":"gemini-3.8-flash-high","label":"Gemini fixture${if (thinkingVariants) " (High)" else ""}","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M318"},"supportsImages":true,"allowedTiers":["PRO"]},
@@ -2379,6 +2427,10 @@ class ChatUxTest {
                                 path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
                                 path.startsWith("/api/v1/auth/endpoints") -> """{"endpoints":$endpointsJson,"platform":"windows"}"""
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
+                                path.startsWith("/gateway/subagents") -> if (subagentFixture && path.contains("parentId=A")) """{"subagents":[
+                                    {"id":"sub-running","parentConversationId":"A","rootConversationId":"A","title":"检查登录动效","status":"RUNNING","stepCount":6,"nestingDepth":1},
+                                    {"id":"sub-waiting","parentConversationId":"A","rootConversationId":"A","title":"等待用户选择","status":"WAITING","stepCount":4,"nestingDepth":1,"needsInput":true}
+                                ]}""" else """{"subagents":[]}"""
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
                                     """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"},"runningTasks":${if (taskFixture) runningTasksJson() else "[]"}}"""

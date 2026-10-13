@@ -16,6 +16,7 @@ import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
 import com.antigravity.mobile.data.model.QueuedMessageItem
 import com.antigravity.mobile.data.model.RunningTaskItem
+import com.antigravity.mobile.data.model.SubagentItem
 import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.model.ChatModel
@@ -30,6 +31,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
@@ -70,6 +73,10 @@ data class ChatUiState(
     val runningTasks: List<RunningTaskItem> = emptyList(),
     val stoppingTaskIds: Set<String> = emptySet(),
     val tasksError: String? = null,
+    val subagents: List<SubagentItem> = emptyList(),
+    val activeSubagent: SubagentItem? = null,
+    val isLoadingSubagents: Boolean = false,
+    val subagentsError: String? = null,
     val canProceed: Boolean = false,
     val proceedArtifactUri: String? = null,
     val isProceedingArtifact: Boolean = false,
@@ -147,6 +154,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var messagesJob: Job? = null
     private var draftRestoreJob: Job? = null
     private var recoveryJob: Job? = null
+    private var subagentsJob: Job? = null
+    private val subagentTrail = mutableListOf<SubagentItem>()
     private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired(), draft = prefs.getDraftText(draftKey)))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
     val mediaImageLoader: ImageLoader get() = api.mediaImageLoader
@@ -350,6 +359,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (!_state.value.isPaired) return
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
+        subagentsJob?.cancel(); subagentsJob = null
+        subagentTrail.clear()
         prefs.deviceToken = null
         prefs.deviceId = null
         stream.disconnect()
@@ -366,6 +377,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             pendingInteraction = null, interactionError = null, queuedMessages = emptyList(),
             busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
+            subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
         )
     }
 
@@ -555,10 +567,33 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openConversation(id: String) {
+        subagentTrail.clear()
+        openConversationTarget(id, null)
+    }
+
+    fun openSubagent(subagent: SubagentItem) {
+        if (subagent.parentConversationId != _state.value.selectedConversationId) return
+        subagentTrail += subagent
+        openConversationTarget(subagent.id, subagent)
+    }
+
+    fun returnToSubagentParent() {
+        val current = subagentTrail.removeLastOrNull() ?: return
+        openConversationTarget(current.parentConversationId, subagentTrail.lastOrNull())
+    }
+
+    fun refreshSubagents() {
+        val id = _state.value.selectedConversationId ?: return
+        subagentsJob?.cancel()
+        startSubagentPolling(id, conversationVisit)
+    }
+
+    private fun openConversationTarget(id: String, activeSubagent: SubagentItem?) {
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
+        subagentsJob?.cancel(); subagentsJob = null
         switchDraft(id)
-        prefs.lastConversationId = id.takeUnless { it.startsWith("local:") }
+        prefs.lastConversationId = (subagentTrail.firstOrNull()?.parentConversationId ?: id).takeUnless { it.startsWith("local:") }
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = id,
@@ -575,6 +610,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             interactionError = null,
             queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
+            subagents = emptyList(), activeSubagent = activeSubagent, isLoadingSubagents = true, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -584,6 +620,38 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stream.connect(id)
         loadMessages(id)
         api.notifySessionFocus(id)
+        startSubagentPolling(id, conversationVisit)
+    }
+
+    private fun startSubagentPolling(parentId: String, visit: Long) {
+        subagentsJob = viewModelScope.launch {
+            loadSubagents(parentId, visit, showLoading = true)
+            while (isActive) {
+                delay(3_000)
+                loadSubagents(parentId, visit, showLoading = false)
+            }
+        }
+    }
+
+    private suspend fun loadSubagents(parentId: String, visit: Long, showLoading: Boolean) {
+        if (showLoading && conversationVisit == visit) {
+            _state.value = _state.value.copy(isLoadingSubagents = true, subagentsError = null)
+        }
+        api.fetchSubagents(parentId).fold(
+            onSuccess = { items ->
+                if (conversationVisit == visit && _state.value.selectedConversationId == parentId) {
+                    _state.value = _state.value.copy(subagents = items, isLoadingSubagents = false, subagentsError = null)
+                }
+            },
+            onFailure = { error ->
+                if (conversationVisit != visit) return@fold
+                if (error is GatewayAuthorizationException) { expirePairing(); return@fold }
+                _state.value = _state.value.copy(
+                    isLoadingSubagents = false,
+                    subagentsError = error.message ?: "加载子代理失败",
+                )
+            },
+        )
     }
 
     fun newConversation() {
@@ -599,6 +667,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun closeConversation() {
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
+        subagentsJob?.cancel(); subagentsJob = null
+        subagentTrail.clear()
         stream.disconnect()
         prefs.lastConversationId = null
         switchDraft(NEW_CHAT_DRAFT)
@@ -617,6 +687,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             interactionError = null,
             queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
+            subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -626,6 +697,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun send() {
+        if (_state.value.activeSubagent != null) return
         if (_state.value.isRestoringDraft) return
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
@@ -1408,6 +1480,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        subagentsJob?.cancel()
         stream.close()
         connectionManager.stopMonitoring()
         super.onCleared()
