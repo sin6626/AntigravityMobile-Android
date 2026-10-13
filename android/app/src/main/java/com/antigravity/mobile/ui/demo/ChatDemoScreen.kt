@@ -159,7 +159,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         ActivityResultContracts.PickMultipleVisualMedia(4),
     ) { uris -> viewModel.addImages(uris) }
     val filePicker = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent(),
+        ActivityResultContracts.OpenDocument(),
     ) { uri ->
         uri?.let { viewModel.addImages(listOf(it)) }
     }
@@ -538,7 +538,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                 imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
                             },
                             onPickFile = {
-                                filePicker.launch("*/*")
+                                filePicker.launch(arrayOf("image/jpeg", "image/png", "image/webp", "image/gif"))
                             },
                             onRemoveImage = viewModel::removeImage,
                             onSend = viewModel::send,

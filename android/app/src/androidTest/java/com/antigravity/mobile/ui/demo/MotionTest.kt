@@ -146,7 +146,7 @@ class MotionTest {
         assertTrue(newThirdX < oldThirdX)
         repeat(3) { compose.onAllNodesWithContentDescription("移除待发送图片")[0].performClick() }
         field.assertIsFocused().assertTextEquals("第一行\n第二行\n第三行\n第四行")
-        compose.onAllNodesWithContentDescription("添加图片").assertCountEquals(1)
+        compose.onAllNodesWithContentDescription("添加附件与操作").assertCountEquals(1)
         compose.activity.runOnUiThread { compose.activity.window.decorView.clearFocus() }
     }
 

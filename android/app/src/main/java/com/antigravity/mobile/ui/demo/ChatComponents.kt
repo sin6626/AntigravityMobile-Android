@@ -314,7 +314,7 @@ internal fun ComposerPlusMenu(
                 // 3. 文件
                 PlusMenuItem(
                     icon = Icons.Outlined.AttachFile,
-                    label = "文件",
+                    label = "图片文件",
                     onClick = {
                         onDismissRequest()
                         onPickFile()

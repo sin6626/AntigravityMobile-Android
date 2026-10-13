@@ -1813,7 +1813,7 @@ class ChatUxTest {
         compose.setContent { Composer(activeConversation = true, draft = "验收文字", attachments = images.value,
             onDraftChange = {}, onAddImage = {}, onRemoveImage = { images.value = emptyList() },
             onSend = { submitted++; sending.value = true }, isSending = sending.value, onUnsupported = {}) }
-        for (label in listOf("添加图片", "移除待发送图片", "语音输入，暂不可用", "发送消息")) {
+        for (label in listOf("添加附件与操作", "移除待发送图片", "语音输入，暂不可用", "发送消息")) {
             compose.onNodeWithContentDescription(label).assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
                 .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
         }
@@ -1825,7 +1825,7 @@ class ChatUxTest {
                 .any { it.id.contains("talkback", true) } }
             fun find(node: android.view.accessibility.AccessibilityNodeInfo?): android.view.accessibility.AccessibilityNodeInfo? {
                 if (node == null) return null
-                if (node.contentDescription?.toString() == "添加图片") return node
+                if (node.contentDescription?.toString() == "添加附件与操作") return node
                 for (i in 0 until node.childCount) find(node.getChild(i))?.let { return it }
                 return null
             }
