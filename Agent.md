@@ -525,3 +525,11 @@ android/app/src/main/java/com/antigravity/mobile/
 2. **UI 改造方向**：
    - 针对当前前端界面进行现代化重构、布局精细化与动效视觉提升。
 
+
+### 2026-10-13 电脑工作区引用与斜杠命令
+- Android 输入框支持尾部独立触发词：输入 `@` 后在当前会话绑定的本地工作区中搜索文件/目录，输入 `/` 后读取桌面端 `GetSlashCommands` 目录；搜索使用 180 ms 防抖，并提供加载、空结果、失败重试与无工作区说明。纯聊天仍可使用命令，但不能引用工作区。
+- 选中的命令、电脑文件与电脑目录使用独立原生标签展示，和手机图片/文件附件分开；标签、移除按钮和建议行满足至少 48 dp 触控区，长路径单行省略，展开/收起使用 180 ms 高度与淡入淡出动画。未知桌面命令图标统一回退到已打包字形，避免裁剪字体导致崩溃或方框。
+- 引用按会话草稿持久化，覆盖切换会话、进程恢复、发送失败恢复与运行中排队发送；每次最多 8 个电脑文件/目录，一个斜杠命令。当前桌面目录的 57 个命令均无参数；若未来命令要求无默认值的必填参数，手机端会明确拒绝选择，待增加参数编辑器。
+- 发送继续复用 `SendUserCascadeMessage.items`：普通文字写入 `text` 项，电脑引用写入 `ContextScopeItem.file/directory`，命令写入 `ContextScopeItem.slashCommand`，没有把路径或命令伪装成普通文本。工作区搜索只返回 URI、相对路径、文件数和字节数，不读取或上传电脑文件内容。
+- 网关新增 `/gateway/commands`，基于当前会话 CascadeConfig 和用户所选模型调用桌面端 `GetSlashCommands`；命令的 plugin/logo 保留原始 JSON 类型。Android API 日志仍记录接口、请求头、参数与响应，但 `modelFacingText` 统一替换为“内部命令内容已隐藏”。
+- Go 工作区/命令聚焦测试、Android 单测与 Debug/AndroidTest 构建通过。API 37 模拟器完整验证了搜索、选择、草稿持久化、失败恢复、重试和结构化请求体；截图位于忽略目录 `android/design/.verification/feature-9/workspace-context-command.png`。真实 Antigravity 2.19.1 返回 57 个命令，`/plan` 存在且无参数；带对象型 plugin 的命令也可解码。主网关 58900 和管理网关 58901 已部署新二进制并恢复健康，主 Cloudflare 隧道已重新启动。

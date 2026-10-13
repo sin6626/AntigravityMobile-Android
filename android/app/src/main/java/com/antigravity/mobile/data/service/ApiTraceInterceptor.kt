@@ -93,6 +93,7 @@ class ApiTraceInterceptor : Interceptor {
             value.keys().forEach { key ->
                 target.put(key, when {
                     isSecret(key) -> "[已隐藏]"
+                    key.equals("modelFacingText", ignoreCase = true) -> "[内部命令内容已隐藏]"
                     key.equals("media", ignoreCase = true) && value.opt(key) is JSONArray ->
                         summarizeAttachments(value.opt(key) as JSONArray)
                     else -> sanitize(value.opt(key))

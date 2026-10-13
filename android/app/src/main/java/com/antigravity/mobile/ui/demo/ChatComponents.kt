@@ -4,6 +4,8 @@ import android.net.Uri
 import coil.compose.AsyncImage
 import com.antigravity.mobile.ui.chat.PendingImage
 import com.antigravity.mobile.ui.chat.PendingFile
+import com.antigravity.mobile.data.model.WorkspaceContextItem
+import com.antigravity.mobile.data.model.SlashCommandDefinition
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -33,6 +35,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -46,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.shadow
@@ -145,7 +149,7 @@ internal fun Symbol(
 ) {
     val iconSize = with(LocalDensity.current) { size.dp.toSp() }
     Text(
-        text = symbolCodepoints.getValue(name),
+        text = symbolCodepoints[name] ?: symbolCodepoints.getValue("computer"),
         modifier = modifier,
         color = color,
         maxLines = 1,
@@ -394,6 +398,14 @@ internal fun Composer(
     draft: String,
     attachments: List<PendingImage>,
     fileAttachment: PendingFile? = null,
+    workspaceContexts: List<WorkspaceContextItem> = emptyList(),
+    slashCommand: SlashCommandDefinition? = null,
+    contextSuggestions: List<WorkspaceContextItem> = emptyList(),
+    commandSuggestions: List<SlashCommandDefinition> = emptyList(),
+    isLoadingContextSuggestions: Boolean = false,
+    isLoadingCommandSuggestions: Boolean = false,
+    contextSuggestionsError: String? = null,
+    commandSuggestionsError: String? = null,
     onDraftChange: (String) -> Unit,
     onAddImage: () -> Unit = {},
     onTakePhoto: () -> Unit = {},
@@ -401,6 +413,13 @@ internal fun Composer(
     onPickFile: () -> Unit = {},
     onRemoveImage: (Uri) -> Unit,
     onRemoveFile: () -> Unit = {},
+    onSearchWorkspaceContexts: (String) -> Unit = {},
+    onSearchSlashCommands: (String) -> Unit = {},
+    onAddWorkspaceContext: (WorkspaceContextItem) -> Unit = {},
+    onRemoveWorkspaceContext: (String) -> Unit = {},
+    onSelectSlashCommand: (SlashCommandDefinition) -> Unit = {},
+    onRemoveSlashCommand: () -> Unit = {},
+    onDismissSuggestions: () -> Unit = {},
     onSend: () -> Unit,
     isSending: Boolean,
     onUnsupported: () -> Unit,
@@ -413,10 +432,20 @@ internal fun Composer(
     modelEnabled: Boolean = true,
     inputFocusRequester: FocusRequester? = null,
 ) {
-    val canSend = (draft.isNotBlank() || attachments.isNotEmpty() || fileAttachment != null) && !isSending && !isStopping
+    val trigger = remember(draft) { composerTrigger(draft) }
+    LaunchedEffect(trigger) {
+        when (trigger?.kind) {
+            '@' -> onSearchWorkspaceContexts(trigger.query)
+            '/' -> onSearchSlashCommands(trigger.query)
+            else -> onDismissSuggestions()
+        }
+    }
+    val canSend = (draft.isNotBlank() || attachments.isNotEmpty() || fileAttachment != null ||
+        workspaceContexts.isNotEmpty() || slashCommand != null) && !isSending && !isStopping
     var focused by remember { mutableStateOf(false) }
     var plusMenuOpen by remember { mutableStateOf(false) }
-    val expanded = focused || attachments.isNotEmpty() || fileAttachment != null
+    val expanded = focused || attachments.isNotEmpty() || fileAttachment != null ||
+        workspaceContexts.isNotEmpty() || slashCommand != null || trigger != null
     val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
     val targetCorner = if (expanded) 30.dp else 36.dp
     val horizontalPadding by animateDpAsState(
@@ -432,6 +461,34 @@ internal fun Composer(
         color = Color.White,
     ) {
         Column(Modifier.fillMaxWidth()) {
+            AnimatedVisibility(trigger != null, enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100))) {
+                trigger?.let {
+                    ComposerSuggestionPanel(
+                        trigger = it,
+                        contexts = contextSuggestions,
+                        commands = commandSuggestions,
+                        loading = if (it.kind == '@') isLoadingContextSuggestions else isLoadingCommandSuggestions,
+                        error = if (it.kind == '@') contextSuggestionsError else commandSuggestionsError,
+                        onRetry = { if (it.kind == '@') onSearchWorkspaceContexts(it.query) else onSearchSlashCommands(it.query) },
+                        onContext = { item ->
+                            onDraftChange(removeComposerTrigger(draft))
+                            onAddWorkspaceContext(item)
+                            inputFocusRequester?.requestFocus()
+                        },
+                        onCommand = { command ->
+                            onDraftChange(removeComposerTrigger(draft))
+                            onSelectSlashCommand(command)
+                            inputFocusRequester?.requestFocus()
+                        },
+                    )
+                }
+            }
+            AnimatedVisibility(workspaceContexts.isNotEmpty() || slashCommand != null,
+                enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
+                ComposerContextTray(workspaceContexts, slashCommand, onRemoveWorkspaceContext, onRemoveSlashCommand)
+            }
             AnimatedVisibility(attachments.isNotEmpty() || fileAttachment != null, enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                 exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
                 Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
@@ -498,6 +555,130 @@ internal fun Composer(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+internal data class ComposerTrigger(val kind: Char, val query: String, val start: Int)
+
+internal fun composerTrigger(value: String): ComposerTrigger? {
+    val match = Regex("(?:^|\\s)([@/])([^\\s@/]*)$").find(value) ?: return null
+    val markerIndex = match.range.first + if (match.value.first().isWhitespace()) 1 else 0
+    return ComposerTrigger(value[markerIndex], value.substring(markerIndex + 1), markerIndex)
+}
+
+internal fun removeComposerTrigger(value: String): String {
+    val trigger = composerTrigger(value) ?: return value
+    return value.removeRange(trigger.start, value.length)
+}
+
+@Composable
+private fun ComposerSuggestionPanel(
+    trigger: ComposerTrigger,
+    contexts: List<WorkspaceContextItem>,
+    commands: List<SlashCommandDefinition>,
+    loading: Boolean,
+    error: String?,
+    onRetry: () -> Unit,
+    onContext: (WorkspaceContextItem) -> Unit,
+    onCommand: (SlashCommandDefinition) -> Unit,
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp)
+        .semantics { contentDescription = if (trigger.kind == '@') "电脑文件建议" else "命令建议" }) {
+        Text(if (trigger.kind == '@') "引用电脑文件" else "运行命令", color = SecondaryInk,
+            fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+        when {
+            loading -> Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center) {
+                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = AccentBlue)
+                Spacer(Modifier.width(10.dp)); Text("正在查找…", color = SecondaryInk, fontSize = 14.sp)
+            }
+            error != null -> Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 10.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Text(error, color = SecondaryInk, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) { Text("重试", color = AccentBlue) }
+            }
+            trigger.kind == '@' && contexts.isEmpty() || trigger.kind == '/' && commands.isEmpty() ->
+                Text(if (trigger.query.isBlank()) "没有可用结果" else "没有匹配“${trigger.query}”的结果",
+                    color = SecondaryInk, fontSize = 14.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 16.dp))
+            trigger.kind == '@' -> contexts.take(6).forEach { item ->
+                SuggestionRow(
+                    icon = if (item.type == "directory") "folder" else "attach_file",
+                    title = item.name,
+                    subtitle = listOf(item.rootName, item.relativePath).filter(String::isNotBlank).joinToString(" · "),
+                    description = "引用${if (item.type == "directory") "目录" else "文件"} ${item.relativePath}",
+                    onClick = { onContext(item) },
+                )
+            }
+            else -> commands.take(6).forEach { command ->
+                SuggestionRow(
+                    icon = "computer",
+                    title = "/${command.info.name}",
+                    subtitle = command.description.ifBlank { command.title },
+                    description = "选择命令 /${command.info.name}",
+                    onClick = { onCommand(command) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SuggestionRow(icon: String, title: String, subtitle: String, description: String, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).clip(RoundedCornerShape(14.dp))
+        .quietClickable(RoundedCornerShape(14.dp), onClick = onClick)
+        .semantics { contentDescription = description }.padding(horizontal = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(38.dp).background(AccentBlue.copy(alpha = .09f), RoundedCornerShape(11.dp)),
+            contentAlignment = Alignment.Center) {
+            if (icon == "attach_file") Icon(Icons.Outlined.AttachFile, null, tint = AccentBlue, modifier = Modifier.size(20.dp))
+            else Symbol(icon, size = 20, color = AccentBlue)
+        }
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle.isNotBlank()) Text(subtitle, color = SecondaryInk, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+@Composable
+private fun ComposerContextTray(
+    contexts: List<WorkspaceContextItem>,
+    command: SlashCommandDefinition?,
+    onRemoveContext: (String) -> Unit,
+    onRemoveCommand: () -> Unit,
+) {
+    LazyRow(Modifier.fillMaxWidth().padding(start = 18.dp, end = 12.dp, top = 10.dp, bottom = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        command?.let { selected ->
+            item("command:${selected.info.name}") {
+                ComposerContextChip("computer", "/${selected.info.name}", "已选命令 /${selected.info.name}", onRemoveCommand)
+            }
+        }
+        items(contexts, key = { it.uri }) { context ->
+            ComposerContextChip(if (context.type == "directory") "folder" else "attach_file", context.relativePath,
+                "已引用${if (context.type == "directory") "目录" else "文件"} ${context.relativePath}") {
+                onRemoveContext(context.uri)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ComposerContextChip(icon: String, label: String, description: String, onRemove: () -> Unit) {
+    Surface(color = AccentBlue.copy(alpha = .08f), shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.heightIn(min = 48.dp).widthIn(max = 260.dp).semantics { contentDescription = description }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Spacer(Modifier.width(12.dp))
+            if (icon == "attach_file") Icon(Icons.Outlined.AttachFile, null, tint = AccentBlue, modifier = Modifier.size(18.dp))
+            else Symbol(icon, size = 18, color = AccentBlue)
+            Spacer(Modifier.width(7.dp))
+            Text(label, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Box(Modifier.size(48.dp).semantics { contentDescription = "移除 $label" }
+                .quietClickable(CircleShape, onClick = onRemove), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Close, null, tint = SecondaryInk, modifier = Modifier.size(18.dp))
             }
         }
     }

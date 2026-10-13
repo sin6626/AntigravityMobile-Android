@@ -310,6 +310,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.HandleWorkspaceContext(w, r)
 		return
 	}
+	if r.URL.Path == "/gateway/commands" {
+		p.HandleSlashCommands(w, r)
+		return
+	}
 	if r.URL.Path == "/gateway/subagents" {
 		p.HandleSubagents(w, r)
 		return

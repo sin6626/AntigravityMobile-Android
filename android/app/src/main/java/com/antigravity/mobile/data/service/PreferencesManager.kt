@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.antigravity.mobile.data.model.ConversationItem
+import com.antigravity.mobile.data.model.DraftComposerContext
 import com.antigravity.mobile.data.model.LocalDraftSession
 import com.antigravity.mobile.data.model.ProjectItem
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -394,7 +395,22 @@ class PreferencesManager(context: Context) {
 
     fun hasDraft(cascadeId: String): Boolean {
         if (cascadeId.isBlank()) return false
-        return getDraftText(cascadeId).isNotBlank() || hasDraftImages(cascadeId) || loadDraftFile(cascadeId) != null
+        return getDraftText(cascadeId).isNotBlank() || hasDraftImages(cascadeId) || loadDraftFile(cascadeId) != null ||
+            loadDraftComposerContext(cascadeId) != DraftComposerContext()
+    }
+
+    fun saveDraftComposerContext(cascadeId: String, value: DraftComposerContext) {
+        if (value == DraftComposerContext()) clearDraftComposerContext(cascadeId)
+        else prefs.edit().putString(KEY_DRAFT_CONTEXT_PREFIX + cascadeId, draftJson.encodeToString(value)).apply()
+    }
+
+    fun loadDraftComposerContext(cascadeId: String): DraftComposerContext {
+        val raw = prefs.getString(KEY_DRAFT_CONTEXT_PREFIX + cascadeId, null) ?: return DraftComposerContext()
+        return try { draftJson.decodeFromString<DraftComposerContext>(raw) } catch (_: Exception) { DraftComposerContext() }
+    }
+
+    fun clearDraftComposerContext(cascadeId: String) {
+        prefs.edit().remove(KEY_DRAFT_CONTEXT_PREFIX + cascadeId).apply()
     }
 
     private val draftImageDirectory: File get() = File(appContext.noBackupFilesDir, "android_draft_images")
@@ -561,15 +577,17 @@ class PreferencesManager(context: Context) {
         clearDraftText(id)
         clearDraftImages(id)
         clearDraftFile(id)
+        clearDraftComposerContext(id)
     }
 
     fun loadLocalDraftConversations(): List<ConversationItem> {
         val sessions = getLocalDraftSessions()
         return sessions.mapNotNull { session ->
             val text = getDraftText(session.id).ifBlank { session.draftText }
-            val hasAttachments = hasDraftImages(session.id) || loadDraftFile(session.id) != null
+            val hasAttachments = hasDraftImages(session.id) || loadDraftFile(session.id) != null ||
+                loadDraftComposerContext(session.id) != DraftComposerContext()
             if (text.isBlank() && !hasAttachments) return@mapNotNull null
-            session.copy(draftText = text).toConversationItem(hasImages = hasAttachments)
+            session.copy(draftText = text).toConversationItem(hasAttachments = hasAttachments)
         }.sortedByDescending { it.lastModifiedEpochMs }
     }
 
@@ -640,6 +658,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_DRAFT_TEXT_PREFIX = "ag_draft_text_"
         private const val KEY_DRAFT_IMAGES_PREFIX = "android_draft_images_"
         private const val KEY_DRAFT_FILE_PREFIX = "android_draft_file_"
+        private const val KEY_DRAFT_CONTEXT_PREFIX = "android_draft_context_"
         private const val KEY_CACHED_PROJECTS = "cached_projects_json"
         private const val KEY_CACHED_CONVERSATIONS = "cached_conversations_json"
         private const val KEY_DRAFT_SESSIONS = "cached_draft_sessions_json"

@@ -227,13 +227,13 @@ data class LocalDraftSession(
     val createdAtEpochMs: Long = System.currentTimeMillis(),
     var updatedAtEpochMs: Long = System.currentTimeMillis()
 ) {
-    fun toConversationItem(hasImages: Boolean = false): ConversationItem {
+    fun toConversationItem(hasAttachments: Boolean = false): ConversationItem {
         val trimmed = draftText.trim()
         val firstLine = trimmed.lines().firstOrNull { it.isNotBlank() }?.trim() ?: ""
         val isPure = project.isPureChat
         val displayTitle = when {
             firstLine.isNotEmpty() -> if (firstLine.length > 36) firstLine.take(36) + "..." else firstLine
-            hasImages -> if (isPure) "[图片] 新对话" else "[图片] ${project.name}"
+            hasAttachments -> if (isPure) "[附件] 新对话" else "[附件] ${project.name}"
             else -> if (isPure) "新对话" else project.name
         }
         val nowIso = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {

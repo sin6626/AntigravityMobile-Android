@@ -2333,6 +2333,67 @@ class ChatUxTest {
         }
     }
 
+    @Test fun workspaceReferenceAndSlashCommandSearchPersistRecoverAndSendStructuredItems() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.projectFixture = true
+            val prefs = PreferencesManager(app).apply {
+                clear(); gatewayBaseUrl = gateway.url; deviceToken = "context-token"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("context-command", vm) }
+            try {
+                compose.waitUntil(10_000) { vm.state.value.projects.size == 1 && vm.state.value.models.isNotEmpty() }
+                compose.runOnIdle { vm.createProjectConversation(vm.state.value.projects.single()) }
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "C" && !vm.state.value.isLoadingMessages }
+                compose.setContent { ChatDemoScreen(vm, {}) }
+
+                compose.onNode(hasSetTextAction()).performClick().performTextInput("@Chat")
+                compose.waitUntil(10_000) { vm.state.value.contextSuggestions.isNotEmpty() }
+                compose.onNodeWithContentDescription("引用文件 src/ChatViewModel.kt").assertIsDisplayed().performClick()
+                compose.onNodeWithContentDescription("已引用文件 src/ChatViewModel.kt").assertIsDisplayed()
+                    .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                assertEquals("", vm.state.value.draft)
+
+                compose.onNode(hasSetTextAction()).performTextInput("/plan")
+                compose.waitUntil(10_000) { vm.state.value.commandSuggestions.isNotEmpty() }
+                compose.onNodeWithContentDescription("选择命令 /plan").assertIsDisplayed().performClick()
+                compose.onNodeWithContentDescription("已选命令 /plan").assertIsDisplayed()
+                    .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                assertEquals(1, prefs.loadDraftComposerContext("C").workspaceItems.size)
+                assertEquals("plan", prefs.loadDraftComposerContext("C").slashCommand?.info?.name)
+                saveScreenshot("workspace-context-command.png")
+
+                gateway.failurePath = "SendUserCascadeMessage"
+                compose.onNodeWithContentDescription("发送消息").performClick()
+                compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.error != null }
+                assertEquals(1, vm.state.value.workspaceContexts.size)
+                assertEquals("plan", vm.state.value.slashCommand?.info?.name)
+
+                gateway.failurePath = null
+                val requestCount = gateway.requests.count { it.first ==
+                    "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage" }
+                compose.runOnIdle { vm.send() }
+                compose.waitUntil(10_000) { gateway.requests.count { it.first ==
+                    "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage" } > requestCount &&
+                    !vm.state.value.isSending && vm.state.value.workspaceContexts.isEmpty() }
+                val sent = JSONObject(gateway.requests.last {
+                    it.first == "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage"
+                }.second)
+                val items = sent.getJSONArray("items")
+                assertEquals("file:///test/project/src/ChatViewModel.kt",
+                    items.getJSONObject(0).getJSONObject("item").getJSONObject("file").getString("absoluteUri"))
+                assertEquals("plan", items.getJSONObject(1).getJSONObject("item").getJSONObject("slashCommand")
+                    .getJSONObject("info").getString("name"))
+                assertEquals("<PLAN />", items.getJSONObject(1).getJSONObject("item").getJSONObject("slashCommand")
+                    .getJSONObject("info").getString("modelFacingText"))
+                assertTrue(vm.state.value.workspaceContexts.isEmpty())
+                assertNull(vm.state.value.slashCommand)
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2489,6 +2550,8 @@ class ChatUxTest {
                                 path == "/gateway/cascade/new" -> """{"cascadeId":"${if (JSONObject(requestBody).optString("projectId") == "p") "C" else "D"}","status":"ok"}"""
                                 path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
                                 path.startsWith("/api/v1/auth/endpoints") -> """{"endpoints":$endpointsJson,"platform":"windows"}"""
+                                path.startsWith("/gateway/workspace/context") -> """{"workspaceUri":"file:///test/project","items":[{"type":"file","name":"ChatViewModel.kt","relativePath":"src/ChatViewModel.kt","rootName":"project","rootUri":"file:///test/project","uri":"file:///test/project/src/ChatViewModel.kt","size":42,"scopeItem":{"file":{"absoluteUri":"file:///test/project/src/ChatViewModel.kt","workspaceUrisToRelativePaths":{"file:///test/project":"src/ChatViewModel.kt"},"numFiles":1,"numBytes":42}}}]}"""
+                                path.startsWith("/gateway/commands") -> """{"commands":[{"info":{"name":"plan","modelFacingText":"<PLAN />","type":"SLASH_COMMAND_TYPE_SYSTEM","icon":"ballot"},"title":"plan","description":"先制定方案"}]}"""
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 path.startsWith("/gateway/subagents") -> if (subagentFixture && path.contains("parentId=A")) """{"subagents":[
                                     {"id":"sub-running","parentConversationId":"A","rootConversationId":"A","title":"检查登录动效","status":"RUNNING","stepCount":6,"nestingDepth":1},
@@ -2506,7 +2569,8 @@ class ChatUxTest {
                                     val summaries = JSONObject()
                                     for (key in if (createdProject) listOf("A", "B", "C") else listOf("A", "B")) summaries.put(key, JSONObject().put("summary", key)
                                         .put("status", "IDLE").put("annotations", annotations[key] ?: JSONObject()).apply {
-                                            if (projectFixture && key in listOf("B", "C")) put("trajectoryMetadata", JSONObject().put("projectId", "p"))
+                                            if (projectFixture && key in listOf("B", "C")) put("trajectoryMetadata", JSONObject()
+                                                .put("projectId", "p").put("workspaceUris", org.json.JSONArray().put("file:///test/project")))
                                         })
                                     JSONObject().put("trajectorySummaries", summaries).toString()
                                 }

@@ -618,6 +618,14 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             draft = state.draft,
                             attachments = state.attachments,
                             fileAttachment = state.fileAttachment,
+                            workspaceContexts = state.workspaceContexts,
+                            slashCommand = state.slashCommand,
+                            contextSuggestions = state.contextSuggestions,
+                            commandSuggestions = state.commandSuggestions,
+                            isLoadingContextSuggestions = state.isLoadingContextSuggestions,
+                            isLoadingCommandSuggestions = state.isLoadingCommandSuggestions,
+                            contextSuggestionsError = state.contextSuggestionsError,
+                            commandSuggestionsError = state.commandSuggestionsError,
                             onDraftChange = viewModel::setDraft,
                             onTakePhoto = {
                                 if (state.busyQueuedMessageIds.isEmpty()) {
@@ -639,6 +647,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             },
                             onRemoveImage = viewModel::removeImage,
                             onRemoveFile = viewModel::removeFile,
+                            onSearchWorkspaceContexts = viewModel::searchWorkspaceContexts,
+                            onSearchSlashCommands = viewModel::searchSlashCommands,
+                            onAddWorkspaceContext = viewModel::addWorkspaceContext,
+                            onRemoveWorkspaceContext = viewModel::removeWorkspaceContext,
+                            onSelectSlashCommand = viewModel::selectSlashCommand,
+                            onRemoveSlashCommand = viewModel::removeSlashCommand,
+                            onDismissSuggestions = viewModel::clearComposerSuggestions,
                             onSend = viewModel::send,
                             isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
                                 state.busyQueuedMessageIds.isNotEmpty() || state.selectedConversationId in state.busyConversations,

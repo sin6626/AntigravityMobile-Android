@@ -413,6 +413,47 @@ class ApiClient(
         }
     }
 
+    suspend fun fetchWorkspaceContext(workspaceUri: String, query: String): Result<List<WorkspaceContextItem>> =
+        withContext(Dispatchers.IO) {
+            val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+            val url = "$baseUrl/gateway/workspace/context".toHttpUrlOrNull()?.newBuilder()
+                ?.addQueryParameter("workspaceUri", workspaceUri)
+                ?.addQueryParameter("query", query)
+                ?.addQueryParameter("limit", "30")
+                ?.build() ?: return@withContext Result.failure(IllegalArgumentException("网关地址无效"))
+            try {
+                client.newCall(buildAuthorizedRequest(url.toString()).get().build()).await().use { response ->
+                    when {
+                        response.code == 401 -> Result.failure(GatewayAuthorizationException())
+                        !response.isSuccessful -> Result.failure(RuntimeException("搜索电脑文件失败: HTTP ${response.code}"))
+                        else -> Result.success(json.decodeFromString<WorkspaceContextResponse>(response.body?.string() ?: "{}").items)
+                    }
+                }
+            } catch (error: Exception) { Result.failure(error) }
+        }
+
+    suspend fun fetchSlashCommands(
+        cascadeId: String?,
+        workspaceUri: String,
+        model: String,
+    ): Result<List<SlashCommandDefinition>> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val builder = "$baseUrl/gateway/commands".toHttpUrlOrNull()?.newBuilder()
+            ?: return@withContext Result.failure(IllegalArgumentException("网关地址无效"))
+        cascadeId?.takeIf { it.isNotBlank() && !it.startsWith("local:") }?.let { builder.addQueryParameter("cascadeId", it) }
+        workspaceUri.takeIf(String::isNotBlank)?.let { builder.addQueryParameter("workspaceUri", it) }
+        builder.addQueryParameter("model", model)
+        try {
+            client.newCall(buildAuthorizedRequest(builder.build().toString()).get().build()).await().use { response ->
+                when {
+                    response.code == 401 -> Result.failure(GatewayAuthorizationException())
+                    !response.isSuccessful -> Result.failure(RuntimeException("获取命令失败: HTTP ${response.code}"))
+                    else -> Result.success(json.decodeFromString<SlashCommandsResponse>(response.body?.string() ?: "{}").commands)
+                }
+            }
+        } catch (error: Exception) { Result.failure(error) }
+    }
+
     /** Create a new cascade session. */
     suspend fun createCascade(
         workspaceUri: String,
@@ -553,6 +594,8 @@ class ApiClient(
         model: String? = null,
         images: List<Pair<ByteArray, String>> = emptyList(),
         file: Triple<ByteArray, String, String>? = null,
+        workspaceContexts: List<WorkspaceContextItem> = emptyList(),
+        slashCommand: SlashCommandDefinition? = null,
         deliveryStrategy: Int? = null,
         clientMessageId: String? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
@@ -562,8 +605,28 @@ class ApiClient(
         val payload = buildJsonObject {
             put("cascadeId", cascadeId)
             putJsonArray("items") {
-                addJsonObject {
-                    put("text", text)
+                if (text.isNotBlank()) addJsonObject { put("text", text) }
+                workspaceContexts.forEach { context ->
+                    addJsonObject {
+                        putJsonObject("item") {
+                            context.scopeItem.file?.let { put("file", json.encodeToJsonElement(it)) }
+                            context.scopeItem.directory?.let { put("directory", json.encodeToJsonElement(it)) }
+                        }
+                    }
+                }
+                slashCommand?.let { command ->
+                    addJsonObject {
+                        putJsonObject("item") {
+                            putJsonObject("slashCommand") {
+                                put("info", json.encodeToJsonElement(command.info))
+                                putJsonObject("argumentValues") {
+                                    command.arguments.forEach { argument ->
+                                        argument.defaultValue.takeIf(String::isNotBlank)?.let { put(argument.name, it) }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             put("text", text)

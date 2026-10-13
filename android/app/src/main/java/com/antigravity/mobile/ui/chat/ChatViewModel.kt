@@ -22,6 +22,9 @@ import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.model.ChatModel
 import com.antigravity.mobile.data.model.MessageAttachment
+import com.antigravity.mobile.data.model.DraftComposerContext
+import com.antigravity.mobile.data.model.WorkspaceContextItem
+import com.antigravity.mobile.data.model.SlashCommandDefinition
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
@@ -100,6 +103,15 @@ data class ChatUiState(
     val draft: String = "",
     val attachments: List<PendingImage> = emptyList(),
     val fileAttachment: PendingFile? = null,
+    val workspaceUri: String = "",
+    val workspaceContexts: List<WorkspaceContextItem> = emptyList(),
+    val slashCommand: SlashCommandDefinition? = null,
+    val contextSuggestions: List<WorkspaceContextItem> = emptyList(),
+    val commandSuggestions: List<SlashCommandDefinition> = emptyList(),
+    val isLoadingContextSuggestions: Boolean = false,
+    val isLoadingCommandSuggestions: Boolean = false,
+    val contextSuggestionsError: String? = null,
+    val commandSuggestionsError: String? = null,
     val isRestoringDraft: Boolean = false,
     val error: String? = null,
     val messagesError: String? = null,
@@ -163,6 +175,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var draftRestoreJob: Job? = null
     private var recoveryJob: Job? = null
     private var subagentsJob: Job? = null
+    private var contextSuggestionsJob: Job? = null
+    private var commandSuggestionsJob: Job? = null
     private val subagentTrail = mutableListOf<SubagentItem>()
     private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired(), draft = prefs.getDraftText(draftKey)))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
@@ -180,9 +194,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 .filter { it.isNotEmpty() }.distinct().joinToString("\n\n"))
             prefs.saveDraftImages(target, (prefs.loadDraftImages(PENDING_SEND_DRAFT) + prefs.loadDraftImages(target)).distinct().take(4))
             prefs.loadDraftFile(PENDING_SEND_DRAFT)?.let { prefs.saveDraftFile(target, it) }
+            prefs.saveDraftComposerContext(target, mergeComposerContext(
+                prefs.loadDraftComposerContext(PENDING_SEND_DRAFT), prefs.loadDraftComposerContext(target)))
             clearSendSnapshot()
         }
-        _state.value = _state.value.copy(draft = prefs.getDraftText(NEW_CHAT_DRAFT))
+        val initialContext = prefs.loadDraftComposerContext(NEW_CHAT_DRAFT)
+        _state.value = _state.value.copy(draft = prefs.getDraftText(NEW_CHAT_DRAFT),
+            workspaceContexts = initialContext.workspaceItems, slashCommand = initialContext.slashCommand)
         restoreDraftAttachments(NEW_CHAT_DRAFT)
         if (prefs.isPaired()) {
             val cachedModels = runCatching {
@@ -253,16 +271,28 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(draft = value)
     }
 
+    private fun currentComposerContext() = DraftComposerContext(_state.value.workspaceContexts, _state.value.slashCommand)
+
+    private fun saveComposerContext(key: String, value: DraftComposerContext = currentComposerContext()) {
+        prefs.saveDraftComposerContext(key, value)
+    }
+
     private fun switchDraft(key: String) {
         prefs.setDraftText(draftKey, _state.value.draft)
         if (!_state.value.isRestoringDraft) draftAttachments[draftKey] = _state.value.attachments
         if (!_state.value.isRestoringDraft) draftFiles[draftKey] = _state.value.fileAttachment
+        saveComposerContext(draftKey)
         draftRestoreJob?.cancel()
         draftKey = key
+        val context = prefs.loadDraftComposerContext(key)
         _state.value = _state.value.copy(
             draft = prefs.getDraftText(key),
             attachments = draftAttachments[key].orEmpty(),
             fileAttachment = draftFiles[key],
+            workspaceContexts = context.workspaceItems,
+            slashCommand = context.slashCommand,
+            contextSuggestions = emptyList(), commandSuggestions = emptyList(),
+            contextSuggestionsError = null, commandSuggestionsError = null,
         )
         restoreDraftAttachments(key)
     }
@@ -312,6 +342,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.clearDraftText(PENDING_SEND_DRAFT)
         prefs.clearDraftImages(PENDING_SEND_DRAFT)
         prefs.clearDraftFile(PENDING_SEND_DRAFT)
+        prefs.clearDraftComposerContext(PENDING_SEND_DRAFT)
     }
 
     private fun moveDraft(from: String, to: String) {
@@ -325,16 +356,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sourceFile = if (active) _state.value.fileAttachment else draftFiles[from] ?: prefs.loadDraftFile(from)?.toPendingFile()
         val targetFile = if (draftKey == to) _state.value.fileAttachment else draftFiles[to] ?: prefs.loadDraftFile(to)?.toPendingFile()
         val file = sourceFile ?: targetFile
+        val context = mergeComposerContext(
+            if (active) currentComposerContext() else prefs.loadDraftComposerContext(from),
+            if (draftKey == to) currentComposerContext() else prefs.loadDraftComposerContext(to),
+        )
         prefs.setDraftText(to, text)
         saveImages(to, images)
         saveFile(to, file)
+        saveComposerContext(to, context)
         prefs.clearDraftText(from)
         prefs.clearDraftImages(from)
         prefs.clearDraftFile(from)
+        prefs.clearDraftComposerContext(from)
         draftAttachments.remove(from)
         draftFiles.remove(from)
         if (active) draftKey = to
-        if (draftKey == to) _state.value = _state.value.copy(draft = text, attachments = images, fileAttachment = file)
+        if (draftKey == to) _state.value = _state.value.copy(draft = text, attachments = images, fileAttachment = file,
+            workspaceContexts = context.workspaceItems, slashCommand = context.slashCommand)
     }
 
     private fun StoredDraftFile.toPendingFile() = try {
@@ -409,9 +447,106 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         file.uri.path?.let { prefs.deleteUnusedDraftFile(File(it)) }
     }
 
+    fun searchWorkspaceContexts(query: String) {
+        contextSuggestionsJob?.cancel()
+        val workspaceUri = _state.value.workspaceUri
+        if (workspaceUri.isBlank()) {
+            _state.value = _state.value.copy(contextSuggestions = emptyList(), isLoadingContextSuggestions = false,
+                contextSuggestionsError = "当前会话没有关联电脑工作区")
+            return
+        }
+        _state.value = _state.value.copy(isLoadingContextSuggestions = true, contextSuggestionsError = null)
+        val token = prefs.deviceToken
+        contextSuggestionsJob = viewModelScope.launch {
+            delay(180)
+            api.fetchWorkspaceContext(workspaceUri, query).fold(onSuccess = { items ->
+                if (prefs.deviceToken == token) _state.value = _state.value.copy(
+                    contextSuggestions = items.filterNot { item -> _state.value.workspaceContexts.any { it.uri == item.uri } },
+                    isLoadingContextSuggestions = false, contextSuggestionsError = null)
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(contextSuggestions = emptyList(), isLoadingContextSuggestions = false,
+                    contextSuggestionsError = error.message ?: "搜索电脑文件失败")
+            })
+        }
+    }
+
+    fun searchSlashCommands(query: String) {
+        commandSuggestionsJob?.cancel()
+        val current = _state.value
+        val model = current.models.firstOrNull {
+            it.id == (current.modelOverrideId ?: current.activeModelId ?: current.selectedModelId) ||
+                it.model == (current.modelOverrideId ?: current.activeModelId ?: current.selectedModelId)
+        }
+        if (model == null) {
+            _state.value = current.copy(commandSuggestions = emptyList(), isLoadingCommandSuggestions = false,
+                commandSuggestionsError = current.modelsError ?: "请等待模型列表加载完成")
+            return
+        }
+        _state.value = current.copy(isLoadingCommandSuggestions = true, commandSuggestionsError = null)
+        val token = prefs.deviceToken
+        commandSuggestionsJob = viewModelScope.launch {
+            delay(180)
+            api.fetchSlashCommands(current.selectedConversationId, current.workspaceUri, model.model).fold(onSuccess = { commands ->
+                if (prefs.deviceToken != token) return@fold
+                val needle = query.trim().lowercase()
+                _state.value = _state.value.copy(commandSuggestions = commands.filter {
+                    needle.isBlank() || it.info.name.lowercase().contains(needle) ||
+                        it.title.lowercase().contains(needle) || it.description.lowercase().contains(needle)
+                }.take(30), isLoadingCommandSuggestions = false, commandSuggestionsError = null)
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(commandSuggestions = emptyList(), isLoadingCommandSuggestions = false,
+                    commandSuggestionsError = error.message ?: "获取命令失败")
+            })
+        }
+    }
+
+    fun addWorkspaceContext(item: WorkspaceContextItem) {
+        val current = _state.value
+        if (current.workspaceContexts.any { it.uri == item.uri }) return
+        if (current.workspaceContexts.size >= 8) {
+            _state.value = current.copy(error = "一次最多引用 8 个电脑文件或目录")
+            return
+        }
+        _state.value = current.copy(workspaceContexts = current.workspaceContexts + item,
+            contextSuggestions = current.contextSuggestions.filterNot { it.uri == item.uri })
+        saveComposerContext(draftKey)
+    }
+
+    fun removeWorkspaceContext(uri: String) {
+        _state.value = _state.value.copy(workspaceContexts = _state.value.workspaceContexts.filterNot { it.uri == uri })
+        saveComposerContext(draftKey)
+    }
+
+    fun selectSlashCommand(command: SlashCommandDefinition) {
+        // shortcut: the current desktop catalog has no free-form arguments; add an editor when that changes.
+        if (command.arguments.any { it.required && it.defaultValue.isBlank() }) {
+            _state.value = _state.value.copy(error = "/${command.info.name} 需要填写参数，手机端暂不能执行")
+            return
+        }
+        _state.value = _state.value.copy(slashCommand = command, commandSuggestions = emptyList())
+        saveComposerContext(draftKey)
+    }
+
+    fun removeSlashCommand() {
+        _state.value = _state.value.copy(slashCommand = null)
+        saveComposerContext(draftKey)
+    }
+
+    fun clearComposerSuggestions() {
+        contextSuggestionsJob?.cancel()
+        commandSuggestionsJob?.cancel()
+        _state.value = _state.value.copy(contextSuggestions = emptyList(), commandSuggestions = emptyList(),
+            isLoadingContextSuggestions = false, isLoadingCommandSuggestions = false,
+            contextSuggestionsError = null, commandSuggestionsError = null)
+    }
+
     private fun selectedModel(): ChatModel? {
         val state = _state.value
-        val modelId = state.modelOverrideId ?: if (state.selectedConversationId == null) state.selectedModelId else state.activeModelId
+        val modelId = state.modelOverrideId ?: state.activeModelId ?: state.selectedModelId
         return state.models.firstOrNull { it.id == modelId || it.model == modelId }
     }
 
@@ -575,6 +710,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     if (!_state.value.isPaired) return@fold
                     _state.value = _state.value.copy(
                         conversations = conversations,
+                        workspaceUri = conversations.firstOrNull { it.id == _state.value.selectedConversationId }
+                            ?.workspaceUri?.takeIf(String::isNotBlank) ?: _state.value.workspaceUri,
                         isLoadingConversations = false,
                         conversationsError = null,
                     )
@@ -682,7 +819,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             api.createCascade(project.uri, "", model.model, project.rawId).fold(onSuccess = { id ->
                 if (prefs.deviceToken != token) return@fold
                 if (conversationVisit == visit) {
-                    onCreated(); openConversation(id)
+                    onCreated(); openConversationTarget(id, null, project.uri)
                     _state.value = _state.value.copy(modelOverrideId = model.id)
                 }
                 refreshConversations()
@@ -703,12 +840,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun openSubagent(subagent: SubagentItem) {
         if (subagent.parentConversationId != _state.value.selectedConversationId) return
         subagentTrail += subagent
-        openConversationTarget(subagent.id, subagent)
+        openConversationTarget(subagent.id, subagent, _state.value.workspaceUri)
     }
 
     fun returnToSubagentParent() {
         val current = subagentTrail.removeLastOrNull() ?: return
-        openConversationTarget(current.parentConversationId, subagentTrail.lastOrNull())
+        openConversationTarget(current.parentConversationId, subagentTrail.lastOrNull(), _state.value.workspaceUri)
     }
 
     fun refreshSubagents() {
@@ -717,7 +854,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         startSubagentPolling(id, conversationVisit)
     }
 
-    private fun openConversationTarget(id: String, activeSubagent: SubagentItem?) {
+    private fun openConversationTarget(id: String, activeSubagent: SubagentItem?, workspaceUri: String? = null) {
         conversationVisit++
         messagesJob?.cancel(); messagesJob = null
         subagentsJob?.cancel(); subagentsJob = null
@@ -726,6 +863,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         stream.disconnect()
         _state.value = _state.value.copy(
             selectedConversationId = id,
+            workspaceUri = workspaceUri ?: _state.value.conversations.firstOrNull { it.id == id }?.workspaceUri.orEmpty(),
             activeModelId = null, modelOverrideId = null,
             messages = emptyList(),
             isLoadingMessages = true,
@@ -789,10 +927,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.clearDraftText(NEW_CHAT_DRAFT)
         prefs.clearDraftImages(NEW_CHAT_DRAFT)
         prefs.clearDraftFile(NEW_CHAT_DRAFT)
+        prefs.clearDraftComposerContext(NEW_CHAT_DRAFT)
         draftRestoreJob?.cancel()
         draftAttachments.remove(NEW_CHAT_DRAFT)
         draftFiles.remove(NEW_CHAT_DRAFT)
-        _state.value = _state.value.copy(draft = "", attachments = emptyList(), fileAttachment = null, isRestoringDraft = false)
+        _state.value = _state.value.copy(draft = "", attachments = emptyList(), fileAttachment = null,
+            workspaceUri = "", workspaceContexts = emptyList(), slashCommand = null, isRestoringDraft = false)
     }
 
     fun closeConversation() {
@@ -805,6 +945,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         switchDraft(NEW_CHAT_DRAFT)
         _state.value = _state.value.copy(
             selectedConversationId = null,
+            workspaceUri = "",
             activeModelId = null, modelOverrideId = null,
             messages = emptyList(),
             streamingMessageId = null,
@@ -833,7 +974,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
         val file = _state.value.fileAttachment
-        if ((text.isEmpty() && images.isEmpty() && file == null) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
+        val contexts = _state.value.workspaceContexts
+        val slashCommand = _state.value.slashCommand
+        if ((text.isEmpty() && images.isEmpty() && file == null && contexts.isEmpty() && slashCommand == null) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
         val id = _state.value.selectedConversationId
         val modelId = _state.value.modelOverrideId ?: if (id == null) _state.value.selectedModelId else _state.value.activeModelId
         val model = _state.value.models.firstOrNull { it.id == modelId || it.model == modelId }
@@ -855,7 +998,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val clientId = UUID.randomUUID().toString()
         val wasRunning = _state.value.isRunning
         if (id != null && wasRunning) {
-            queueCurrentMessage(id, text, images, file, requestedModel, model?.id, token, visit, clientId)
+            queueCurrentMessage(id, text, images, file, contexts, slashCommand, requestedModel, model?.id, token, visit, clientId)
             return
         }
         var targetId = id ?: "local:$clientId"
@@ -869,19 +1012,22 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.setDraftText(PENDING_SEND_DRAFT, text)
         prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
         prefs.saveDraftFile(PENDING_SEND_DRAFT, file?.toStoredDraftFile())
+        prefs.saveDraftComposerContext(PENDING_SEND_DRAFT, DraftComposerContext(contexts, slashCommand))
         prefs.pendingSendTarget = originalDraftKey
         setDraft("")
         saveImages(draftKey, emptyList())
         saveFile(draftKey, null)
-        _state.value = _state.value.copy(attachments = emptyList(), fileAttachment = null)
+        saveComposerContext(draftKey, DraftComposerContext())
+        _state.value = _state.value.copy(attachments = emptyList(), fileAttachment = null,
+            workspaceContexts = emptyList(), slashCommand = null)
         if (id == null) moveDraft(originalDraftKey, targetId)
         if (id == null) conversationVisit++
         _state.value = _state.value.copy(
             selectedConversationId = targetId, outgoing = _state.value.outgoing + pending,
-            draft = "", attachments = emptyList(), fileAttachment = null,
+            draft = "", attachments = emptyList(), fileAttachment = null, workspaceContexts = emptyList(), slashCommand = null,
             isSending = true, isRunning = true, streamingMessageId = null, error = null)
         viewModelScope.launch {
-            val result = if (id == null && images.isEmpty() && file == null) {
+            val result = if (id == null && images.isEmpty() && file == null && contexts.isEmpty() && slashCommand == null) {
                 api.createCascade(
                     workspaceUri = "",
                     prompt = text,
@@ -904,6 +1050,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                                 createdId, text, model = requestedModel,
                                 images = images.map { it.bytes to it.mimeType },
                                 file = file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
+                                workspaceContexts = contexts,
+                                slashCommand = slashCommand,
                                 clientMessageId = clientId,
                             ).map { createdId }
                         },
@@ -913,6 +1061,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 api.sendMessage(
                     id, text, model = requestedModel, images = images.map { it.bytes to it.mimeType },
                     file = file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
+                    workspaceContexts = contexts,
+                    slashCommand = slashCommand,
                     clientMessageId = clientId,
                 ).map { id }
             }
@@ -946,10 +1096,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         (if (draftKey == restoreKey) current.attachments else draftAttachments[restoreKey].orEmpty()))
                         .distinctBy { it.uri } else current.attachments
                     val restoredFile = if (unconfirmed) file ?: if (draftKey == restoreKey) current.fileAttachment else draftFiles[restoreKey] else current.fileAttachment
+                    val restoredContext = if (unconfirmed) mergeComposerContext(DraftComposerContext(contexts, slashCommand),
+                        if (draftKey == restoreKey) currentComposerContext() else prefs.loadDraftComposerContext(restoreKey))
+                    else currentComposerContext()
                     if (unconfirmed) {
                         prefs.setDraftText(restoreKey, restoredDraft)
                         saveImages(restoreKey, restoredImages)
                         saveFile(restoreKey, restoredFile)
+                        saveComposerContext(restoreKey, restoredContext)
                     }
                     _state.value = current.copy(
                         outgoing = current.outgoing.filterNot { it.message.id == pending.message.id },
@@ -957,6 +1111,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         draft = if (draftKey == restoreKey && unconfirmed) restoredDraft else current.draft,
                         attachments = if (draftKey == restoreKey && unconfirmed) restoredImages else current.attachments,
                         fileAttachment = if (draftKey == restoreKey && unconfirmed) restoredFile else current.fileAttachment,
+                        workspaceContexts = if (draftKey == restoreKey && unconfirmed) restoredContext.workspaceItems else current.workspaceContexts,
+                        slashCommand = if (draftKey == restoreKey && unconfirmed) restoredContext.slashCommand else current.slashCommand,
                         isSending = false,
                         modelOverrideId = if (stillHere && conversationVisit == visit) null else current.modelOverrideId,
                         isRunning = if (stillHere && unconfirmed) wasRunning else current.isRunning,
@@ -973,6 +1129,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         text: String,
         images: List<PendingImage>,
         file: PendingFile?,
+        contexts: List<WorkspaceContextItem>,
+        slashCommand: SlashCommandDefinition?,
         requestedModel: String?,
         selectedModelId: String?,
         token: String?,
@@ -983,14 +1141,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         prefs.setDraftText(PENDING_SEND_DRAFT, text)
         prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
         prefs.saveDraftFile(PENDING_SEND_DRAFT, file?.toStoredDraftFile())
+        prefs.saveDraftComposerContext(PENDING_SEND_DRAFT, DraftComposerContext(contexts, slashCommand))
         prefs.pendingSendTarget = key
         setDraft("")
         saveImages(key, emptyList())
         saveFile(key, null)
+        saveComposerContext(key, DraftComposerContext())
         _state.value = _state.value.copy(
             draft = "",
             attachments = emptyList(),
             fileAttachment = null,
+            workspaceContexts = emptyList(),
+            slashCommand = null,
             isSending = true,
             queueError = null,
         )
@@ -1001,6 +1163,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 model = requestedModel,
                 images = images.map { it.bytes to it.mimeType },
                 file = file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
+                workspaceContexts = contexts,
+                slashCommand = slashCommand,
                 deliveryStrategy = 2,
                 clientMessageId = clientId,
             ).fold(
@@ -1022,14 +1186,19 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val currentImages = if (draftKey == key) _state.value.attachments else draftAttachments[key].orEmpty()
                     val restoredImages = (images + currentImages).distinctBy { it.uri }
                     val restoredFile = file ?: if (draftKey == key) _state.value.fileAttachment else draftFiles[key]
+                    val restoredContext = mergeComposerContext(DraftComposerContext(contexts, slashCommand),
+                        if (draftKey == key) currentComposerContext() else prefs.loadDraftComposerContext(key))
                     prefs.setDraftText(key, restoredText)
                     saveImages(key, restoredImages)
                     saveFile(key, restoredFile)
+                    saveComposerContext(key, restoredContext)
                     if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         _state.value = _state.value.copy(
                             draft = restoredText,
                             attachments = restoredImages,
                             fileAttachment = restoredFile,
+                            workspaceContexts = restoredContext.workspaceItems,
+                            slashCommand = restoredContext.slashCommand,
                             isSending = false,
                             queueError = "${error.message ?: "加入队列失败"}（内容已恢复到输入框）",
                         )
@@ -1355,10 +1524,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             prefs.clearDraftText(id)
             prefs.clearDraftImages(id)
             prefs.clearDraftFile(id)
+            prefs.clearDraftComposerContext(id)
             draftAttachments.remove(id)
             draftFiles.remove(id)
             if (_state.value.selectedConversationId == id) {
-                _state.value = _state.value.copy(draft = "", attachments = emptyList(), fileAttachment = null)
+                _state.value = _state.value.copy(draft = "", attachments = emptyList(), fileAttachment = null,
+                    workspaceContexts = emptyList(), slashCommand = null)
                 closeConversation(); switchDraft(NEW_CHAT_DRAFT)
             }
         }
@@ -1702,6 +1873,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 private const val DEFAULT_CHAT_MODEL = "gemini-3.8-flash-high"
 private const val NEW_CHAT_DRAFT = "android_new_chat"
 private const val PENDING_SEND_DRAFT = "android_pending_send"
+
+private fun mergeComposerContext(first: DraftComposerContext, second: DraftComposerContext) = DraftComposerContext(
+    workspaceItems = (first.workspaceItems + second.workspaceItems).distinctBy { it.uri }.take(8),
+    slashCommand = first.slashCommand ?: second.slashCommand,
+)
 
 private fun mergeMessages(
     current: List<GatewayMessageItem>,
