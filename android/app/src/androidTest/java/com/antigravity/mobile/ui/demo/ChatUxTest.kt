@@ -335,7 +335,7 @@ class ChatUxTest {
                 compose.runOnIdle { vm.selectModel("gemini-3.8-flash-high"); vm.addFile(uri) }
                 compose.waitUntil(10_000) { vm.state.value.fileAttachment != null }
                 compose.onNodeWithText("mobile-file-contract.txt").assertIsDisplayed()
-                compose.onNodeWithText("16 B · text/plain").assertIsDisplayed()
+                compose.onNodeWithText("待发送 · 16 B · text/plain").assertIsDisplayed()
                 saveScreenshot("file-attachment-draft.png")
 
                 compose.runOnIdle { store.clear() }
@@ -358,7 +358,7 @@ class ChatUxTest {
                 assertEquals("FILE_CONTRACT_OK", String(android.util.Base64.decode(media.getString("inlineData"), android.util.Base64.DEFAULT)))
                 assertNull(vm.state.value.fileAttachment)
                 assertNull(prefs.loadDraftFile("android_new_chat"))
-                compose.onNodeWithContentDescription("已发送文件，mobile-file-contract.txt，text/plain").assertIsDisplayed()
+                compose.onNodeWithContentDescription("发送中文件，mobile-file-contract.txt，text/plain").assertIsDisplayed()
                 saveScreenshot("file-attachment-sent.png")
 
                 compose.waitUntil(10_000) { vm.state.value.isRunning }

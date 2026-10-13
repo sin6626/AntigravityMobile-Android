@@ -923,7 +923,7 @@ private fun FileAttachmentChip(file: PendingFile, onRemove: () -> Unit) {
         color = Color(0xFFF4F5F7),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().semantics {
-            contentDescription = "待发送文件，${file.displayName}，${formatFileSize(file.size)}"
+            contentDescription = "待发送文件，${file.displayName}，${formatFileSize(file.size)}，${file.mimeType}"
         },
     ) {
         Row(Modifier.heightIn(min = 58.dp).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -935,7 +935,7 @@ private fun FileAttachmentChip(file: PendingFile, onRemove: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(file.displayName, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("${formatFileSize(file.size)} · ${file.mimeType}", color = SecondaryInk, fontSize = 12.sp,
+                Text("待发送 · ${formatFileSize(file.size)} · ${file.mimeType}", color = SecondaryInk, fontSize = 12.sp,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Box(Modifier.size(48.dp).semantics { contentDescription = "移除文件 ${file.displayName}" }
