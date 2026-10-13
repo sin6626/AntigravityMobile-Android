@@ -135,6 +135,7 @@ type PendingInteraction struct {
 	Type               string              `json:"type"` // "permission", "ask_question", "file_permission", "run_command"
 	TrajectoryID       string              `json:"trajectoryId"`
 	StepIndex          int                 `json:"stepIndex"`
+	ToolName           string              `json:"toolName,omitempty"`
 	Title              string              `json:"title"`
 	Target             string              `json:"target,omitempty"`
 	Action             string              `json:"action,omitempty"`
@@ -1341,6 +1342,11 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 			pi := &PendingInteraction{
 				TrajectoryID: rawResp.Trajectory.TrajectoryID,
 				StepIndex:    idx,
+			}
+			if s.Metadata.ToolCall != nil {
+				pi.ToolName = s.Metadata.ToolCall.Name
+			} else if s.ToolCall != nil {
+				pi.ToolName = s.ToolCall.Name
 			}
 			req := s.RequestedInteraction
 			if req.Permission != nil {

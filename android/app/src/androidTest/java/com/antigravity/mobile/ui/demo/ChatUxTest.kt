@@ -2310,6 +2310,7 @@ class ChatUxTest {
             try {
                 compose.setContent { ChatDemoScreen(vm, {}) }
                 compose.waitUntil(10_000) { vm.state.value.pendingInteraction?.isMultiSelect == true }
+                compose.onNodeWithText("来源工具：mcp__review__ask_question").assertIsDisplayed()
                 compose.onNodeWithText("请至少选择一项或填写回复").assertIsDisplayed()
                 compose.onNodeWithText("提交选择").assertIsNotEnabled()
                     .assert(SemanticsMatcher.expectValue(
@@ -2903,7 +2904,7 @@ class ChatUxTest {
                                 ]}""" else """{"cascadeId":"$id","files":[]}"""
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"},"runningTasks":${if (taskFixture) runningTasksJson() else "[]"}}"""
+                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"toolName":"mcp__review__ask_question","title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"},"runningTasks":${if (taskFixture) runningTasksJson() else "[]"}}"""
                                 path.startsWith("/api/v1/files/content") -> JSONObject()
                                     .put("uri", "file:///test/plan.md")
                                     .put("filename", "plan.md")

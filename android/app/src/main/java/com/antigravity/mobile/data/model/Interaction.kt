@@ -16,6 +16,7 @@ data class PendingInteraction(
     val type: String = "",
     val trajectoryId: String = "",
     val stepIndex: Int = 0,
+    val toolName: String = "",
     val title: String = "",
     val target: String = "",
     val action: String = "",

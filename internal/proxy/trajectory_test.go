@@ -300,6 +300,9 @@ func TestParseTrajectoryDetails_PendingInteraction(t *testing.T) {
 				{
 					"type": "CORTEX_STEP_TYPE_GENERIC",
 					"status": "CORTEX_STEP_STATUS_WAITING",
+					"metadata": {
+						"toolCall": { "id": "tool-1", "name": "mcp__filesystem__read_file" }
+					},
 					"requestedInteraction": {
 						"permission": {
 							"resource": {
@@ -334,6 +337,9 @@ func TestParseTrajectoryDetails_PendingInteraction(t *testing.T) {
 	}
 	if pi.Target != "/Applications/ego lite.app/SKILL.md" {
 		t.Errorf("expected target '/Applications/ego lite.app/SKILL.md', got %q", pi.Target)
+	}
+	if pi.ToolName != "mcp__filesystem__read_file" {
+		t.Errorf("expected source tool name, got %q", pi.ToolName)
 	}
 	if len(pi.Options) != 5 {
 		t.Errorf("expected 5 options, got %d", len(pi.Options))

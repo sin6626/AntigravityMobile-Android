@@ -122,6 +122,11 @@ fun InteractionPanel(
             .padding(16.dp),
     ) {
         Text(interaction.title.ifBlank { "需要你的选择" }, color = Ink, fontSize = 17.sp)
+        if (interaction.toolName.isNotBlank()) {
+            Spacer(Modifier.height(5.dp))
+            Text("来源工具：${interaction.toolName}", color = AccentBlue, fontSize = 13.sp,
+                maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
         if (interaction.description.isNotBlank()) {
             Spacer(Modifier.height(7.dp))
             Text(interaction.description, color = SecondaryInk, fontSize = 14.sp)
