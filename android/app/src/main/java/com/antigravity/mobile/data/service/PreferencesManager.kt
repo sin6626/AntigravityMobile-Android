@@ -12,9 +12,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.UUID
+
+data class StoredDraftFile(val file: File, val displayName: String, val mimeType: String, val size: Long)
+
+@Serializable
+private data class DraftFileMetadata(val name: String, val displayName: String, val mimeType: String, val size: Long)
 
 class PreferencesManager(context: Context) {
     private val appContext = context.applicationContext
@@ -388,7 +394,7 @@ class PreferencesManager(context: Context) {
 
     fun hasDraft(cascadeId: String): Boolean {
         if (cascadeId.isBlank()) return false
-        return getDraftText(cascadeId).isNotBlank() || hasDraftImages(cascadeId)
+        return getDraftText(cascadeId).isNotBlank() || hasDraftImages(cascadeId) || loadDraftFile(cascadeId) != null
     }
 
     private val draftImageDirectory: File get() = File(appContext.noBackupFilesDir, "android_draft_images")
@@ -452,6 +458,63 @@ class PreferencesManager(context: Context) {
 
     fun hasDraftImages(cascadeId: String): Boolean = loadDraftImages(cascadeId).isNotEmpty()
 
+    private val draftFileDirectory: File get() = File(appContext.noBackupFilesDir, "android_draft_files")
+
+    fun storeDraftFile(bytes: ByteArray, displayName: String, mimeType: String): StoredDraftFile {
+        require(bytes.isNotEmpty() && bytes.size <= 8 * 1024 * 1024) { "文件大小无效" }
+        require(displayName.isNotBlank() && displayName.length <= 255 && mimeType.isNotBlank()) { "文件信息无效" }
+        val directory = draftFileDirectory.apply { mkdirs() }
+        cleanupUnusedDraftFiles()
+        check(directory.listFiles().orEmpty().sumOf { it.length() } + bytes.size <= 64L * 1024 * 1024) {
+            "文件草稿空间已满，请先发送或移除文件"
+        }
+        val file = File(directory, "${UUID.randomUUID()}.bin")
+        try { file.writeBytes(bytes) } catch (error: Exception) { file.delete(); throw error }
+        return StoredDraftFile(file, displayName, mimeType, bytes.size.toLong())
+    }
+
+    fun saveDraftFile(cascadeId: String, value: StoredDraftFile?) {
+        if (value == null) {
+            clearDraftFile(cascadeId)
+            return
+        }
+        require(value.file.parentFile?.canonicalFile == draftFileDirectory.canonicalFile &&
+            value.file.name.matches(Regex("[a-f0-9-]{36}\\.bin")))
+        val previous = loadDraftFile(cascadeId)?.file
+        val metadata = DraftFileMetadata(value.file.name, value.displayName, value.mimeType, value.size)
+        prefs.edit().putString(KEY_DRAFT_FILE_PREFIX + cascadeId, draftJson.encodeToString(metadata)).apply()
+        if (previous != null && previous != value.file) deleteUnusedDraftFile(previous)
+    }
+
+    fun loadDraftFile(cascadeId: String): StoredDraftFile? {
+        val raw = prefs.getString(KEY_DRAFT_FILE_PREFIX + cascadeId, null) ?: return null
+        val metadata = try { draftJson.decodeFromString<DraftFileMetadata>(raw) } catch (_: Exception) { return null }
+        if (!metadata.name.matches(Regex("[a-f0-9-]{36}\\.bin")) || metadata.displayName.isBlank() ||
+            metadata.mimeType.isBlank() || metadata.size !in 1..8L * 1024 * 1024) return null
+        val file = File(draftFileDirectory, metadata.name)
+        return file.takeIf { it.isFile && it.length() == metadata.size }
+            ?.let { StoredDraftFile(it, metadata.displayName, metadata.mimeType, metadata.size) }
+    }
+
+    fun clearDraftFile(cascadeId: String) {
+        val file = loadDraftFile(cascadeId)?.file
+        prefs.edit().remove(KEY_DRAFT_FILE_PREFIX + cascadeId).apply()
+        if (file != null) deleteUnusedDraftFile(file)
+    }
+
+    fun deleteUnusedDraftFile(file: File) {
+        if (file.parentFile?.canonicalFile != draftFileDirectory.canonicalFile ||
+            !file.name.matches(Regex("[a-f0-9-]{36}\\.bin"))) return
+        val referenced = prefs.all.keys.filter { it.startsWith(KEY_DRAFT_FILE_PREFIX) }
+            .any { loadDraftFile(it.removePrefix(KEY_DRAFT_FILE_PREFIX))?.file?.name == file.name }
+        if (!referenced) file.delete()
+    }
+
+    private fun cleanupUnusedDraftFiles() {
+        val expired = System.currentTimeMillis() - 24 * 60 * 60 * 1000L
+        draftFileDirectory.listFiles().orEmpty().filter { it.lastModified() < expired }.forEach(::deleteUnusedDraftFile)
+    }
+
     private val draftJson = JsonConfig.instance
 
     fun getLocalDraftSessions(): List<LocalDraftSession> {
@@ -497,15 +560,16 @@ class PreferencesManager(context: Context) {
         saveLocalDraftSessions(currentList)
         clearDraftText(id)
         clearDraftImages(id)
+        clearDraftFile(id)
     }
 
     fun loadLocalDraftConversations(): List<ConversationItem> {
         val sessions = getLocalDraftSessions()
         return sessions.mapNotNull { session ->
             val text = getDraftText(session.id).ifBlank { session.draftText }
-            val hasImages = hasDraftImages(session.id)
-            if (text.isBlank() && !hasImages) return@mapNotNull null
-            session.copy(draftText = text).toConversationItem(hasImages = hasImages)
+            val hasAttachments = hasDraftImages(session.id) || loadDraftFile(session.id) != null
+            if (text.isBlank() && !hasAttachments) return@mapNotNull null
+            session.copy(draftText = text).toConversationItem(hasImages = hasAttachments)
         }.sortedByDescending { it.lastModifiedEpochMs }
     }
 
@@ -575,6 +639,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_LAST_VIEW_PREFIX = "ag_last_view_"
         private const val KEY_DRAFT_TEXT_PREFIX = "ag_draft_text_"
         private const val KEY_DRAFT_IMAGES_PREFIX = "android_draft_images_"
+        private const val KEY_DRAFT_FILE_PREFIX = "android_draft_file_"
         private const val KEY_CACHED_PROJECTS = "cached_projects_json"
         private const val KEY_CACHED_CONVERSATIONS = "cached_conversations_json"
         private const val KEY_DRAFT_SESSIONS = "cached_draft_sessions_json"

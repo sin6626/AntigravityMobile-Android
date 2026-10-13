@@ -32,12 +32,19 @@ type CascadeMessageItem struct {
 	ToolNames    []string            `json:"toolNames,omitempty"`
 	Media        []string            `json:"media,omitempty"`     // Base64 thumbnails
 	ImageURLs    []string            `json:"imageUrls,omitempty"` // Markdown image URLs
+	Attachments  []MessageAttachment `json:"attachments,omitempty"`
 	Title        string              `json:"title,omitempty"`
 	Duration     string              `json:"duration,omitempty"`
 	Status       string              `json:"status,omitempty"`
 	CanRevert    bool                `json:"canRevert"`
 	RevertReason string              `json:"revertReason,omitempty"`
 	Details      []CascadeStepDetail `json:"details,omitempty"`
+}
+
+type MessageAttachment struct {
+	MimeType    string `json:"mimeType"`
+	DisplayName string `json:"displayName,omitempty"`
+	URI         string `json:"uri,omitempty"`
 }
 
 type CascadeStepDetail struct {
@@ -89,11 +96,20 @@ type RevertExecuteRequest struct {
 
 // QueuedMessageItem represents a pending follow-up user message queued for execution.
 type QueuedMessageItem struct {
-	ID        string   `json:"id"`
-	Text      string   `json:"text"`
-	CreatedAt string   `json:"createdAt,omitempty"`
-	Media     []string `json:"media,omitempty"`     // Base64 thumbnails or image data
-	ImageURLs []string `json:"imageUrls,omitempty"` // Image URLs
+	ID          string             `json:"id"`
+	Text        string             `json:"text"`
+	CreatedAt   string             `json:"createdAt,omitempty"`
+	Media       []string           `json:"media,omitempty"`     // Legacy base64 thumbnails or image data
+	ImageURLs   []string           `json:"imageUrls,omitempty"` // Legacy image URLs
+	Attachments []QueuedAttachment `json:"attachments,omitempty"`
+}
+
+type QueuedAttachment struct {
+	MimeType    string `json:"mimeType"`
+	DisplayName string `json:"displayName,omitempty"`
+	InlineData  string `json:"inlineData,omitempty"`
+	URI         string `json:"uri,omitempty"`
+	Thumbnail   string `json:"thumbnail,omitempty"`
 }
 
 // RunningTaskItem represents an asynchronous background task currently running in Antigravity.
@@ -433,6 +449,7 @@ func readMetadataRequestFeedback(filePath string) bool {
 
 type TrajectoryMediaItem struct {
 	MimeType    string `json:"mimeType"`
+	DisplayName string `json:"displayName"`
 	Description string `json:"description"`
 	Thumbnail   string `json:"thumbnail"`
 	InlineData  string `json:"inlineData"`
@@ -950,6 +967,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 
 			var mediaList []string
 			var userImageURLs []string
+			var attachments []MessageAttachment
 			seenMedia := make(map[string]bool)
 			seenURL := make(map[string]bool)
 
@@ -971,13 +989,19 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 			if s.UserInput != nil {
 				if len(s.UserInput.Media) > 0 {
 					for _, m := range s.UserInput.Media {
-						if m.URI != "" {
-							addImageURL(m.URI)
-						}
-						if m.Thumbnail != "" {
-							addMedia(m.Thumbnail)
-						} else if m.InlineData != "" {
-							addMedia(m.InlineData)
+						if strings.HasPrefix(m.MimeType, "image/") {
+							if m.URI != "" {
+								addImageURL(m.URI)
+							}
+							if m.Thumbnail != "" {
+								addMedia(m.Thumbnail)
+							} else if m.InlineData != "" {
+								addMedia(m.InlineData)
+							}
+						} else if m.MimeType != "" {
+							attachments = append(attachments, MessageAttachment{
+								MimeType: m.MimeType, DisplayName: m.DisplayName, URI: m.URI,
+							})
 						}
 					}
 				}
@@ -998,7 +1022,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 			trimmed := strings.TrimSpace(text)
 			isSystemApproval := strings.HasPrefix(trimmed, "Comments on artifact URI:") || strings.Contains(trimmed, "The user has approved this document")
 
-			if (trimmed != "" && !isSystemApproval) || len(mediaList) > 0 || len(userImageURLs) > 0 {
+			if (trimmed != "" && !isSystemApproval) || len(mediaList) > 0 || len(userImageURLs) > 0 || len(attachments) > 0 {
 				stepIdx := idx
 				allMessages = append(allMessages, CascadeMessageItem{
 					ID:           fmt.Sprintf("step-%d", idx),
@@ -1012,6 +1036,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 					RevertReason: revertStepReason(rawResp, idx),
 					Media:        mediaList,
 					ImageURLs:    userImageURLs,
+					Attachments:  attachments,
 				})
 			}
 		} else if stepType == "CORTEX_STEP_TYPE_PLANNER_RESPONSE" {

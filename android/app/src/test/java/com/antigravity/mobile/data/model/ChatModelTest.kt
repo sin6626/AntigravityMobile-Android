@@ -8,7 +8,7 @@ import org.junit.Test
 class ChatModelTest {
     @Test fun accountCatalogUsesExactEnumsAndRejectsMissingPermissions() {
         val catalog = """{"userStatus":{"planStatus":{"planInfo":{"teamsTier":"PRO"}},"cascadeModelConfigData":{"clientModelConfigs":[
-            {"modelId":"available","label":"Same label","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M16"},"supportsImages":true,"allowedTiers":["PRO"]},
+            {"modelId":"available","label":"Same label","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M16"},"supportsImages":true,"supportedMimeTypes":{"application/pdf":true,"text/plain":true,"application/zip":false},"allowedTiers":["PRO"]},
             {"modelId":"restricted","label":"Same label","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M36"},"allowedTiers":["ENTERPRISE"]},
             {"modelId":"text","label":"Text","modelOrAlias":{"model":"MODEL_TEXT"}},
             {"modelId":"alias-only","label":"Alias","modelOrAlias":{"alias":"UNSPECIFIED"}},
@@ -18,6 +18,7 @@ class ChatModelTest {
         assertEquals(listOf("available", "text"), models.map { it.id })
         assertEquals("MODEL_PLACEHOLDER_M16", models.first().model)
         assertTrue(models.first().supportsImages)
+        assertEquals(setOf("application/pdf", "text/plain"), models.first().supportedMimeTypes)
         assertFalse(models.last().supportsImages)
         assertTrue(runCatching { parseChatModels(Json.parseToJsonElement(catalog.replace("\"teamsTier\":\"PRO\"", "")).jsonObject) }.isFailure)
         assertTrue(runCatching { parseChatModels(Json.parseToJsonElement("{}").jsonObject) }.isFailure)

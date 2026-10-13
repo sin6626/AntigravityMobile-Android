@@ -1,6 +1,7 @@
 package com.antigravity.mobile.ui.chat
 
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.data.model.MessageAttachment
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -24,5 +25,13 @@ class OutgoingMessageTest {
         val waitingImage = reconcileOutgoing(listOf(image), "chat", listOf(confirmed))
         assertEquals(listOf(image), waitingImage)
         assertTrue(reconcileOutgoing(waitingImage, "chat", listOf(confirmed.copy(imageUrls = listOf("/image.png")))).isEmpty())
+
+        val file = first.copy(
+            message = first.message.copy(id = "local:file", attachments = listOf(MessageAttachment("text/plain", "notes.txt"))),
+            hasAttachments = true,
+        )
+        assertEquals(listOf(file), reconcileOutgoing(listOf(file), "chat", listOf(confirmed)))
+        assertTrue(reconcileOutgoing(listOf(file), "chat", listOf(confirmed.copy(
+            attachments = listOf(MessageAttachment("text/plain", "notes.txt"))))).isEmpty())
     }
 }

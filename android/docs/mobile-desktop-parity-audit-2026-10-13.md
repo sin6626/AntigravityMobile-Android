@@ -40,7 +40,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 运行中排队消息 | Queue、Send Now、编辑和删除 | 已完成。历史/实时队列、运行中新增队列、立即发送、编辑回填、删除、失败留态和草稿恢复均已接入 | `QueuedMessagesPanel.kt`、`ChatViewModel.queueCurrentMessage`、`ChatViewModel.sendQueuedMessageNow` | 保持回归 |
 | 后台任务 | 查看任务、命令、状态并单独停止 | 已完成。历史/实时状态、摘要、命令、动态时长、单项停止、失败留态与空列表清理均已接入 | `RunningTasksPanel.kt`、`ChatViewModel.stopRunningTask`、`ApiClient.stopTask` | 保持回归 |
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 查看与导航已完成：直属子代理、状态、步骤、父子层级、进入只读轨迹和逐级返回均已接入；定向消息仍待公开调用契约 | `/gateway/subagents`、`SubagentsPanel.kt`、`ChatViewModel.openSubagent` | P0 剩定向消息协议 |
-| 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 网关契约已确认，Android UI/草稿仍缺失。2.19.1 使用 `media[].mimeType/displayName/inlineData`，发送后落盘为 `.user_uploaded` URI；模型目录动态给出 `supportedMimeTypes` | `SendUserCascadeMessage`、`ClientModelConfig.supportedMimeTypes`、`proxy.go` 文件媒体去重测试 | P0，下一项做 Android |
+| 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 已完成。文件选择、模型 MIME 校验、8 MB 单文件草稿、进程/失败恢复、普通与排队发送、文件胶囊和无障碍均已接入；使用 `media[].mimeType/displayName/inlineData` | `ChatViewModel.addFile/send`、`PreferencesManager`、`ApiClient.sendMessage`、`ClientModelConfig.supportedMimeTypes` | 保持回归；多文件/文件夹不在 2.19.1 范围 |
 | 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 缺失。发送项只有文本，没有结构化文件引用或上下文对象 | `ApiClient.kt:545-573` | P1，待协议 |
 | Planning / Fast 与审阅策略 | 2.17 已有 `/plan` 和计划审阅策略；当前文档另有 Planning / Fast 说明 | 缺失。新会话只传工作区、提示、模型和项目，没有模式或策略字段 | `ApiClient.kt:399-437` | P1，待本机枚举 |
 | 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 缺失可发现的命令菜单和上下文胶囊。纯文本是否被电脑端解析尚未验证 | `Composer` 仅普通文本输入 | P1，待协议 |
@@ -115,9 +115,12 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
    - 网关保持 50 MB 总请求上限和原样转发，并把文件 MIME、名称、URI、正文长度/前缀纳入短时去重，避免相同提示附带不同文件时误丢第二条。Android 首版采用更小的本地限制，不把网关总上限展示为单文件承诺。
 
 7. `feat(android): 支持普通文件草稿与发送`
+   - **已于 2026-10-13 完成。**
    - “图片”和“文件”继续是两个入口。文件胶囊显示类型、名称、大小、上传状态和移除操作。
    - 选择后立即做大小、格式和模型能力检查；错误在发送前说明，失败不丢文字和已选附件。
    - 第一版只开放已核实的格式。`.zip` 和文件夹属于 2.23，不进入本机 2.19.1 实现。
+   - 当前实现一次选择 1 个、单文件最多 8 MB；格式严格跟随所选模型 `supportedMimeTypes`。草稿位于应用私有 no-backup 目录，支持进程重建、发送失败和排队失败恢复。
+   - 新会话、现有会话与运行中 `deliveryStrategy=2` 都发送命名 `media`；队列响应保留 MIME/显示名/内联内容，使编辑与立即发送不会把普通文件误作图片。接口日志保留名称和 MIME、隐藏正文。
 
 8. `feat(gateway): 暴露电脑工作区上下文查询`
    - 明确文件引用对象、稳定 URI、目录范围、搜索分页和敏感路径权限。

@@ -33,10 +33,11 @@ type upstreamAgentMessage struct {
 		Value json.RawMessage `json:"value"`
 	} `json:"payload"`
 	Media []struct {
-		MimeType   string `json:"mimeType"`
-		Thumbnail  string `json:"thumbnail"`
-		InlineData string `json:"inlineData"`
-		URI        string `json:"uri"`
+		MimeType    string `json:"mimeType"`
+		DisplayName string `json:"displayName"`
+		Thumbnail   string `json:"thumbnail"`
+		InlineData  string `json:"inlineData"`
+		URI         string `json:"uri"`
 	} `json:"media,omitempty"`
 	Images []struct {
 		Base64Data string `json:"base64Data"`
@@ -723,16 +724,27 @@ func parseAgentStateQueuedMessages(state *upstreamAgentStateUpdate) []QueuedMess
 		}
 		text := extractQueuedMessageText(pam)
 		media, imageUrls := extractQueuedMessageMedia(pam)
-		if (text == "" && len(media) == 0 && len(imageUrls) == 0) || isInternalAgentMessage(false, "", nil, text) {
+		attachments := make([]QueuedAttachment, 0, len(pam.Media))
+		for _, item := range pam.Media {
+			if item.MimeType == "" || (item.InlineData == "" && item.URI == "" && item.Thumbnail == "") {
+				continue
+			}
+			attachments = append(attachments, QueuedAttachment{
+				MimeType: item.MimeType, DisplayName: item.DisplayName, InlineData: item.InlineData,
+				URI: item.URI, Thumbnail: item.Thumbnail,
+			})
+		}
+		if (text == "" && len(media) == 0 && len(imageUrls) == 0 && len(attachments) == 0) || isInternalAgentMessage(false, "", nil, text) {
 			continue
 		}
 		createdAt := parseAgentMessageTimestamp(pam.Timestamp)
 		items = append(items, QueuedMessageItem{
-			ID:        pam.ID,
-			Text:      text,
-			CreatedAt: createdAt,
-			Media:     media,
-			ImageURLs: imageUrls,
+			ID:          pam.ID,
+			Text:        text,
+			CreatedAt:   createdAt,
+			Media:       media,
+			ImageURLs:   imageUrls,
+			Attachments: attachments,
 		})
 	}
 	return items
@@ -1021,4 +1033,3 @@ func (p *Proxy) FilterQueuedMessagesAgainstTrajectory(cascadeID string, queued [
 
 	return filtered
 }
-

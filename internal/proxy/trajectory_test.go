@@ -1054,6 +1054,24 @@ func TestParseTrajectoryDetails_UserInputMediaURI(t *testing.T) {
 	}
 }
 
+func TestParseTrajectoryDetails_UserInputFileIsNotAnImage(t *testing.T) {
+	p := &Proxy{}
+	resp := &upstreamTrajectoryResp{}
+	resp.Trajectory.CascadeID = "test-cascade-file"
+	resp.Trajectory.Steps = []TrajectoryStep{{Type: "CORTEX_STEP_TYPE_USER_INPUT", UserInput: &TrajectoryUserInput{
+		UserResponse: "读取文件",
+		Media:        []TrajectoryMediaItem{{MimeType: "text/plain", DisplayName: "notes.txt", URI: "/brain/.user_uploaded/notes.txt"}},
+	}}}
+
+	msg := p.ParseTrajectoryDetails(resp).AllMessages[0]
+	if len(msg.ImageURLs) != 0 || len(msg.Media) != 0 {
+		t.Fatalf("file must not be exposed as an image: %+v", msg)
+	}
+	if len(msg.Attachments) != 1 || msg.Attachments[0].DisplayName != "notes.txt" || msg.Attachments[0].MimeType != "text/plain" {
+		t.Fatalf("file metadata changed: %+v", msg.Attachments)
+	}
+}
+
 func TestParseTrajectoryDetails_RunningStatusWithMidTurnError(t *testing.T) {
 	rawJSON := `{
 		"status": "CASCADE_RUN_STATUS_RUNNING",

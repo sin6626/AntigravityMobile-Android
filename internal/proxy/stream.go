@@ -53,7 +53,10 @@ func (p *StreamUpdatePayload) Fingerprint() string {
 			qb.WriteString(";")
 			qb.WriteString(qm.ID)
 			qb.WriteString(":")
-			qb.WriteString(fmt.Sprintf("%d:%d", len(qm.Text), len(qm.Media)))
+			qb.WriteString(fmt.Sprintf("%d:%d:%d", len(qm.Text), len(qm.Media), len(qm.Attachments)))
+			for _, attachment := range qm.Attachments {
+				qb.WriteString(":" + attachment.MimeType + ":" + attachment.DisplayName)
+			}
 		}
 		queuedKey = qb.String()
 	}

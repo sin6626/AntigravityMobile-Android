@@ -8,6 +8,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 
+data class ApiTraceMetadata(val attachments: List<Pair<String, String?>>)
+
 /** 在 Logcat 中记录每次网关调用；凭据字段只记录名称，不输出原值。 */
 class ApiTraceInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
@@ -24,6 +26,15 @@ class ApiTraceInterceptor : Interceptor {
             params.put("body", sanitize(parseJson(raw)))
         } else if (bodyLength > 128 * 1024L) {
             params.put("bodyBytes", bodyLength)
+        }
+        request.tag(ApiTraceMetadata::class.java)?.takeIf { bodyLength > 128 * 1024L }?.let { metadata ->
+            params.put("attachments", JSONObject()
+                .put("attachmentCount", metadata.attachments.size)
+                .put("items", JSONArray().also { items -> metadata.attachments.forEach { (mime, name) ->
+                    items.put(JSONObject().put("mimeType", mime)
+                        .put("displayName", name?.takeIf(String::isNotBlank) ?: JSONObject.NULL)
+                        .put("content", "[已隐藏]"))
+                } }))
         }
         val headers = JSONObject()
         request.headers.names().forEach { name ->
@@ -83,7 +94,7 @@ class ApiTraceInterceptor : Interceptor {
                 target.put(key, when {
                     isSecret(key) -> "[已隐藏]"
                     key.equals("media", ignoreCase = true) && value.opt(key) is JSONArray ->
-                        JSONObject().put("imageCount", (value.opt(key) as JSONArray).length())
+                        summarizeAttachments(value.opt(key) as JSONArray)
                     else -> sanitize(value.opt(key))
                 })
             }
@@ -93,6 +104,18 @@ class ApiTraceInterceptor : Interceptor {
         }
         else -> value
     }
+
+    private fun summarizeAttachments(items: JSONArray): JSONObject = JSONObject()
+        .put("attachmentCount", items.length())
+        .put("items", JSONArray().also { summary ->
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
+                summary.put(JSONObject()
+                    .put("mimeType", item.optString("mimeType"))
+                    .put("displayName", item.optString("displayName").ifBlank { JSONObject.NULL })
+                    .put("content", "[已隐藏]"))
+            }
+        })
 
     private fun isSecret(name: String): Boolean = name.lowercase()
         .replace("-", "")

@@ -539,13 +539,14 @@ func TestDeletedMessageTombstonesAndCacheEviction(t *testing.T) {
 func TestExtractQueuedMessageMedia(t *testing.T) {
 	// Case 1: Direct pam.Media and pam.Images
 	msg1 := upstreamAgentMessage{
-		ID: "m1",
+		ID:      "m1",
 		Content: "Direct media",
 		Media: []struct {
-			MimeType   string `json:"mimeType"`
-			Thumbnail  string `json:"thumbnail"`
-			InlineData string `json:"inlineData"`
-			URI        string `json:"uri"`
+			MimeType    string `json:"mimeType"`
+			DisplayName string `json:"displayName"`
+			Thumbnail   string `json:"thumbnail"`
+			InlineData  string `json:"inlineData"`
+			URI         string `json:"uri"`
 		}{
 			{Thumbnail: "thumb-b64-1", URI: "https://example.com/img1.png"},
 			{InlineData: "inline-b64-2"},
@@ -607,6 +608,22 @@ func TestExtractQueuedMessageMedia(t *testing.T) {
 	}
 	if len(urls3) != 1 || urls3[0] != "http://img.png" {
 		t.Errorf("expected 1 nested url, got %+v", urls3)
+	}
+}
+
+func TestParseAgentStateQueuedMessagesPreservesFileMetadata(t *testing.T) {
+	var state upstreamAgentStateUpdate
+	err := json.Unmarshal([]byte(`{"update":{"pendingAgentMessages":[{"id":"file-1","content":"Read it","deliveryStrategy":2,"media":[{"mimeType":"text/plain","displayName":"notes.txt","inlineData":"SEVMTE8="}]}]}}`), &state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := parseAgentStateQueuedMessages(&state)
+	if len(items) != 1 || len(items[0].Attachments) != 1 {
+		t.Fatalf("expected one queued file attachment, got %+v", items)
+	}
+	attachment := items[0].Attachments[0]
+	if attachment.MimeType != "text/plain" || attachment.DisplayName != "notes.txt" || attachment.InlineData != "SEVMTE8=" {
+		t.Fatalf("file metadata changed: %+v", attachment)
 	}
 }
 
@@ -821,5 +838,3 @@ func TestFilterQueuedMessagesAgainstTrajectory_ShortCommandPreserved(t *testing.
 		t.Errorf("expected short command '继续' to remain queued, got %+v", filtered[0])
 	}
 }
-
-

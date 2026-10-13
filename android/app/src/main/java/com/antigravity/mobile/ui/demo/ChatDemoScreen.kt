@@ -182,7 +182,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val filePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        uri?.let { viewModel.addImages(listOf(it)) }
+        uri?.let(viewModel::addFile)
     }
     val unsupported: () -> Unit = {
         scope.launch { snackbar.showSnackbar("已支持文字和图片，语音功能暂未开放") }
@@ -617,6 +617,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             activeConversation = state.selectedConversationId != null,
                             draft = state.draft,
                             attachments = state.attachments,
+                            fileAttachment = state.fileAttachment,
                             onDraftChange = viewModel::setDraft,
                             onTakePhoto = {
                                 if (state.busyQueuedMessageIds.isEmpty()) {
@@ -633,10 +634,11 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             },
                             onPickFile = {
                                 if (state.busyQueuedMessageIds.isEmpty()) {
-                                    filePicker.launch(arrayOf("image/jpeg", "image/png", "image/webp", "image/gif"))
+                                    filePicker.launch(arrayOf("*/*"))
                                 }
                             },
                             onRemoveImage = viewModel::removeImage,
+                            onRemoveFile = viewModel::removeFile,
                             onSend = viewModel::send,
                             isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
                                 state.busyQueuedMessageIds.isNotEmpty() || state.selectedConversationId in state.busyConversations,

@@ -9,7 +9,7 @@
 
 - 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
 - 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
-- 方案 Artifact 审阅、多选问答、排队消息、后台任务和子代理查看/导航现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的半成品包括：配额与文件下载已有客户端或网关接口，但缺少 Android 完整入口；普通文件发送协议尚未确认，当前加号菜单的“文件”仍只读取 JPEG/PNG/WebP/GIF。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航和普通文件发送现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的半成品包括：电脑工作区上下文、文件下载/分享与配额已有部分接口但缺少 Android 完整入口。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
 - 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
 
 ### 2026-10-13 待审方案与继续执行
@@ -51,12 +51,21 @@
 - 本机 2.19.1 protobuf 确认 `SendUserCascadeMessageRequest.media` 使用公共 `Media`，普通文件字段为 `mimeType/displayName/inlineData`；没有独立 `files` 数组。模型的 `supportedMimeTypes` 显式列出 PDF、文本、JSON、Markdown、CSV、音频和 Office 等允许格式。
 - 58901 隔离真实会话发送 `text/plain` 小文件后，轨迹原样读回 MIME 与显示名称，并把内联正文安全落盘成 `.user_uploaded/uploaded_media_*.txt` URI；两次诊断会话均已删除。上游单文件和多文件极限未公开，Android 首版只做单个小文件并按模型目录校验。
 - 网关原本只把文字和 `images` 纳入 15 秒去重，同一句提示附带不同普通文件可能误丢后发请求。现已把 `media` 的 MIME、显示名、URI、正文长度和内容前缀加入哈希，同时测试模型重写后 `media` 三字段原样转发。50 MB 总请求上限保持不变。
-- 新网关已部署到 58900/PID 45080 和 58901/PID 22892；本地、模拟器和公网健康检查均为 200，新 Cloudflare PID 20508 提供公网连接，旧连接器已停止。
+- 该契约确认阶段的网关曾部署到 58900/PID 45080 和 58901/PID 22892；当前进程见下方 Android 普通文件功能记录。
+
+### 2026-10-13 Android 普通文件草稿与发送
+
+- 加号菜单保持“拍照 / 图片 / 文件”三个清晰入口；文件使用系统 `OpenDocument(*/*)`，Android 从当前模型目录读取 `supportedMimeTypes`，选择时和发送时都校验 MIME。首版一次 1 个、单文件不超过 8 MB；空文件、未知格式、不支持格式和第二个文件都在发送前给出具体说明。
+- 文件复制到 `noBackupFilesDir/android_draft_files`，草稿只保存受控 UUID 文件名与显示名/MIME/大小。会话切换、进程重建、发送失败和运行中排队失败均能恢复；删除只处理校验过的单个私有文件。图片仍沿用原 4 张与独立预览，不把文件当图片解码。
+- 输入框使用原生圆角文件胶囊显示图标、完整文件名、大小和 MIME，带 48 dp 移除区与 TalkBack 描述；出现/移除沿用输入框 180 ms 高度/透明度过渡。真实模拟器截图在 `.verification/2026-10-13/files/file-attachment-draft.png`，无需新增切图资源。
+- `SendUserCascadeMessage` 对普通文件只发送 `media[].mimeType/displayName/inlineData`，没有伪造 `files` 数组；新会话、现有会话与 `deliveryStrategy=2` 排队均走同一字段。队列响应新增结构化附件元数据，编辑/立即发送会在删除上游队列项前确认文件可恢复，避免数据丢失。
+- `ApiTraceInterceptor` 对小/大请求都记录附件数量、MIME 与显示名，`inlineData/base64Data` 始终显示为“已隐藏”。模型解析、草稿恢复、普通发送、运行中排队、载荷字段和 Go 队列元数据测试均通过；原生测试同时发现并修复“新会话仅文件时错误走纯文本创建”的分支。
+- 同一源码已部署到 58900/PID 44764 与 58901/PID 39684，SHA256 为 `F41DCD08C2D3C189DE72A0B21721E2D2A6CB4FCF567ADDF58BBFBA936FFE726F`。主公网 Cloudflare PID 38868；58901 明确设置 `CF_TUNNEL_ENABLED=false`，沿用隔离数据和既有配对。本地、模拟器和公网健康均为 200，真实 Android 鉴权、模型、会话、子代理和项目接口均返回 200。
 
 ### 2026-10-13 按用户要求修正附件菜单命名
 
 - 用户指出“照片”和“图片文件”造成重复感，明确要求第二项为“图片”、第三项保留“文件”。现菜单为“拍照 / 图片 / 文件”，取消上一轮把能力限制写入入口名称的做法，保留布局、图标、阴影、开合动画与原选择器行为。
-- 图片入口走PickMultipleVisualMedia系统图库；文件入口走OpenDocument系统文件管理器，当前上传仍仅JPEG/PNG/WebP/GIF，普通文件上传未接入，已向用户说明。不能把文件管理器入口改名当作通用文件能力完成。
+- 当时图片入口走 PickMultipleVisualMedia，文件入口仍只复用图片读取；该历史限制已由上面的“Android 普通文件草稿与发送”后续功能替代。
 - Debug应用/测试包构建通过，原菜单连续开合/反转/退出禁止操作及关闭动画检查同步名称后2项通过13.157秒。真实模拟器确认三项文案，图片打开com.google.android.photopicker，文件打开com.google.android.documentsui，两次均取消回到原聊天，未选择或发送附件。最新包已安装；截图与日志在.verification/2026-10-13/menu-labels/。
 
 ### 2026-10-13 图片缩放连续动效与最终回归

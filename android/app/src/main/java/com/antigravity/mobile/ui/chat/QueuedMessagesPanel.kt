@@ -94,17 +94,21 @@ fun QueuedMessagesPanel(
                             .animateContentSize(tween(180)).padding(horizontal = 12.dp, vertical = 10.dp),
                     ) {
                         Text(
-                            message.text.ifBlank { "图片消息" },
+                            message.text.ifBlank { message.attachments?.firstOrNull()?.displayName ?: "附件消息" },
                             color = Ink,
                             fontSize = 15.sp,
                             lineHeight = 21.sp,
                             maxLines = 4,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        val attachmentCount = maxOf(message.media.orEmpty().size, message.imageUrls.orEmpty().size)
+                        val attachmentCount = maxOf(message.media.orEmpty().size, message.imageUrls.orEmpty().size,
+                            message.attachments.orEmpty().size)
                         if (attachmentCount > 0) {
                             Spacer(Modifier.height(4.dp))
-                            Text("$attachmentCount 张图片", color = SecondaryInk, fontSize = 12.sp)
+                            val fileNames = message.attachments.orEmpty().filterNot { it.mimeType.startsWith("image/") }
+                                .mapNotNull { it.displayName }.joinToString("、")
+                            Text(fileNames.ifBlank { "$attachmentCount 个附件" }, color = SecondaryInk, fontSize = 12.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Spacer(Modifier.height(6.dp))
                         if (busy) {
@@ -140,7 +144,7 @@ private fun QueueAction(
 ) {
     Box(
         modifier.heightIn(min = 48.dp)
-            .semantics { contentDescription = "$label ${message.text.ifBlank { "图片消息" }}" }
+            .semantics { contentDescription = "$label ${message.text.ifBlank { message.attachments?.firstOrNull()?.displayName ?: "附件消息" }}" }
             .quietClickable(shape = RoundedCornerShape(12.dp)) { action(message) },
         contentAlignment = Alignment.Center,
     ) {

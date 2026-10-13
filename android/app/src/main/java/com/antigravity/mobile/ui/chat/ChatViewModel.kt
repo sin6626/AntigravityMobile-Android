@@ -2,6 +2,7 @@ package com.antigravity.mobile.ui.chat
 
 import android.app.Application
 import android.net.Uri
+import android.provider.OpenableColumns
 import android.util.Base64
 import android.webkit.MimeTypeMap
 import coil.ImageLoader
@@ -20,10 +21,12 @@ import com.antigravity.mobile.data.model.SubagentItem
 import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.model.ChatModel
+import com.antigravity.mobile.data.model.MessageAttachment
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
 import com.antigravity.mobile.data.service.PreferencesManager
+import com.antigravity.mobile.data.service.StoredDraftFile
 import com.antigravity.mobile.data.service.StreamWebSocketClient
 import com.antigravity.mobile.data.service.ConnectionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -96,6 +99,7 @@ data class ChatUiState(
     val outgoing: List<OutgoingMessage> = emptyList(),
     val draft: String = "",
     val attachments: List<PendingImage> = emptyList(),
+    val fileAttachment: PendingFile? = null,
     val isRestoringDraft: Boolean = false,
     val error: String? = null,
     val messagesError: String? = null,
@@ -106,12 +110,14 @@ data class ChatUiState(
 )
 
 data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String, val sourceUri: Uri = uri)
+data class PendingFile(val uri: Uri, val bytes: ByteArray, val mimeType: String, val displayName: String, val size: Long)
 
 data class OutgoingMessage(
     val conversationId: String,
     val message: GatewayMessageItem,
     val knownUserIds: Set<String>,
     val afterStepIndex: Int? = null,
+    val hasAttachments: Boolean = false,
 )
 
 // The gateway does not echo X-Client-Message-Id in history; only match newly observed user steps.
@@ -127,8 +133,9 @@ internal fun reconcileOutgoing(
             val index = candidates.indexOfFirst {
                 it.id !in pending.knownUserIds && it.effectiveText == pending.message.effectiveText &&
                     (pending.afterStepIndex == null || (it.stepIndex ?: -1) > pending.afterStepIndex) &&
-                    (pending.message.imageDataList.isEmpty() ||
-                        !it.media.isNullOrEmpty() || !it.imageUrls.isNullOrEmpty() || it.imageDataList.isNotEmpty())
+                    (!(pending.hasAttachments || pending.message.imageDataList.isNotEmpty()) ||
+                        !it.media.isNullOrEmpty() || !it.imageUrls.isNullOrEmpty() || it.imageDataList.isNotEmpty() ||
+                        !it.attachments.isNullOrEmpty())
             }
             if (index >= 0) confirmedIds += candidates.removeAt(index).id
             if (index >= 0) null else pending
@@ -147,6 +154,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private var draftKey = NEW_CHAT_DRAFT
     private val draftAttachments = mutableMapOf<String, List<PendingImage>>()
+    private val draftFiles = mutableMapOf<String, PendingFile?>()
     private var conversationVisit = 0L
     private var revertPreviewVisit = 0L
     private var messagesRevision = 0L
@@ -171,10 +179,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             prefs.setDraftText(target, listOf(prefs.getDraftText(PENDING_SEND_DRAFT), prefs.getDraftText(target))
                 .filter { it.isNotEmpty() }.distinct().joinToString("\n\n"))
             prefs.saveDraftImages(target, (prefs.loadDraftImages(PENDING_SEND_DRAFT) + prefs.loadDraftImages(target)).distinct().take(4))
+            prefs.loadDraftFile(PENDING_SEND_DRAFT)?.let { prefs.saveDraftFile(target, it) }
             clearSendSnapshot()
         }
         _state.value = _state.value.copy(draft = prefs.getDraftText(NEW_CHAT_DRAFT))
-        restoreDraftImages(NEW_CHAT_DRAFT)
+        restoreDraftAttachments(NEW_CHAT_DRAFT)
         if (prefs.isPaired()) {
             val cachedModels = runCatching {
                 Json.decodeFromString<List<ChatModel>>(prefs.cachedModelsJson ?: "[]")
@@ -247,24 +256,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun switchDraft(key: String) {
         prefs.setDraftText(draftKey, _state.value.draft)
         if (!_state.value.isRestoringDraft) draftAttachments[draftKey] = _state.value.attachments
+        if (!_state.value.isRestoringDraft) draftFiles[draftKey] = _state.value.fileAttachment
         draftRestoreJob?.cancel()
         draftKey = key
-        _state.value = _state.value.copy(draft = prefs.getDraftText(key), attachments = draftAttachments[key].orEmpty())
-        restoreDraftImages(key)
+        _state.value = _state.value.copy(
+            draft = prefs.getDraftText(key),
+            attachments = draftAttachments[key].orEmpty(),
+            fileAttachment = draftFiles[key],
+        )
+        restoreDraftAttachments(key)
     }
 
-    private fun restoreDraftImages(key: String) {
-        _state.value = _state.value.copy(isRestoringDraft = key !in draftAttachments && prefs.draftImageCount(key) > 0)
+    private fun restoreDraftAttachments(key: String) {
+        val needsImages = key !in draftAttachments && prefs.draftImageCount(key) > 0
+        val needsFile = key !in draftFiles && prefs.loadDraftFile(key) != null
+        _state.value = _state.value.copy(isRestoringDraft = needsImages || needsFile)
         if (_state.value.isRestoringDraft) draftRestoreJob = viewModelScope.launch {
-            val images = withContext(Dispatchers.IO) { prefs.loadDraftImages(key).mapNotNull { file ->
-                try { PendingImage(Uri.fromFile(file), file.readBytes(),
-                    checkNotNull(MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension))) }
-                catch (_: Exception) { null }
-            } }
+            val (images, fileAttachment) = withContext(Dispatchers.IO) {
+                val restoredImages = prefs.loadDraftImages(key).mapNotNull { file ->
+                    try { PendingImage(Uri.fromFile(file), file.readBytes(),
+                        checkNotNull(MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension))) }
+                    catch (_: Exception) { null }
+                }
+                val restoredFile = prefs.loadDraftFile(key)?.let { stored ->
+                    try { PendingFile(Uri.fromFile(stored.file), stored.file.readBytes(), stored.mimeType, stored.displayName, stored.size) }
+                    catch (_: Exception) { null }
+                }
+                restoredImages to restoredFile
+            }
             if (draftKey != key) return@launch
             draftAttachments[key] = images
-            _state.value = _state.value.copy(attachments = images, isRestoringDraft = false,
-                error = if (images.size < prefs.draftImageCount(key)) "部分图片草稿无法读取，请重新选择图片" else _state.value.error)
+            draftFiles[key] = fileAttachment
+            _state.value = _state.value.copy(attachments = images, fileAttachment = fileAttachment, isRestoringDraft = false,
+                error = when {
+                    images.size < prefs.draftImageCount(key) -> "部分图片草稿无法读取，请重新选择图片"
+                    needsFile && fileAttachment == null -> "文件草稿无法读取，请重新选择文件"
+                    else -> _state.value.error
+                })
         }
     }
 
@@ -274,10 +302,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         else prefs.saveDraftImages(key, images.map { File(checkNotNull(it.uri.path)) })
     }
 
+    private fun saveFile(key: String, file: PendingFile?) {
+        draftFiles[key] = file
+        prefs.saveDraftFile(key, file?.let { StoredDraftFile(File(checkNotNull(it.uri.path)), it.displayName, it.mimeType, it.size) })
+    }
+
     private fun clearSendSnapshot() {
         prefs.pendingSendTarget = null
         prefs.clearDraftText(PENDING_SEND_DRAFT)
         prefs.clearDraftImages(PENDING_SEND_DRAFT)
+        prefs.clearDraftFile(PENDING_SEND_DRAFT)
     }
 
     private fun moveDraft(from: String, to: String) {
@@ -288,14 +322,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val sourceImages = if (active) _state.value.attachments else draftAttachments[from].orEmpty()
         val targetImages = if (draftKey == to) _state.value.attachments else draftAttachments[to].orEmpty()
         val images = (sourceImages + targetImages).distinctBy { it.uri }
+        val sourceFile = if (active) _state.value.fileAttachment else draftFiles[from] ?: prefs.loadDraftFile(from)?.toPendingFile()
+        val targetFile = if (draftKey == to) _state.value.fileAttachment else draftFiles[to] ?: prefs.loadDraftFile(to)?.toPendingFile()
+        val file = sourceFile ?: targetFile
         prefs.setDraftText(to, text)
         saveImages(to, images)
+        saveFile(to, file)
         prefs.clearDraftText(from)
         prefs.clearDraftImages(from)
+        prefs.clearDraftFile(from)
         draftAttachments.remove(from)
+        draftFiles.remove(from)
         if (active) draftKey = to
-        if (draftKey == to) _state.value = _state.value.copy(draft = text, attachments = images)
+        if (draftKey == to) _state.value = _state.value.copy(draft = text, attachments = images, fileAttachment = file)
     }
+
+    private fun StoredDraftFile.toPendingFile() = try {
+        PendingFile(Uri.fromFile(file), file.readBytes(), mimeType, displayName, size)
+    } catch (_: Exception) { null }
+
+    private fun PendingFile.toStoredDraftFile() =
+        StoredDraftFile(File(checkNotNull(uri.path)), displayName, mimeType, size)
 
     fun addImages(uris: List<Uri>) {
         val key = draftKey
@@ -326,6 +373,84 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(attachments = _state.value.attachments.filterNot { it.uri == uri })
         saveImages(draftKey, _state.value.attachments)
         uri.path?.let { prefs.deleteUnusedDraftImage(File(it)) }
+    }
+
+    fun addFile(uri: Uri) {
+        val key = draftKey
+        val model = selectedModel()
+        if (model == null) {
+            _state.value = _state.value.copy(error = _state.value.modelsError ?: "请等待模型列表加载完成后重试")
+            refreshModels()
+            return
+        }
+        if (_state.value.fileAttachment != null || prefs.loadDraftFile(PENDING_SEND_DRAFT) != null) {
+            _state.value = _state.value.copy(error = "一次最多添加 1 个文件，请先发送或移除当前文件")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) { readFile(uri, model.supportedMimeTypes) }
+                if (draftKey != key || _state.value.fileAttachment != null) {
+                    prefs.deleteUnusedDraftFile(File(checkNotNull(file.uri.path)))
+                    return@launch
+                }
+                _state.value = _state.value.copy(fileAttachment = file)
+                saveFile(key, file)
+            } catch (error: Exception) {
+                if (draftKey == key) _state.value = _state.value.copy(error = error.message ?: "读取文件失败")
+            }
+        }
+    }
+
+    fun removeFile() {
+        val file = _state.value.fileAttachment ?: return
+        _state.value = _state.value.copy(fileAttachment = null)
+        saveFile(draftKey, null)
+        file.uri.path?.let { prefs.deleteUnusedDraftFile(File(it)) }
+    }
+
+    private fun selectedModel(): ChatModel? {
+        val state = _state.value
+        val modelId = state.modelOverrideId ?: if (state.selectedConversationId == null) state.selectedModelId else state.activeModelId
+        return state.models.firstOrNull { it.id == modelId || it.model == modelId }
+    }
+
+    private fun readFile(uri: Uri, supportedMimeTypes: Set<String>): PendingFile {
+        val resolver = getApplication<Application>().contentResolver
+        var displayName = ""
+        var reportedSize: Long? = null
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                displayName = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME).takeIf { it >= 0 }
+                    ?.let(cursor::getString).orEmpty()
+                reportedSize = cursor.getColumnIndex(OpenableColumns.SIZE).takeIf { it >= 0 && !cursor.isNull(it) }
+                    ?.let(cursor::getLong)
+            }
+        }
+        if (displayName.isBlank()) displayName = uri.lastPathSegment?.substringAfterLast('/')?.take(255).orEmpty()
+        require(displayName.isNotBlank()) { "无法读取文件名" }
+        require((reportedSize ?: 1L) in 1..8L * 1024 * 1024) { "单个文件不能超过 8 MB" }
+        val extensionMime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(displayName.substringAfterLast('.', "").lowercase())
+        val reportedMime = resolver.getType(uri)?.substringBefore(';')?.lowercase()
+        val mime = reportedMime?.takeUnless { it == "application/octet-stream" } ?: extensionMime ?: reportedMime
+            ?: throw IllegalArgumentException("无法识别文件格式，请选择带有标准扩展名的文件")
+        require(supportedMimeTypes.isNotEmpty()) { "当前模型没有公布文件格式能力，请切换模型后重试" }
+        require(mime in supportedMimeTypes) { "当前模型不支持 $mime 文件，请切换模型或选择其他文件" }
+        val input = resolver.openInputStream(uri) ?: throw IllegalArgumentException("无法读取所选文件")
+        val output = ByteArrayOutputStream()
+        input.use { source ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = source.read(buffer)
+                if (count < 0) break
+                if (output.size() + count > 8 * 1024 * 1024) throw IllegalArgumentException("单个文件不能超过 8 MB")
+                output.write(buffer, 0, count)
+            }
+        }
+        val bytes = output.toByteArray()
+        require(bytes.isNotEmpty()) { "不能发送空文件" }
+        val stored = prefs.storeDraftFile(bytes, displayName.take(255), mime)
+        return PendingFile(Uri.fromFile(stored.file), bytes, mime, stored.displayName, stored.size)
     }
 
     private fun readImage(uri: Uri): PendingImage {
@@ -529,6 +654,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _state.value = current.copy(error = "这个模型不支持图片，请先移除图片")
             return
         }
+        if (current.fileAttachment?.mimeType?.let { it !in model.supportedMimeTypes } == true) {
+            _state.value = current.copy(error = "这个模型不支持当前文件，请先移除文件")
+            return
+        }
         if (current.selectedConversationId == null) {
             prefs.selectedModelId = id
             _state.value = current.copy(selectedModelId = id)
@@ -659,9 +788,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         switchDraft(NEW_CHAT_DRAFT)
         prefs.clearDraftText(NEW_CHAT_DRAFT)
         prefs.clearDraftImages(NEW_CHAT_DRAFT)
+        prefs.clearDraftFile(NEW_CHAT_DRAFT)
         draftRestoreJob?.cancel()
         draftAttachments.remove(NEW_CHAT_DRAFT)
-        _state.value = _state.value.copy(draft = "", attachments = emptyList(), isRestoringDraft = false)
+        draftFiles.remove(NEW_CHAT_DRAFT)
+        _state.value = _state.value.copy(draft = "", attachments = emptyList(), fileAttachment = null, isRestoringDraft = false)
     }
 
     fun closeConversation() {
@@ -701,7 +832,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.isRestoringDraft) return
         val text = _state.value.draft.trim()
         val images = _state.value.attachments
-        if ((text.isEmpty() && images.isEmpty()) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
+        val file = _state.value.fileAttachment
+        if ((text.isEmpty() && images.isEmpty() && file == null) || _state.value.isSending || _state.value.isLoadingMessages || _state.value.isStopping || _state.value.isReverting || _state.value.selectedConversationId in _state.value.busyConversations) return
         val id = _state.value.selectedConversationId
         val modelId = _state.value.modelOverrideId ?: if (id == null) _state.value.selectedModelId else _state.value.activeModelId
         val model = _state.value.models.firstOrNull { it.id == modelId || it.model == modelId }
@@ -713,35 +845,43 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             _state.value = _state.value.copy(error = "这个模型不支持图片，请选择支持图片的模型")
             return
         }
+        if (file != null && (model == null || file.mimeType !in model.supportedMimeTypes)) {
+            _state.value = _state.value.copy(error = "当前模型不支持 ${file.mimeType} 文件，请切换模型或移除文件")
+            return
+        }
         val requestedModel = model?.model.takeIf { id == null || _state.value.modelOverrideId != null }
         val token = prefs.deviceToken
         val visit = conversationVisit
         val clientId = UUID.randomUUID().toString()
         val wasRunning = _state.value.isRunning
         if (id != null && wasRunning) {
-            queueCurrentMessage(id, text, images, requestedModel, model?.id, token, visit, clientId)
+            queueCurrentMessage(id, text, images, file, requestedModel, model?.id, token, visit, clientId)
             return
         }
         var targetId = id ?: "local:$clientId"
         val originalDraftKey = draftKey
         val pending = OutgoingMessage(targetId,
-            GatewayMessageItem(id = "local:$clientId", text = text, imageDataList = images.map { it.bytes }),
+            GatewayMessageItem(id = "local:$clientId", text = text, imageDataList = images.map { it.bytes },
+                attachments = file?.let { listOf(MessageAttachment(it.mimeType, it.displayName)) }),
             _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
-            _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull())
+            _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull(),
+            images.isNotEmpty() || file != null)
         prefs.setDraftText(PENDING_SEND_DRAFT, text)
         prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
+        prefs.saveDraftFile(PENDING_SEND_DRAFT, file?.toStoredDraftFile())
         prefs.pendingSendTarget = originalDraftKey
         setDraft("")
         saveImages(draftKey, emptyList())
-        _state.value = _state.value.copy(attachments = emptyList())
+        saveFile(draftKey, null)
+        _state.value = _state.value.copy(attachments = emptyList(), fileAttachment = null)
         if (id == null) moveDraft(originalDraftKey, targetId)
         if (id == null) conversationVisit++
         _state.value = _state.value.copy(
             selectedConversationId = targetId, outgoing = _state.value.outgoing + pending,
-            draft = "", attachments = emptyList(),
+            draft = "", attachments = emptyList(), fileAttachment = null,
             isSending = true, isRunning = true, streamingMessageId = null, error = null)
         viewModelScope.launch {
-            val result = if (id == null && images.isEmpty()) {
+            val result = if (id == null && images.isEmpty() && file == null) {
                 api.createCascade(
                     workspaceUri = "",
                     prompt = text,
@@ -763,6 +903,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             api.sendMessage(
                                 createdId, text, model = requestedModel,
                                 images = images.map { it.bytes to it.mimeType },
+                                file = file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
                                 clientMessageId = clientId,
                             ).map { createdId }
                         },
@@ -771,6 +912,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 api.sendMessage(
                     id, text, model = requestedModel, images = images.map { it.bytes to it.mimeType },
+                    file = file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
                     clientMessageId = clientId,
                 ).map { id }
             }
@@ -803,15 +945,18 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val restoredImages = if (unconfirmed) (images +
                         (if (draftKey == restoreKey) current.attachments else draftAttachments[restoreKey].orEmpty()))
                         .distinctBy { it.uri } else current.attachments
+                    val restoredFile = if (unconfirmed) file ?: if (draftKey == restoreKey) current.fileAttachment else draftFiles[restoreKey] else current.fileAttachment
                     if (unconfirmed) {
                         prefs.setDraftText(restoreKey, restoredDraft)
                         saveImages(restoreKey, restoredImages)
+                        saveFile(restoreKey, restoredFile)
                     }
                     _state.value = current.copy(
                         outgoing = current.outgoing.filterNot { it.message.id == pending.message.id },
                         selectedConversationId = if (stillHere && targetId.startsWith("local:")) null else current.selectedConversationId,
                         draft = if (draftKey == restoreKey && unconfirmed) restoredDraft else current.draft,
                         attachments = if (draftKey == restoreKey && unconfirmed) restoredImages else current.attachments,
+                        fileAttachment = if (draftKey == restoreKey && unconfirmed) restoredFile else current.fileAttachment,
                         isSending = false,
                         modelOverrideId = if (stillHere && conversationVisit == visit) null else current.modelOverrideId,
                         isRunning = if (stillHere && unconfirmed) wasRunning else current.isRunning,
@@ -827,6 +972,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         id: String,
         text: String,
         images: List<PendingImage>,
+        file: PendingFile?,
         requestedModel: String?,
         selectedModelId: String?,
         token: String?,
@@ -836,12 +982,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val key = draftKey
         prefs.setDraftText(PENDING_SEND_DRAFT, text)
         prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
+        prefs.saveDraftFile(PENDING_SEND_DRAFT, file?.toStoredDraftFile())
         prefs.pendingSendTarget = key
         setDraft("")
         saveImages(key, emptyList())
+        saveFile(key, null)
         _state.value = _state.value.copy(
             draft = "",
             attachments = emptyList(),
+            fileAttachment = null,
             isSending = true,
             queueError = null,
         )
@@ -851,6 +1000,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 text,
                 model = requestedModel,
                 images = images.map { it.bytes to it.mimeType },
+                file = file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
                 deliveryStrategy = 2,
                 clientMessageId = clientId,
             ).fold(
@@ -871,12 +1021,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     val restoredText = listOf(text, currentText).filter { it.isNotBlank() }.joinToString("\n\n")
                     val currentImages = if (draftKey == key) _state.value.attachments else draftAttachments[key].orEmpty()
                     val restoredImages = (images + currentImages).distinctBy { it.uri }
+                    val restoredFile = file ?: if (draftKey == key) _state.value.fileAttachment else draftFiles[key]
                     prefs.setDraftText(key, restoredText)
                     saveImages(key, restoredImages)
+                    saveFile(key, restoredFile)
                     if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         _state.value = _state.value.copy(
                             draft = restoredText,
                             attachments = restoredImages,
+                            fileAttachment = restoredFile,
                             isSending = false,
                             queueError = "${error.message ?: "加入队列失败"}（内容已恢复到输入框）",
                         )
@@ -964,24 +1117,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             queueError = null,
         )
         viewModelScope.launch {
-            val stagedFiles = mutableListOf<File>()
+            val stagedImages = mutableListOf<File>()
+            val stagedDocuments = mutableListOf<File>()
             var keepStagedFiles = false
             var deletedUpstream = false
-            var staged = emptyList<PendingImage>()
+            var staged = StagedQueuedAttachments()
             try {
-                staged = stageQueuedImages(message, id, stagedFiles)
+                staged = stageQueuedAttachments(message, id, stagedImages, stagedDocuments)
                 if (conversationVisit != visit || _state.value.selectedConversationId != id) return@launch
-                check(staged.size + _state.value.attachments.size <= 4) { "输入框最多保留 4 张图片，请先发送或移除部分图片" }
+                check(staged.images.size + _state.value.attachments.size <= 4) { "输入框最多保留 4 张图片，请先发送或移除部分图片" }
+                check(staged.file == null || _state.value.fileAttachment == null) { "输入框已有文件，请先发送或移除后再编辑这条消息" }
                 api.deleteAgentMessage(id, message.id).getOrThrow()
                 deletedUpstream = true
                 val latest = _state.value
                 val targetDraft = if (draftKey == id) latest.draft else prefs.getDraftText(id)
                 val targetImages = if (draftKey == id) latest.attachments else draftAttachments[id].orEmpty()
+                val targetFile = if (draftKey == id) latest.fileAttachment else draftFiles[id]
                 val text = listOf(message.text, targetDraft).filter { it.isNotBlank() }.joinToString("\n\n")
-                val images = (staged + targetImages).distinctBy { it.uri }
+                val images = (staged.images + targetImages).distinctBy { it.uri }
+                val file = staged.file ?: targetFile
                 check(images.size <= 4) { "输入框最多保留 4 张图片" }
                 prefs.setDraftText(id, text)
                 saveImages(id, images)
+                saveFile(id, file)
                 keepStagedFiles = true
                 if (latest.selectedConversationId == id && draftKey == id) {
                     _state.value = latest.copy(
@@ -990,6 +1148,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         queueError = null,
                         draft = text,
                         attachments = images,
+                        fileAttachment = file,
                     )
                 }
             } catch (error: Exception) {
@@ -997,10 +1156,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (deletedUpstream) {
                     val targetDraft = if (draftKey == id) latest.draft else prefs.getDraftText(id)
                     val targetImages = if (draftKey == id) latest.attachments else draftAttachments[id].orEmpty()
+                    val targetFile = if (draftKey == id) latest.fileAttachment else draftFiles[id]
                     val text = listOf(message.text, targetDraft).filter { it.isNotBlank() }.joinToString("\n\n")
-                    val restored = (staged + targetImages).distinctBy { it.uri }
+                    val restored = (staged.images + targetImages).distinctBy { it.uri }
+                    val file = staged.file ?: targetFile
                     prefs.setDraftText(id, text)
                     saveImages(id, restored)
+                    saveFile(id, file)
                     keepStagedFiles = true
                     if (latest.selectedConversationId == id && draftKey == id) {
                         _state.value = latest.copy(
@@ -1009,6 +1171,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             queueError = "${error.message ?: "编辑排队消息失败"}（内容已恢复到输入框）",
                             draft = text,
                             attachments = restored,
+                            fileAttachment = file,
                         )
                     }
                 } else if (conversationVisit == visit && latest.selectedConversationId == id) {
@@ -1018,7 +1181,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } finally {
-                if (!keepStagedFiles) stagedFiles.forEach(prefs::deleteUnusedDraftImage)
+                if (!keepStagedFiles) {
+                    stagedImages.forEach(prefs::deleteUnusedDraftImage)
+                    stagedDocuments.forEach(prefs::deleteUnusedDraftFile)
+                }
             }
         }
     }
@@ -1033,20 +1199,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             queueError = null,
         )
         viewModelScope.launch {
-            val stagedFiles = mutableListOf<File>()
+            val stagedImages = mutableListOf<File>()
+            val stagedDocuments = mutableListOf<File>()
             var keepStagedFiles = false
             var deletedUpstream = false
-            var staged = emptyList<PendingImage>()
+            var staged = StagedQueuedAttachments()
             try {
-                staged = stageQueuedImages(message, id, stagedFiles)
+                staged = stageQueuedAttachments(message, id, stagedImages, stagedDocuments)
                 if (conversationVisit != visit || _state.value.selectedConversationId != id) return@launch
-                check(staged.size + _state.value.attachments.size <= 4) { "输入框图片较多，无法在失败时完整恢复；请先发送或移除部分图片" }
+                check(staged.images.size + _state.value.attachments.size <= 4) { "输入框图片较多，无法在失败时完整恢复；请先发送或移除部分图片" }
+                check(staged.file == null || _state.value.fileAttachment == null) { "输入框已有文件，无法在失败时完整恢复；请先发送或移除当前文件" }
                 api.deleteAgentMessage(id, message.id).getOrThrow()
                 deletedUpstream = true
                 api.sendMessage(
                     id,
                     message.text,
-                    images = staged.map { it.bytes to it.mimeType },
+                    images = staged.images.map { it.bytes to it.mimeType },
+                    file = staged.file?.let { Triple(it.bytes, it.mimeType, it.displayName) },
                     deliveryStrategy = 1,
                     clientMessageId = UUID.randomUUID().toString(),
                 ).getOrThrow()
@@ -1065,10 +1234,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 if (deletedUpstream) {
                     val targetDraft = if (draftKey == id) latest.draft else prefs.getDraftText(id)
                     val targetImages = if (draftKey == id) latest.attachments else draftAttachments[id].orEmpty()
+                    val targetFile = if (draftKey == id) latest.fileAttachment else draftFiles[id]
                     val text = listOf(message.text, targetDraft).filter { it.isNotBlank() }.joinToString("\n\n")
-                    val images = (staged + targetImages).distinctBy { it.uri }
+                    val images = (staged.images + targetImages).distinctBy { it.uri }
+                    val file = staged.file ?: targetFile
                     prefs.setDraftText(id, text)
                     saveImages(id, images)
+                    saveFile(id, file)
                     keepStagedFiles = true
                     if (latest.selectedConversationId == id && draftKey == id) {
                         _state.value = latest.copy(
@@ -1077,6 +1249,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             queueError = "${error.message ?: "立即发送失败"}（内容已恢复到输入框）",
                             draft = text,
                             attachments = images,
+                            fileAttachment = file,
                         )
                     }
                 } else if (conversationVisit == visit && latest.selectedConversationId == id) {
@@ -1086,17 +1259,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 }
             } finally {
-                if (!keepStagedFiles) stagedFiles.forEach(prefs::deleteUnusedDraftImage)
+                if (!keepStagedFiles) {
+                    stagedImages.forEach(prefs::deleteUnusedDraftImage)
+                    stagedDocuments.forEach(prefs::deleteUnusedDraftFile)
+                }
             }
         }
     }
 
-    private suspend fun stageQueuedImages(
+    private data class StagedQueuedAttachments(
+        val images: List<PendingImage> = emptyList(),
+        val file: PendingFile? = null,
+    )
+
+    private suspend fun stageQueuedAttachments(
         message: QueuedMessageItem,
         cascadeId: String,
-        stagedFiles: MutableList<File>,
-    ): List<PendingImage> {
-        val payloads = if (!message.imageUrls.isNullOrEmpty()) {
+        stagedImages: MutableList<File>,
+        stagedDocuments: MutableList<File>,
+    ): StagedQueuedAttachments {
+        val structured = message.attachments.orEmpty()
+        val imagePayloads = if (structured.isNotEmpty()) {
+            structured.filter { it.mimeType.startsWith("image/") }.map { attachment ->
+                val encoded = attachment.inlineData?.takeIf { it.isNotBlank() }
+                    ?: attachment.thumbnail?.takeIf { it.isNotBlank() }
+                if (encoded != null) Base64.decode(encoded.substringAfter(',', encoded), Base64.DEFAULT) to attachment.mimeType
+                else attachment.uri?.takeIf { it.isNotBlank() }?.let { api.imageForDraft(it, cascadeId).getOrThrow() }
+                    ?: throw IllegalArgumentException("排队消息中的图片无法恢复，请在电脑端处理")
+            }
+        } else if (!message.imageUrls.isNullOrEmpty()) {
             message.imageUrls.distinct().map { api.imageForDraft(it, cascadeId).getOrThrow() }
         } else {
             message.media.orEmpty().distinct().map { encoded ->
@@ -1104,13 +1295,32 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 bytes to queuedImageMime(bytes)
             }
         }
-        check(payloads.size <= 4) { "排队消息包含超过 4 张图片，请在电脑端处理" }
-        return payloads.map { (bytes, mime) ->
+        check(imagePayloads.size <= 4) { "排队消息包含超过 4 张图片，请在电脑端处理" }
+        val images = imagePayloads.map { (bytes, mime) ->
             withContext(Dispatchers.IO) {
-                val file = prefs.storeDraftImage(bytes, mime).also(stagedFiles::add)
+                val file = prefs.storeDraftImage(bytes, mime).also(stagedImages::add)
                 PendingImage(Uri.fromFile(file), bytes, mime)
             }
         }
+        val document = structured.filterNot { it.mimeType.startsWith("image/") }.also {
+            check(it.size <= 1) { "排队消息包含多个文件，请在电脑端处理" }
+        }.singleOrNull()?.let { attachment ->
+            val model = selectedModel()
+            check(model != null && attachment.mimeType in model.supportedMimeTypes) {
+                "当前模型不支持 ${attachment.mimeType} 文件，请在电脑端处理"
+            }
+            val encoded = attachment.inlineData?.takeIf { it.isNotBlank() }
+                ?: throw IllegalArgumentException("排队文件正文无法恢复，请在电脑端处理")
+            val bytes = Base64.decode(encoded.substringAfter(',', encoded), Base64.DEFAULT)
+            val name = attachment.displayName?.takeIf { it.isNotBlank() }
+                ?: throw IllegalArgumentException("排队文件缺少文件名，请在电脑端处理")
+            withContext(Dispatchers.IO) {
+                val stored = prefs.storeDraftFile(bytes, name.take(255), attachment.mimeType)
+                stagedDocuments += stored.file
+                PendingFile(Uri.fromFile(stored.file), bytes, stored.mimeType, stored.displayName, stored.size)
+            }
+        }
+        return StagedQueuedAttachments(images, document)
     }
 
     private fun queuedImageMime(bytes: ByteArray): String = when {
@@ -1144,9 +1354,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         } }) {
             prefs.clearDraftText(id)
             prefs.clearDraftImages(id)
+            prefs.clearDraftFile(id)
             draftAttachments.remove(id)
+            draftFiles.remove(id)
             if (_state.value.selectedConversationId == id) {
-                _state.value = _state.value.copy(draft = "", attachments = emptyList())
+                _state.value = _state.value.copy(draft = "", attachments = emptyList(), fileAttachment = null)
                 closeConversation(); switchDraft(NEW_CHAT_DRAFT)
             }
         }

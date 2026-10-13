@@ -3,6 +3,7 @@ package com.antigravity.mobile.ui.demo
 import android.net.Uri
 import coil.compose.AsyncImage
 import com.antigravity.mobile.ui.chat.PendingImage
+import com.antigravity.mobile.ui.chat.PendingFile
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -392,12 +393,14 @@ internal fun Composer(
     activeConversation: Boolean,
     draft: String,
     attachments: List<PendingImage>,
+    fileAttachment: PendingFile? = null,
     onDraftChange: (String) -> Unit,
     onAddImage: () -> Unit = {},
     onTakePhoto: () -> Unit = {},
     onPickImage: () -> Unit = onAddImage,
     onPickFile: () -> Unit = {},
     onRemoveImage: (Uri) -> Unit,
+    onRemoveFile: () -> Unit = {},
     onSend: () -> Unit,
     isSending: Boolean,
     onUnsupported: () -> Unit,
@@ -410,10 +413,10 @@ internal fun Composer(
     modelEnabled: Boolean = true,
     inputFocusRequester: FocusRequester? = null,
 ) {
-    val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isStopping
+    val canSend = (draft.isNotBlank() || attachments.isNotEmpty() || fileAttachment != null) && !isSending && !isStopping
     var focused by remember { mutableStateOf(false) }
     var plusMenuOpen by remember { mutableStateOf(false) }
-    val expanded = focused || attachments.isNotEmpty()
+    val expanded = focused || attachments.isNotEmpty() || fileAttachment != null
     val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
     val targetCorner = if (expanded) 30.dp else 36.dp
     val horizontalPadding by animateDpAsState(
@@ -429,9 +432,13 @@ internal fun Composer(
         color = Color.White,
     ) {
         Column(Modifier.fillMaxWidth()) {
-            AnimatedVisibility(attachments.isNotEmpty(), enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
+            AnimatedVisibility(attachments.isNotEmpty() || fileAttachment != null, enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
                 exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
-                Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp)) { AttachmentTray(attachments, onRemoveImage) }
+                Column(Modifier.padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (attachments.isNotEmpty()) AttachmentTray(attachments, onRemoveImage)
+                    fileAttachment?.let { FileAttachmentChip(it, onRemoveFile) }
+                }
             }
             Row(Modifier.fillMaxWidth().animateContentSize(tween(180))
                 .heightIn(min = 58.dp).padding(horizontal = 12.dp),
@@ -603,6 +610,41 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean,
             }
         }
     }
+}
+
+@Composable
+private fun FileAttachmentChip(file: PendingFile, onRemove: () -> Unit) {
+    Surface(
+        color = Color(0xFFF4F5F7),
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().semantics {
+            contentDescription = "待发送文件，${file.displayName}，${formatFileSize(file.size)}"
+        },
+    ) {
+        Row(Modifier.heightIn(min = 58.dp).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(40.dp).background(AccentBlue.copy(alpha = .10f), RoundedCornerShape(11.dp)),
+                contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(21.dp))
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(file.displayName, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${formatFileSize(file.size)} · ${file.mimeType}", color = SecondaryInk, fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Box(Modifier.size(48.dp).semantics { contentDescription = "移除文件 ${file.displayName}" }
+                .quietClickable(CircleShape, onClick = onRemove), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Close, contentDescription = null, tint = SecondaryInk, modifier = Modifier.size(20.dp))
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String = when {
+    bytes >= 1024 * 1024 -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024 -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable

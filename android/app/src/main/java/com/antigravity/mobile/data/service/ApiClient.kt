@@ -552,6 +552,7 @@ class ApiClient(
         text: String,
         model: String? = null,
         images: List<Pair<ByteArray, String>> = emptyList(),
+        file: Triple<ByteArray, String, String>? = null,
         deliveryStrategy: Int? = null,
         clientMessageId: String? = null
     ): Result<Unit> = withContext(Dispatchers.IO) {
@@ -575,11 +576,20 @@ class ApiClient(
                         }
                     }
                 }
+            }
+            if (images.isNotEmpty() || file != null) {
                 putJsonArray("media") {
                     images.forEach { (bytes, mime) ->
                         addJsonObject {
                             put("inlineData", Base64.encodeToString(bytes, Base64.NO_WRAP))
                             put("mimeType", mime)
+                        }
+                    }
+                    file?.let { (bytes, mime, displayName) ->
+                        addJsonObject {
+                            put("inlineData", Base64.encodeToString(bytes, Base64.NO_WRAP))
+                            put("mimeType", mime)
+                            put("displayName", displayName)
                         }
                     }
                 }
@@ -593,6 +603,12 @@ class ApiClient(
         try {
             val reqBuilder = buildAuthorizedRequest(url)
                 .post(payload.toString().toRequestBody(jsonMediaType))
+
+            if (images.isNotEmpty() || file != null) {
+                reqBuilder.tag(ApiTraceMetadata::class.java, ApiTraceMetadata(
+                    images.map { it.second to null } + listOfNotNull(file?.let { it.second to it.third })
+                ))
+            }
 
             if (!clientMessageId.isNullOrBlank()) {
                 reqBuilder.header("X-Client-Message-Id", clientMessageId)

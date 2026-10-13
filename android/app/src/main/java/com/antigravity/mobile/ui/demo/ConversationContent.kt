@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.Icon
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
@@ -402,6 +403,7 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                MessageAttachments(message)
                 MessageImages(message, viewModel)
                 if (text.isNotBlank()) Text(text, color = Color(0xFF163E63),
                     fontSize = 17.sp, lineHeight = 26.sp)
@@ -427,6 +429,28 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
             if (markdownNode != null) MarkdownBlock(markdownNode)
             else if (text.isNotBlank()) {
                 if (isStreaming) StreamingMessageText(message.id, text) else MarkdownBody(text)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MessageAttachments(message: GatewayMessageItem) {
+    message.attachments.orEmpty().forEach { attachment ->
+        val name = attachment.displayName?.takeIf { it.isNotBlank() } ?: "附件"
+        Row(
+            Modifier.widthIn(max = 280.dp).background(Color.White.copy(alpha = .72f), RoundedCornerShape(14.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+                .semantics { contentDescription = "已发送文件，$name，${attachment.mimeType}" },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(8.dp))
+            Column {
+                Text(name, color = Color(0xFF163E63), fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (attachment.mimeType.isNotBlank()) Text(attachment.mimeType, color = SecondaryInk, fontSize = 12.sp,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

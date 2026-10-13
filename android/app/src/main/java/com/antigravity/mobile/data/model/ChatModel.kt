@@ -4,7 +4,13 @@ import kotlinx.serialization.json.*
 import kotlinx.serialization.Serializable
 
 @Serializable
-data class ChatModel(val id: String, val label: String, val model: String, val supportsImages: Boolean)
+data class ChatModel(
+    val id: String,
+    val label: String,
+    val model: String,
+    val supportsImages: Boolean,
+    val supportedMimeTypes: Set<String> = emptySet(),
+)
 
 /** Account-scoped GetUserStatus catalog, with no hardcoded model aliases. */
 internal fun parseChatModels(body: JsonObject): List<ChatModel> {
@@ -21,6 +27,9 @@ internal fun parseChatModels(body: JsonObject): List<ChatModel> {
         val label = item["label"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
         val model = item["modelOrAlias"]?.jsonObject?.get("model")?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
         if (id.isBlank() || label.isBlank() || !model.matches(Regex("MODEL_[A-Z0-9_]+"))) return@mapNotNull null
-        ChatModel(id, label, model, item["supportsImages"]?.jsonPrimitive?.booleanOrNull == true)
+        val mimeTypes = item["supportedMimeTypes"]?.jsonObject?.mapNotNull { (mime, enabled) ->
+            mime.takeIf { enabled.jsonPrimitive.booleanOrNull == true }
+        }?.toSet().orEmpty()
+        ChatModel(id, label, model, item["supportsImages"]?.jsonPrimitive?.booleanOrNull == true, mimeTypes)
     }.distinctBy { it.id }.also { check(it.isNotEmpty()) { "账号暂时没有可用模型" } }
 }

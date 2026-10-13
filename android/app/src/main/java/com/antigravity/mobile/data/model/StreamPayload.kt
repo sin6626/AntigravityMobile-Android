@@ -23,6 +23,13 @@ data class GatewayStepDetail(
 )
 
 @Serializable
+data class MessageAttachment(
+    val mimeType: String = "",
+    val displayName: String? = null,
+    val uri: String? = null,
+)
+
+@Serializable
 data class GatewayMessageItem(
     val id: String = "",
     val type: String = "user", // "user", "agent", "tools", "error"
@@ -33,6 +40,7 @@ data class GatewayMessageItem(
     val toolNames: List<String>? = null,
     val media: List<String>? = null,
     val imageUrls: List<String>? = null,
+    val attachments: List<MessageAttachment>? = null,
     val timestamp: String? = null,
     val status: String? = null,
     val stepIndex: Int? = null,
@@ -88,15 +96,25 @@ data class GatewayMessageItem(
 }
 
 @Serializable
+data class QueuedAttachment(
+    val mimeType: String = "",
+    val displayName: String? = null,
+    val inlineData: String? = null,
+    val uri: String? = null,
+    val thumbnail: String? = null,
+)
+
+@Serializable
 data class QueuedMessageItem(
     val id: String = "",
     val text: String = "",
     val createdAt: String? = null,
     val media: List<String>? = null,
-    val imageUrls: List<String>? = null
+    val imageUrls: List<String>? = null,
+    val attachments: List<QueuedAttachment>? = null,
 ) {
     val hasAttachments: Boolean
-        get() = !media.isNullOrEmpty() || !imageUrls.isNullOrEmpty()
+        get() = !media.isNullOrEmpty() || !imageUrls.isNullOrEmpty() || !attachments.isNullOrEmpty()
 }
 
 @Serializable

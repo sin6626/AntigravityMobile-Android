@@ -250,6 +250,69 @@ class ChatUxTest {
         }
     }
 
+    @Test fun fileDraftRestoresAndSendsAsNamedMedia() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            val prefs = PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "file-token" }
+            val source = File(compose.activity.cacheDir, "mobile-file-contract.txt").apply { writeText("FILE_CONTRACT_OK") }
+            val uri = androidx.core.content.FileProvider.getUriForFile(compose.activity, "com.antigravity.mobile.fileprovider", source)
+            val store = ViewModelStore()
+            try {
+                var vm = ChatViewModel(app).also { store.put("file-draft", it) }
+                val visibleVm = mutableStateOf(vm)
+                compose.setContent { ChatDemoScreen(visibleVm.value, {}) }
+                compose.waitUntil(10_000) { vm.state.value.models.isNotEmpty() }
+                compose.runOnIdle { vm.selectModel("gemini-3.8-flash-high"); vm.addFile(uri) }
+                compose.waitUntil(10_000) { vm.state.value.fileAttachment != null }
+                compose.onNodeWithText("mobile-file-contract.txt").assertIsDisplayed()
+                compose.onNodeWithText("16 B · text/plain").assertIsDisplayed()
+                saveScreenshot("file-attachment-draft.png")
+
+                compose.runOnIdle { store.clear() }
+                vm = ChatViewModel(app).also { store.put("file-restored", it) }
+                compose.runOnIdle { visibleVm.value = vm }
+                compose.waitUntil(10_000) { vm.state.value.fileAttachment?.displayName == "mobile-file-contract.txt" &&
+                    !vm.state.value.isRestoringDraft && !vm.state.value.isLoadingMessages && vm.state.value.models.isNotEmpty() }
+                compose.runOnIdle { vm.setDraft("读取这个文件"); vm.send() }
+                compose.waitUntil(10_000) {
+                    gateway.requests.any { it.first.contains("SendUserCascadeMessage") } || vm.state.value.error != null
+                }
+                assertNull(vm.state.value.error)
+                compose.waitUntil(10_000) { !vm.state.value.isSending }
+                val sent = JSONObject(gateway.requests.last { it.first.contains("SendUserCascadeMessage") }.second)
+                assertFalse(sent.has("files"))
+                assertFalse(sent.has("images"))
+                val media = sent.getJSONArray("media").getJSONObject(0)
+                assertEquals("text/plain", media.getString("mimeType"))
+                assertEquals("mobile-file-contract.txt", media.getString("displayName"))
+                assertEquals("FILE_CONTRACT_OK", String(android.util.Base64.decode(media.getString("inlineData"), android.util.Base64.DEFAULT)))
+                assertNull(vm.state.value.fileAttachment)
+                assertNull(prefs.loadDraftFile("android_new_chat"))
+                compose.onNodeWithContentDescription("已发送文件，mobile-file-contract.txt，text/plain").assertIsDisplayed()
+                saveScreenshot("file-attachment-sent.png")
+
+                compose.waitUntil(10_000) { vm.state.value.isRunning }
+                compose.runOnIdle {
+                    vm.selectModel("gemini-3.8-flash-high")
+                    vm.addFile(uri)
+                }
+                compose.waitUntil(10_000) { vm.state.value.fileAttachment != null }
+                compose.runOnIdle { vm.setDraft("排队读取文件"); vm.send() }
+                compose.waitUntil(10_000) { gateway.requests.any { (path, body) ->
+                    path.contains("SendUserCascadeMessage") && JSONObject(body).optInt("deliveryStrategy") == 2
+                } }
+                val queued = JSONObject(gateway.requests.last { (path, body) ->
+                    path.contains("SendUserCascadeMessage") && JSONObject(body).optInt("deliveryStrategy") == 2
+                }.second).getJSONArray("media").getJSONObject(0)
+                assertEquals("mobile-file-contract.txt", queued.getString("displayName"))
+                assertEquals("text/plain", queued.getString("mimeType"))
+            } finally {
+                compose.runOnIdle { store.clear() }
+                source.delete()
+            }
+        }
+    }
+
     @Test fun realGatewayCreatesProjectConversationWithAccountModel() {
         org.junit.Assume.assumeTrue(InstrumentationRegistry.getArguments().getString("uxRealModels") == "true")
         val app = compose.activity.application
@@ -2416,11 +2479,11 @@ class ChatUxTest {
                                 ?: if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
                                 path.contains("GetUserStatus") -> """{"userStatus":{"planStatus":{"planInfo":{"teamsTier":"PRO"}},"cascadeModelConfigData":{"clientModelConfigs":[
-                                    {"modelId":"gemini-3.8-flash-high","label":"Gemini fixture${if (thinkingVariants) " (High)" else ""}","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M318"},"supportsImages":true,"allowedTiers":["PRO"]},
-                                    ${if (thinkingVariants) """{"modelId":"gemini-3.8-flash-medium","label":"Gemini fixture (Medium)","modelOrAlias":{"model":"MODEL_MEDIUM"},"supportsImages":true,"allowedTiers":["PRO"]},
-                                    {"modelId":"gemini-3.8-flash-low","label":"Gemini fixture (Low)","modelOrAlias":{"model":"MODEL_LOW"},"supportsImages":true,"allowedTiers":["PRO"]},""" else ""}
-                                    {"modelId":"claude-fixture","label":"Claude fixture","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M26"},"supportsImages":true,"allowedTiers":["PRO"]},
-                                    {"modelId":"text-fixture","label":"Text fixture","modelOrAlias":{"model":"MODEL_TEXT"}},
+                                    {"modelId":"gemini-3.8-flash-high","label":"Gemini fixture${if (thinkingVariants) " (High)" else ""}","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M318"},"supportsImages":true,"supportedMimeTypes":{"text/plain":true,"application/pdf":true},"allowedTiers":["PRO"]},
+                                    ${if (thinkingVariants) """{"modelId":"gemini-3.8-flash-medium","label":"Gemini fixture (Medium)","modelOrAlias":{"model":"MODEL_MEDIUM"},"supportsImages":true,"supportedMimeTypes":{"text/plain":true},"allowedTiers":["PRO"]},
+                                    {"modelId":"gemini-3.8-flash-low","label":"Gemini fixture (Low)","modelOrAlias":{"model":"MODEL_LOW"},"supportsImages":true,"supportedMimeTypes":{"text/plain":true},"allowedTiers":["PRO"]},""" else ""}
+                                    {"modelId":"claude-fixture","label":"Claude fixture","modelOrAlias":{"model":"MODEL_PLACEHOLDER_M26"},"supportsImages":true,"supportedMimeTypes":{"text/plain":true},"allowedTiers":["PRO"]},
+                                    {"modelId":"text-fixture","label":"Text fixture","modelOrAlias":{"model":"MODEL_TEXT"},"supportedMimeTypes":{"text/plain":true}},
                                     {"modelId":"restricted","label":"Restricted fixture","modelOrAlias":{"model":"MODEL_HIDDEN"},"allowedTiers":["ENTERPRISE"]}
                                 ]}}}"""
                                 path == "/gateway/cascade/new" -> """{"cascadeId":"${if (JSONObject(requestBody).optString("projectId") == "p") "C" else "D"}","status":"ok"}"""
