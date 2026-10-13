@@ -1,6 +1,8 @@
 package com.antigravity.mobile.ui.demo
 
 import android.util.Base64
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -45,6 +47,8 @@ import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import coil.size.Size
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import com.antigravity.mobile.data.model.GatewayMessageItem
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import kotlin.math.max
@@ -138,6 +142,9 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
     var offset by remember(model) { mutableStateOf(Offset.Zero) }
     var viewport by remember { mutableStateOf(IntSize.Zero) }
     var imageSize by remember(model) { mutableStateOf(IntSize.Zero) }
+    val zoomScope = rememberCoroutineScope()
+    var zoomJob by remember { mutableStateOf<Job?>(null) }
+    DisposableEffect(model, attempt) { onDispose { zoomJob?.cancel() } }
     val fit = if (imageSize.width > 0 && imageSize.height > 0) min(viewport.width.toFloat() / imageSize.width, viewport.height.toFloat() / imageSize.height) else 1f
     val maxScale = if (fit > 0) max(8f, 2f / fit).coerceAtMost(64f) else 8f
     fun transform(zoom: Float, pan: Offset = Offset.Zero, focus: Offset = Offset.Zero) {
@@ -148,16 +155,25 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
         offset = Offset(moved.x.coerceIn(-x, x), moved.y.coerceIn(-y, y)); scale = next
         onZoom(scale > 1.01f)
     }
+    fun animateZoom(target: Float, focus: Offset = Offset.Zero) {
+        zoomJob?.cancel()
+        zoomJob = zoomScope.launch {
+            animate(scale, target.coerceIn(1f, maxScale), animationSpec = tween(180)) { value, _ ->
+                transform(value / scale, focus = focus)
+            }
+        }
+    }
         Box(modifier.clipToBounds().onSizeChanged { viewport = it }
             .pointerInput(model, attempt) {
                 detectTapGestures(onDoubleTap = { point ->
-                    if (!loading && !failed) transform(if (scale > 1.01f) 1f / scale else 2.5f,
+                    if (!loading && !failed) animateZoom(if (scale > 1.01f) 1f else 2.5f,
                         focus = point - Offset(viewport.width / 2f, viewport.height / 2f))
                 })
             }
             .pointerInput(model, attempt, viewport, imageSize) {
                 awaitEachGesture {
                     awaitFirstDown(requireUnconsumed = false)
+                    zoomJob?.cancel()
                     var edgeDrag = 0f
                     var totalPan = Offset.Zero
                     var totalZoom = 1f
@@ -191,8 +207,8 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
                     modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
                         .semantics {
                             stateDescription = if (failed) "加载失败" else if (loading) "加载中" else "已加载，缩放 ${(scale * 100).toInt()}%"
-                            customActions = listOf(CustomAccessibilityAction("放大图片") { transform(2f); true },
-                                CustomAccessibilityAction("恢复图片大小") { transform(1f / scale); true })
+                            customActions = listOf(CustomAccessibilityAction("放大图片") { animateZoom(scale * 2); true },
+                                CustomAccessibilityAction("恢复图片大小") { animateZoom(1f); true })
                         },
                     onLoading = { loading = true; failed = false }, onSuccess = {
                         loading = false; failed = false
@@ -200,7 +216,7 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
                     }, onError = { loading = false; failed = true })
             }
             if (loading) CircularProgressIndicator(Modifier.size(28.dp), color = AccentBlue, strokeWidth = 2.dp)
-            if (failed) IconButton(onClick = { transform(1f / scale); attempt++ }) {
+            if (failed) IconButton(onClick = { zoomJob?.cancel(); transform(1f / scale); attempt++ }) {
                 Icon(Icons.Default.Refresh, contentDescription = "重试加载图片", tint = AccentBlue)
             }
         }

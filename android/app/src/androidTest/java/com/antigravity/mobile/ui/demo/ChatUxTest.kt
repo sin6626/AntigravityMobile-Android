@@ -1470,6 +1470,41 @@ class ChatUxTest {
         }
     }
 
+    @Test fun imageDoubleTapAnimatesAndTouchInterruptsWithoutDrift() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("image-motion", vm) }
+            try {
+                compose.setContent {
+                    ZoomableImage(vm.mediaImageRequest("${gateway.url}/image.png"), vm.mediaImageLoader,
+                        "缩放验收", Modifier.fillMaxSize())
+                }
+                val image = compose.onNodeWithContentDescription("缩放验收")
+                compose.waitUntil(10_000) { image.fetchSemanticsNode().config
+                    .getOrElse(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) { "" }.startsWith("已加载") }
+                fun scale() = image.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsProperties.StateDescription]
+                    .substringAfter("缩放 ").substringBefore('%').toInt()
+                compose.mainClock.autoAdvance = false
+                image.performTouchInput { doubleClick(center) }
+                compose.mainClock.advanceTimeByFrame()
+                compose.mainClock.advanceTimeBy(48)
+                assertTrue("Double tap must show an intermediate scale, was ${scale()}", scale() in 101..249)
+                image.performTouchInput { down(center); advanceEventTime(20); up() }
+                compose.mainClock.advanceTimeByFrame()
+                val interrupted = scale()
+                compose.mainClock.advanceTimeBy(400)
+                assertEquals("Touch must cancel automatic zoom", interrupted, scale())
+                val reset = image.fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.CustomActions]
+                    .single { it.label == "恢复图片大小" }
+                compose.runOnUiThread { reset.action() }
+                compose.mainClock.advanceTimeBy(240)
+                assertEquals(100, scale())
+            } finally { compose.mainClock.autoAdvance = true; compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun imagesZoomResetSwitchCloseAndRetry() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
