@@ -1321,6 +1321,39 @@ class ChatUxTest {
         }
     }
 
+    @Test fun sameNameProjectsKeepTheirLocationsAndSeparateExpansion() {
+        val first = ProjectItem(rawId = "a", name = "App", path = "H:/first/App")
+        val second = ProjectItem(rawId = "b", name = "App", path = "H:/second/App")
+        val projects = mutableStateOf(listOf(first, second))
+        val drawer = mutableStateOf(false)
+        val expanded = mutableStateOf(emptySet<String>())
+        val chats = listOf(
+            com.antigravity.mobile.data.model.ConversationItem("A", "项目A会话", projectId = "a"),
+            com.antigravity.mobile.data.model.ConversationItem("B", "项目B会话", projectId = "b"),
+        )
+        compose.setContent {
+            if (drawer.value) DemoDrawer(Modifier.fillMaxSize(), chats, projects.value, false, false, {}, {}, {}, {}, {})
+            else ProjectOverview(projects.value, chats, false, {}, expanded.value,
+                { key -> expanded.value = if (key in expanded.value) expanded.value - key else expanded.value + key },
+                androidx.compose.foundation.lazy.rememberLazyListState())
+        }
+        compose.onNodeWithText(first.path).performClick()
+        compose.onNodeWithText("项目A会话").assertIsDisplayed()
+        compose.onNodeWithText("项目B会话").assertDoesNotExist()
+        compose.runOnIdle { projects.value = projects.value.reversed() }
+        compose.onNodeWithText("项目A会话").assertIsDisplayed()
+        compose.onNodeWithText(second.path).assertIsDisplayed()
+        compose.runOnIdle { drawer.value = true }
+        compose.onNodeWithText("项目").performClick()
+        compose.onNodeWithText(second.path).performClick()
+        compose.onNodeWithText("项目B会话").assertIsDisplayed()
+        compose.onNodeWithText("项目A会话").assertDoesNotExist()
+        compose.onNodeWithContentDescription("搜索").performClick()
+        compose.onNode(hasSetTextAction()).performTextInput("项目B会话")
+        compose.onNodeWithText(second.path).assertIsDisplayed()
+        compose.onNodeWithText(first.path).assertDoesNotExist()
+    }
+
     @Test fun searchSelectionAndProjectExpansionSurviveFilteringAndReordering() {
         val projects = mutableStateOf(listOf(ProjectItem(rawId = "p", name = "Project 1"), ProjectItem(rawId = "q", name = "Project 2")))
         val chats = listOf(com.antigravity.mobile.data.model.ConversationItem("A", "中文会话"),

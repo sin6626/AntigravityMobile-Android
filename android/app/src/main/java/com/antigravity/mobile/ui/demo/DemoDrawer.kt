@@ -103,7 +103,7 @@ internal fun DemoDrawer(
                     visibleProjects.distinctBy { it.navigationKey() }.forEach { project ->
                         val projectKey = project.navigationKey()
                         val projectChats = conversations.filter { it.belongsTo(project, projects) && !it.isSubagent }
-                        DrawerProject(project.name, expandedProjects.contains(projectKey)) {
+                        DrawerProject(project, projects, expandedProjects.contains(projectKey)) {
                             expandedProjects = if (projectKey in expandedProjects)
                                 expandedProjects - projectKey else expandedProjects + projectKey
                         }
@@ -234,7 +234,7 @@ private fun DrawerSection(title: String) {
 }
 
 @Composable
-private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit) {
+private fun DrawerProject(project: ProjectItem, projects: List<ProjectItem>, expanded: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().heightIn(min = 51.dp).semantics { stateDescription = if (expanded) "已展开" else "已折叠" }.quietClickable(RoundedCornerShape(14.dp), pressedColor = Color(0xFFF1F1F1), onClick = onClick)
             .padding(start = 28.dp),
@@ -242,8 +242,7 @@ private fun DrawerProject(title: String, expanded: Boolean, onClick: () -> Unit)
     ) {
         Symbol("folder", size = 21, color = SecondaryInk)
         Spacer(Modifier.width(11.dp))
-        Text(title, modifier = Modifier.weight(1f), color = Ink, fontSize = 16.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        ProjectLabel(project, projects, 16, Modifier.weight(1f))
         Text(if (expanded) "−" else "+", color = SecondaryInk, fontSize = 20.sp)
     }
 }

@@ -73,8 +73,7 @@ internal fun ProjectOverview(
                 ) {
                     Symbol("folder", size = 25)
                     Spacer(Modifier.width(15.dp))
-                    Text(project.name, modifier = Modifier.weight(1f), color = Ink, fontSize = 18.sp,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ProjectLabel(project, projects, 18, Modifier.weight(1f))
                     Text(if (projectKey in expandedProjects) "−" else "+", color = SecondaryInk,
                         fontSize = 23.sp)
                 }
@@ -100,6 +99,21 @@ internal fun ProjectOverview(
                     }
                 }
             }
+        }
+    }
+}
+
+internal fun ProjectItem.disambiguatingLocation(projects: List<ProjectItem>): String? =
+    if (projects.any { it.name.equals(name, ignoreCase = true) && it.navigationKey() != navigationKey() })
+        path.ifBlank { uri }.ifBlank { id }.takeIf { it.isNotBlank() }
+    else null
+
+@Composable
+internal fun ProjectLabel(project: ProjectItem, projects: List<ProjectItem>, fontSize: Int, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(project.name, color = Ink, fontSize = fontSize.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        project.disambiguatingLocation(projects)?.let { location ->
+            Text(location, color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
         }
     }
 }
