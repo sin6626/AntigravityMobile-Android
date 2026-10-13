@@ -35,6 +35,7 @@ import com.antigravity.mobile.data.model.DiffSide
 import com.antigravity.mobile.data.model.PlanReviewPreference
 import com.antigravity.mobile.data.model.ModelQuotaSummary
 import com.antigravity.mobile.data.service.ApiClient
+import com.antigravity.mobile.data.service.AudioTranscriptionSession
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
 import com.antigravity.mobile.data.service.PreferencesManager
@@ -46,7 +47,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -137,6 +140,7 @@ data class ChatUiState(
     val isLoadingModelQuota: Boolean = false,
     val isRefreshingModelQuota: Boolean = false,
     val modelQuotaError: String? = null,
+    val voiceInput: VoiceInputUiState = VoiceInputUiState(),
     val contextSuggestions: List<WorkspaceContextItem> = emptyList(),
     val commandSuggestions: List<SlashCommandDefinition> = emptyList(),
     val isLoadingContextSuggestions: Boolean = false,
@@ -150,6 +154,15 @@ data class ChatUiState(
     val conversationsError: String? = null,
     val projectsError: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
+)
+
+enum class VoiceInputPhase { IDLE, RECORDING, FINALIZING, ERROR }
+
+data class VoiceInputUiState(
+    val phase: VoiceInputPhase = VoiceInputPhase.IDLE,
+    val level: Float = 0f,
+    val elapsedMillis: Long = 0L,
+    val error: String? = null,
 )
 
 data class PendingImage(val uri: Uri, val bytes: ByteArray, val mimeType: String, val sourceUri: Uri = uri)
@@ -208,6 +221,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var subagentsJob: Job? = null
     private var contextSuggestionsJob: Job? = null
     private var commandSuggestionsJob: Job? = null
+    private var voiceJob: Job? = null
+    private var voiceSession: AudioTranscriptionSession? = null
+    private var voiceChunks: Channel<ByteArray>? = null
+    private var voiceOriginalDraft = ""
+    private var voiceGeneration = 0L
     private val subagentTrail = mutableListOf<SubagentItem>()
     private val _state = MutableStateFlow(ChatUiState(isPaired = prefs.isPaired(), draft = prefs.getDraftText(draftKey)))
     val state: StateFlow<ChatUiState> = _state.asStateFlow()
@@ -313,6 +331,111 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setDraft(value: String) {
         prefs.setDraftText(draftKey, value)
         _state.value = _state.value.copy(draft = value)
+    }
+
+    fun startVoiceInput() {
+        if (_state.value.voiceInput.phase in setOf(VoiceInputPhase.RECORDING, VoiceInputPhase.FINALIZING)) return
+        cancelVoiceSession(restoreDraft = false)
+        val generation = ++voiceGeneration
+        val originalDraft = _state.value.draft
+        voiceOriginalDraft = originalDraft
+        val chunks = Channel<ByteArray>(Channel.UNLIMITED)
+        voiceChunks = chunks
+        _state.value = _state.value.copy(voiceInput = VoiceInputUiState(VoiceInputPhase.RECORDING))
+        voiceJob = viewModelScope.launch {
+            try {
+                val session = api.openAudioTranscription(
+                    cascadeId = _state.value.selectedConversationId,
+                    preCursorText = originalDraft,
+                ) { transcript ->
+                    viewModelScope.launch {
+                        if (generation == voiceGeneration && _state.value.voiceInput.phase != VoiceInputPhase.ERROR) {
+                            setDraft(voiceDraftWithTranscript(originalDraft, transcript))
+                        }
+                    }
+                }.getOrThrow()
+                if (generation != voiceGeneration) {
+                    session.cancel()
+                    return@launch
+                }
+                voiceSession = session
+                for (bytes in chunks) session.sendAudio(bytes)
+                val transcript = session.finish()
+                if (generation == voiceGeneration) {
+                    setDraft(voiceDraftWithTranscript(originalDraft, transcript))
+                    _state.value = _state.value.copy(voiceInput = VoiceInputUiState())
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                if (generation == voiceGeneration) {
+                    setDraft(originalDraft)
+                    if (error is GatewayAuthorizationException) expirePairing()
+                    else _state.value = _state.value.copy(voiceInput = VoiceInputUiState(
+                        phase = VoiceInputPhase.ERROR,
+                        error = voiceErrorMessage(error),
+                    ))
+                }
+            } finally {
+                if (generation == voiceGeneration) {
+                    voiceSession?.cancel()
+                    voiceSession = null
+                    voiceChunks = null
+                }
+            }
+        }
+    }
+
+    fun offerVoiceAudio(bytes: ByteArray, level: Float, elapsedMillis: Long) {
+        if (_state.value.voiceInput.phase != VoiceInputPhase.RECORDING) return
+        voiceChunks?.trySend(bytes)
+        _state.value = _state.value.copy(voiceInput = _state.value.voiceInput.copy(
+            level = level.coerceIn(0f, 1f),
+            elapsedMillis = elapsedMillis,
+        ))
+    }
+
+    fun finishVoiceInput() {
+        if (_state.value.voiceInput.phase !in setOf(VoiceInputPhase.RECORDING, VoiceInputPhase.FINALIZING)) return
+        _state.value = _state.value.copy(voiceInput = _state.value.voiceInput.copy(
+            phase = VoiceInputPhase.FINALIZING,
+            level = 0f,
+            error = null,
+        ))
+        voiceChunks?.close()
+    }
+
+    fun failVoiceInput(message: String) {
+        if (_state.value.voiceInput.phase in setOf(VoiceInputPhase.RECORDING, VoiceInputPhase.FINALIZING)) {
+            cancelVoiceSession(restoreDraft = true)
+        }
+        _state.value = _state.value.copy(voiceInput = VoiceInputUiState(
+            phase = VoiceInputPhase.ERROR,
+            error = message,
+        ))
+    }
+
+    fun cancelVoiceInput() {
+        cancelVoiceSession(restoreDraft = true)
+        _state.value = _state.value.copy(voiceInput = VoiceInputUiState())
+    }
+
+    fun dismissVoiceError() {
+        if (_state.value.voiceInput.phase == VoiceInputPhase.ERROR) {
+            _state.value = _state.value.copy(voiceInput = VoiceInputUiState())
+        }
+    }
+
+    private fun cancelVoiceSession(restoreDraft: Boolean) {
+        val active = _state.value.voiceInput.phase in setOf(VoiceInputPhase.RECORDING, VoiceInputPhase.FINALIZING)
+        ++voiceGeneration
+        voiceChunks?.cancel()
+        voiceChunks = null
+        voiceSession?.cancel()
+        voiceSession = null
+        voiceJob?.cancel()
+        voiceJob = null
+        if (restoreDraft && active) setDraft(voiceOriginalDraft)
     }
 
     private fun loadPlanCommentDraft(cascadeId: String, artifactUri: String?) =
@@ -570,6 +693,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun switchDraft(key: String) {
+        cancelVoiceSession(restoreDraft = true)
         prefs.setDraftText(draftKey, _state.value.draft)
         if (!_state.value.isRestoringDraft) draftAttachments[draftKey] = _state.value.attachments
         if (!_state.value.isRestoringDraft) draftFiles[draftKey] = _state.value.fileAttachment
@@ -2323,11 +2447,26 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        cancelVoiceSession(restoreDraft = false)
         subagentsJob?.cancel()
         stream.close()
         connectionManager.stopMonitoring()
         super.onCleared()
     }
+}
+
+internal fun voiceDraftWithTranscript(original: String, transcript: String): String {
+    if (transcript.isBlank()) return original
+    if (original.isBlank()) return transcript.trim()
+    // shortcut: append at draft end until the composer retains a stable cursor selection.
+    return original + (if (original.last().isWhitespace()) "" else " ") + transcript.trim()
+}
+
+private fun voiceErrorMessage(error: Throwable): String = when {
+    error.message.orEmpty().contains("insufficient authentication scopes", ignoreCase = true) ||
+        error.message.orEmpty().contains("PermissionDenied", ignoreCase = true) ->
+        "当前电脑账号未开放语音转写"
+    else -> "语音转写失败，请检查电脑端连接后重试"
 }
 
 private const val DEFAULT_CHAT_MODEL = "gemini-3.8-flash-high"

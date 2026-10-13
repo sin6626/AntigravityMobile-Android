@@ -2616,6 +2616,60 @@ class ChatUxTest {
         }
     }
 
+    @Test fun voiceInputStreamsPcmShowsLiveStateAndKeepsEditableDraft() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.voiceFixture = true
+            PreferencesManager(app).apply { clear(); gatewayBaseUrl = gateway.url; deviceToken = "voice-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("voice-input", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.runOnIdle {
+                    vm.setDraft("已有草稿")
+                    vm.startVoiceInput()
+                    vm.offerVoiceAudio(byteArrayOf(1, 2, 3, 4), .16f, 12_000L)
+                }
+                compose.onNodeWithContentDescription("停止录音并转写").assertIsDisplayed()
+                    .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                compose.onNodeWithText("00:12").assertIsDisplayed()
+                compose.onNodeWithContentDescription("取消语音输入").assertIsDisplayed()
+                saveScreenshot("voice-input-recording.png")
+
+                compose.runOnIdle { vm.finishVoiceInput() }
+                compose.waitUntil(10_000) { vm.state.value.voiceInput.phase == com.antigravity.mobile.ui.chat.VoiceInputPhase.IDLE }
+                assertEquals("已有草稿 继续检查动画", vm.state.value.draft)
+                val setupBody = gateway.requests.first { it.first.contains("StreamAudioTranscription") }.second.substring(5)
+                val setup = JSONObject(setupBody)
+                assertEquals("audio/pcm;rate=16000", setup.getString("mimeType"))
+                assertEquals("已有草稿", setup.getString("preCursorText"))
+                val chunk = JSONObject(gateway.requests.first { it.first.contains("SendAudioChunk") }.second)
+                assertArrayEquals(byteArrayOf(1, 2, 3, 4), android.util.Base64.decode(chunk.getString("data"), android.util.Base64.DEFAULT))
+                compose.onNode(hasSetTextAction()).performTextInput(" 可编辑")
+                assertTrue(vm.state.value.draft.contains("已有草稿 继续检查动画"))
+                assertTrue(vm.state.value.draft.contains("可编辑"))
+
+                val editedDraft = vm.state.value.draft
+                compose.runOnIdle {
+                    vm.startVoiceInput()
+                    vm.offerVoiceAudio(byteArrayOf(9, 8), .4f, 900L)
+                    vm.cancelVoiceInput()
+                }
+                assertEquals(editedDraft, vm.state.value.draft)
+                assertEquals(com.antigravity.mobile.ui.chat.VoiceInputPhase.IDLE, vm.state.value.voiceInput.phase)
+
+                gateway.failurePath = "StreamAudioTranscription"
+                compose.runOnIdle { vm.startVoiceInput() }
+                compose.waitUntil(10_000) {
+                    vm.state.value.voiceInput.phase == com.antigravity.mobile.ui.chat.VoiceInputPhase.ERROR
+                }
+                assertEquals(editedDraft, vm.state.value.draft)
+                compose.onNodeWithText("语音转写失败，请检查电脑端连接后重试").assertIsDisplayed()
+                compose.onNodeWithText("重试").assertIsDisplayed()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2658,7 +2712,9 @@ class ChatUxTest {
         @Volatile var taskFixture = false
         @Volatile var subagentFixture = false
         @Volatile var diffFixture = false
+        @Volatile var voiceFixture = false
         @Volatile var planReviewPolicy = "ALWAYS"
+        private val voiceEnded = CountDownLatch(1)
         private val deletedQueueIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val stoppedTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private fun queuedMessagesJson(): String {
@@ -2744,6 +2800,18 @@ class ChatUxTest {
                                 try { while (it.getInputStream().read() >= 0) {} } catch (_: java.io.IOException) {}
                                 return@use
                             }
+                            if (voiceFixture && path.contains("StreamAudioTranscription") && failurePath?.let(path::contains) != true) {
+                                val output = it.getOutputStream()
+                                output.write("HTTP/1.1 200 OK\r\nContent-Type: application/connect+json\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".toByteArray())
+                                writeChunk(output, connectFrame(0, """{"ready":{"sessionId":"voice-session"}}"""))
+                                voiceEnded.await(5, TimeUnit.SECONDS)
+                                writeChunk(output, connectFrame(0, """{"transcription":{"text":"继续检查动画","isFinal":true}}"""))
+                                writeChunk(output, connectFrame(0, """{"complete":{}}"""))
+                                writeChunk(output, connectFrame(2, "{}"))
+                                output.write("0\r\n\r\n".toByteArray()); output.flush()
+                                return@use
+                            }
+                            if (voiceFixture && path.contains("EndAudioSession")) voiceEnded.countDown()
                             if (path.contains("CancelCascadeInvocation") && failurePath?.let(path::contains) != true)
                                 stopped += JSONObject(requestBody).getString("cascadeId")
                             if (management && failurePath?.let(path::contains) != true) {
@@ -2836,6 +2904,18 @@ class ChatUxTest {
                     }
                 }
             }
+        }
+        private fun connectFrame(flag: Int, json: String): ByteArray {
+            val payload = json.toByteArray()
+            return java.io.ByteArrayOutputStream().also { output ->
+                java.io.DataOutputStream(output).use { frame ->
+                    frame.writeByte(flag); frame.writeInt(payload.size); frame.write(payload)
+                }
+            }.toByteArray()
+        }
+        private fun writeChunk(output: java.io.OutputStream, bytes: ByteArray) {
+            output.write("${bytes.size.toString(16)}\r\n".toByteArray())
+            output.write(bytes); output.write("\r\n".toByteArray()); output.flush()
         }
         override fun close() { dropStreams(); server.close() }
     }

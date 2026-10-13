@@ -1,5 +1,7 @@
 package com.antigravity.mobile.ui.demo
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -13,6 +15,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.FileProvider
+import androidx.core.content.ContextCompat
 import java.io.File
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +68,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
@@ -93,6 +97,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.antigravity.mobile.ui.chat.ChatViewModel
+import com.antigravity.mobile.ui.chat.VoiceInputPhase
 import com.antigravity.mobile.ui.chat.PairingScreen
 import com.antigravity.mobile.ui.chat.InteractionPanel
 import com.antigravity.mobile.ui.chat.PlanReviewPanel
@@ -190,8 +195,48 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     ) { uri ->
         uri?.let(viewModel::addFile)
     }
+    val voiceRecorder = remember { VoiceRecorder() }
+    fun startVoiceCapture() {
+        viewModel.startVoiceInput()
+        voiceRecorder.start(
+            onAudio = viewModel::offerVoiceAudio,
+            onFailure = viewModel::failVoiceInput,
+        )
+    }
+    val microphonePermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) startVoiceCapture()
+        else viewModel.failVoiceInput("需要麦克风权限才能使用语音输入")
+    }
+    val startVoice: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            startVoiceCapture()
+        } else microphonePermission.launch(Manifest.permission.RECORD_AUDIO)
+    }
+    val stopVoice: () -> Unit = {
+        voiceRecorder.stop(viewModel::finishVoiceInput)
+    }
+    val cancelVoice: () -> Unit = {
+        voiceRecorder.cancel()
+        viewModel.cancelVoiceInput()
+    }
+    DisposableEffect(voiceRecorder) {
+        onDispose {
+            voiceRecorder.cancel()
+            viewModel.cancelVoiceInput()
+        }
+    }
+    LaunchedEffect(state.voiceInput.phase) {
+        if (state.voiceInput.phase == VoiceInputPhase.ERROR) voiceRecorder.cancel()
+    }
+    LaunchedEffect(state.voiceInput.phase, state.voiceInput.elapsedMillis) {
+        if (state.voiceInput.phase == VoiceInputPhase.RECORDING && state.voiceInput.elapsedMillis >= 210_000L) stopVoice()
+    }
     val unsupported: () -> Unit = {
-        scope.launch { snackbar.showSnackbar("已支持文字和图片，语音功能暂未开放") }
+        scope.launch { snackbar.showSnackbar("语音通话暂未开放，麦克风按钮可用于语音输入") }
     }
     LaunchedEffect(state.selectedConversationId) {
         modelPickerOpen = false
@@ -695,6 +740,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             isRunning = state.isRunning,
                             isStopping = state.isStopping,
                             onStop = viewModel::stopGeneration,
+                            voiceInput = state.voiceInput,
+                            onStartVoice = startVoice,
+                            onStopVoice = stopVoice,
+                            onCancelVoice = cancelVoice,
+                            onRetryVoice = startVoice,
+                            onDismissVoiceError = viewModel::dismissVoiceError,
                             onUnsupported = unsupported,
                             shadowAlpha = alphaFactor,
                             modelBadge = gptModelBadge,

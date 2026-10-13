@@ -51,7 +51,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 模型额度 | 模型组共享每周与 5 小时额度，可读剩余比例、恢复时间并强制刷新 | 已完成。模型配置页可查看官方分组额度、倒计时并在失败时保留旧值重试 | `RetrieveUserQuotaSummary`、`ModelQuotaBottomSheet.kt`、`ChatViewModel.loadModelQuota` | 保持回归 |
 | Cockpit 多账号切换 | 未发现 Google 官方将第三方账号池列为桌面对齐能力 | 接口存在但 UI 未接。应作为本项目附加功能单独评估 | `ApiClient.kt:317-337` | 非核心对齐 |
 | MCP、权限和电脑设置 | 桌面管理 MCP、权限、项目设置和插件 | 缺失。手机看不到电脑当前策略、MCP 错误或待审批工具来源 | Android 无设置状态接口 | P2，待协议 |
-| 语音转写 | 2.19.1 之前已有录音和语音转写能力 | 缺失。现有语音入口只提示暂未开放 | `ChatComponents.kt:213` | P2，待语音契约 |
+| 语音转写 | 2.19.1 使用 16 kHz PCM 流式转写，停止后文字留在可编辑输入框 | 已完成。真实波形、计时、取消、整理中、失败重试和原草稿保护均已接入 | `VoiceRecorder.kt`、`StreamAudioTranscription`、`ChatViewModel.startVoiceInput` | 保持回归；当前桌面账号未开放转写权限时明确提示 |
 | 通知直达 | 官方 Remote Control 支持完成和需输入提醒 | 半成品且按用户要求暂缓。FCM 类存在，但会话深链仍被交给配对流程 | `AntigravityMessagingService.kt`、`MainActivity.kt:42` | 暂缓 |
 
 ## 已经到达客户端但被丢弃的数据
@@ -172,8 +172,10 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
     - 第三方 Cockpit 多账号池没有混入此入口，继续作为非核心附加功能单独评估。
 
 15. `feat(android): 添加语音转写草稿`
-    - 目标是录音转成可编辑文字，不是语音通话。需要明确权限、录音时长、取消、网络失败和后端转写协议。
-    - 录音波形或计时动效必须跟真实状态同步，取消后不污染原草稿。
+    - **已于 2026-10-13 完成。**
+    - 与桌面 2.19.1 一致使用 `StreamAudioTranscription` 建立流，`SendAudioChunk` 发送 `audio/pcm;rate=16000` 分块，停止时调用 `EndAudioSession`；最终文字保留在可编辑草稿中。
+    - 麦克风权限按需申请，波形读取真实 PCM 能量，计时和 3 分 30 秒上限跟录音状态同步；取消、会话切换和网络失败均恢复录音前草稿。
+    - 请求拦截日志保留方法、URL、脱敏请求头、状态和字节数，录音数据与草稿上下文不写入 Logcat。当前真实桌面账号返回 `insufficient authentication scopes`，手机会持续显示“当前电脑账号未开放语音转写”并允许重试；成功链路由隔离 ConnectRPC 假网关验证。
 
 16. `feat(android): 展示电脑 MCP 与权限状态`
     - 第一版只读显示连接、错误和审批来源。修改 MCP 配置、OAuth 或全局权限在确认安全契约后另做提交。

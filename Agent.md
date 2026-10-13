@@ -566,3 +566,9 @@ android/app/src/main/java/com/antigravity/mobile/
 - 模型配置页新增 48 dp“额度”入口；独立底部面板按组展示百分比、无末端杂点的连续进度条和本地恢复时刻，低于 25%/10% 分别用琥珀/红色提示。恢复倒计时每分钟更新，未知组或窗口保留桌面名称。
 - 初次读取、空数据、手动强制刷新和失败重试均有持续状态；刷新失败保留旧额度，不闪空、不丢恢复时间。刷新按钮在请求期间变为进度环，所有额度行提供 TalkBack 完整描述。
 - 时间格式 JVM 测试、Debug/AndroidTest 构建和 API 37 仪器测试通过；端到端覆盖入口、48 dp、分组/比例/恢复时间、`forceRefresh=false/true`、刷新失败留态和重试。截图位于忽略目录 `android/design/.verification/feature-14/model-quota.png`。真实桌面只执行额度读取，没有刷新或改动账号状态；本功能不改 Go 网关，58900/58901 保持上一提交二进制运行。
+
+### 2026-10-13 语音转写草稿
+- 桌面 2.19.1 的真实链路已确认：`StreamAudioTranscription` 以 ConnectRPC 服务器流返回 ready/partial/final/complete，音频通过 `SendAudioChunk` 顺序发送，停止调用 `EndAudioSession`；格式固定为 16 kHz、单声道、PCM16 little-endian，普通录音最长 3 分 30 秒。
+- Android 麦克风按钮现按需申请 `RECORD_AUDIO`，以 100 ms PCM 分块驱动真实音量波形和计时。录音区提供 48 dp 取消/停止动作、整理中状态和可恢复错误；转写文字追加到现有草稿后仍可编辑，取消、失败或切换会话会恢复录音前草稿。
+- `ApiTraceInterceptor` 对 Connect 流不再 peek 阻塞，日志仍输出接口、脱敏请求头、状态与字节数，但隐藏音频分块和上下文草稿。没有增加第三方语音 SDK，也没有把入口做成语音通话。
+- JVM 草稿合并测试、Debug/AndroidTest 构建和 API 37 仪器测试通过；隔离假网关覆盖 Connect 帧、PCM 分块、停止完成、编辑、取消保稿及网络失败。截图位于忽略目录 `android/design/.verification/feature-15/voice-input-recording.png`。真实网关协议可达，但当前桌面账号返回 `insufficient authentication scopes`，客户端已明确显示账号未开放并保留重试；本功能不改 Go 网关。

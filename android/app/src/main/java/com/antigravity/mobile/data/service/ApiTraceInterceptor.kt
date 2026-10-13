@@ -8,7 +8,10 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.json.JSONTokener
 
-data class ApiTraceMetadata(val attachments: List<Pair<String, String?>>)
+data class ApiTraceMetadata(
+    val attachments: List<Pair<String, String?>> = emptyList(),
+    val sensitiveBodyLabel: String? = null,
+)
 
 /** 在 Logcat 中记录每次网关调用；凭据字段只记录名称，不输出原值。 */
 class ApiTraceInterceptor : Interceptor {
@@ -20,14 +23,18 @@ class ApiTraceInterceptor : Interceptor {
         }
         val body = Buffer()
         val bodyLength = request.body?.contentLength() ?: 0L
-        if (bodyLength in 1..128 * 1024L) request.body?.writeTo(body)
-        if (body.size > 0L) {
+        val traceMetadata = request.tag(ApiTraceMetadata::class.java)
+        if (traceMetadata?.sensitiveBodyLabel != null) {
+            params.put("body", "[${traceMetadata.sensitiveBodyLabel}已隐藏]")
+            params.put("bodyBytes", bodyLength)
+        } else if (bodyLength in 1..128 * 1024L) request.body?.writeTo(body)
+        if (traceMetadata?.sensitiveBodyLabel == null && body.size > 0L) {
             val raw = body.readUtf8()
             params.put("body", sanitize(parseJson(raw)))
-        } else if (bodyLength > 128 * 1024L) {
+        } else if (traceMetadata?.sensitiveBodyLabel == null && bodyLength > 128 * 1024L) {
             params.put("bodyBytes", bodyLength)
         }
-        request.tag(ApiTraceMetadata::class.java)?.takeIf { bodyLength > 128 * 1024L }?.let { metadata ->
+        traceMetadata?.takeIf { bodyLength > 128 * 1024L }?.let { metadata ->
             params.put("attachments", JSONObject()
                 .put("attachmentCount", metadata.attachments.size)
                 .put("items", JSONArray().also { items -> metadata.attachments.forEach { (mime, name) ->
@@ -46,6 +53,8 @@ class ApiTraceInterceptor : Interceptor {
             try {
                 val responseData = if (response.code == 101) {
                     JSONObject().put("websocket", "connected")
+                } else if (response.header("Content-Type")?.startsWith("application/connect+") == true) {
+                    JSONObject().put("stream", "connected")
                 } else if (response.header("Content-Type")?.startsWith("image/") == true) {
                     JSONObject().put("contentType", response.header("Content-Type"))
                         .put("bytes", response.body?.contentLength() ?: -1)

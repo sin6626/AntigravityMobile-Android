@@ -9,6 +9,9 @@ import coil.request.ImageRequest
 import coil.decode.SvgDecoder
 import com.antigravity.mobile.data.model.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.encodeToString
@@ -23,10 +26,14 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.File
+import java.io.DataInputStream
+import java.io.EOFException
 import java.io.IOException
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.time.Instant
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -86,6 +93,8 @@ class ApiClient(
         .build()
 
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
+    private val connectJsonMediaType = "application/connect+json".toMediaType()
+    private val audioClient by lazy { client.newBuilder().readTimeout(0, TimeUnit.MILLISECONDS).build() }
 
     val mediaImageLoader: ImageLoader by lazy {
         ImageLoader.Builder(context.applicationContext)
@@ -500,6 +509,44 @@ class ApiClient(
                 }
             }
         } catch (error: Exception) { Result.failure(error) }
+    }
+
+    suspend fun openAudioTranscription(
+        cascadeId: String?,
+        preCursorText: String,
+        onTranscript: (String) -> Unit,
+    ): Result<AudioTranscriptionSession> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl
+            ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val setup = buildJsonObject {
+            put("mimeType", "audio/pcm;rate=16000")
+            put("preCursorText", preCursorText)
+            put("postCursorText", "")
+            put("cascadeId", cascadeId.orEmpty())
+            put("continuous", false)
+        }.toString().toConnectFrame()
+        val request = buildAuthorizedRequest(
+            "$baseUrl/api/exa.language_server_pb.LanguageServerService/StreamAudioTranscription"
+        ).header("Content-Type", "application/connect+json")
+            .tag(ApiTraceMetadata::class.java, ApiTraceMetadata(sensitiveBodyLabel = "语音上下文"))
+            .post(setup.toRequestBody(connectJsonMediaType))
+            .build()
+        val session = AudioTranscriptionSession(
+            client = audioClient,
+            streamCall = audioClient.newCall(request),
+            baseUrl = baseUrl,
+            requestBuilder = ::buildAuthorizedRequest,
+            jsonMediaType = jsonMediaType,
+            onTranscript = onTranscript,
+        )
+        try {
+            session.start()
+            withTimeout(15_000) { session.awaitReady() }
+            Result.success(session)
+        } catch (error: Exception) {
+            session.cancel()
+            Result.failure(error)
+        }
     }
 
     /** Create a new cascade session. */
@@ -1393,6 +1440,154 @@ class ApiClient(
             builder.header("x-device-token", token)
         }
         return builder
+    }
+}
+
+private fun String.toConnectFrame(): ByteArray {
+    val payload = toByteArray(Charsets.UTF_8)
+    return ByteArray(payload.size + 5).also { frame ->
+        frame[0] = 0
+        frame[1] = (payload.size ushr 24).toByte()
+        frame[2] = (payload.size ushr 16).toByte()
+        frame[3] = (payload.size ushr 8).toByte()
+        frame[4] = payload.size.toByte()
+        payload.copyInto(frame, 5)
+    }
+}
+
+class AudioTranscriptionSession internal constructor(
+    private val client: OkHttpClient,
+    private val streamCall: Call,
+    private val baseUrl: String,
+    private val requestBuilder: (String) -> Request.Builder,
+    private val jsonMediaType: okhttp3.MediaType,
+    private val onTranscript: (String) -> Unit,
+) {
+    private val ready = CompletableDeferred<String>()
+    private val finished = CompletableDeferred<String>()
+    private val response = AtomicReference<Response?>()
+    private val sequence = AtomicInteger()
+    private val textLock = Any()
+    private var confirmedText = ""
+    private var partialText = ""
+    @Volatile private var cancelled = false
+
+    internal fun start() {
+        streamCall.enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                if (!cancelled) fail(error)
+            }
+
+            override fun onResponse(call: Call, incoming: Response) {
+                response.set(incoming)
+                incoming.use { rpcResponse ->
+                    if (!rpcResponse.isSuccessful) {
+                        fail(IOException("语音转写连接失败 (${rpcResponse.code})"))
+                        return
+                    }
+                    try {
+                        val input = DataInputStream(rpcResponse.body?.byteStream()
+                            ?: throw IOException("语音转写响应为空"))
+                        while (!cancelled) {
+                            val flag = try { input.readUnsignedByte() } catch (_: EOFException) { break }
+                            val length = input.readInt()
+                            if (length !in 0..1_048_576) throw IOException("语音转写响应过大")
+                            val payload = ByteArray(length)
+                            input.readFully(payload)
+                            handleFrame(flag, payload.toString(Charsets.UTF_8))
+                        }
+                        if (!cancelled && !ready.isCompleted) fail(IOException("语音转写连接提前关闭"))
+                        else if (!cancelled && !finished.isCompleted) finished.complete(currentText())
+                    } catch (error: Exception) {
+                        if (!cancelled) fail(error)
+                    } finally {
+                        response.compareAndSet(incoming, null)
+                    }
+                }
+            }
+        })
+    }
+
+    internal suspend fun awaitReady() {
+        ready.await()
+    }
+
+    suspend fun sendAudio(bytes: ByteArray) {
+        if (bytes.isEmpty() || cancelled) return
+        val sessionId = ready.await()
+        val payload = buildJsonObject {
+            put("sessionId", sessionId)
+            put("data", Base64.encodeToString(bytes, Base64.NO_WRAP))
+            put("sequenceNumber", sequence.getAndIncrement())
+        }.toString()
+        sendUnary("SendAudioChunk", payload, "音频片段")
+    }
+
+    suspend fun finish(): String {
+        if (cancelled) return currentText()
+        val sessionId = ready.await()
+        sendUnary("EndAudioSession", buildJsonObject { put("sessionId", sessionId) }.toString())
+        val result = try { withTimeout(4_000) { finished.await() } }
+        catch (_: TimeoutCancellationException) { currentText() }
+        cancel()
+        return result.trim()
+    }
+
+    fun cancel() {
+        cancelled = true
+        streamCall.cancel()
+        response.getAndSet(null)?.close()
+        if (!ready.isCompleted) ready.cancel()
+        if (!finished.isCompleted) finished.cancel()
+    }
+
+    private fun handleFrame(flag: Int, payload: String) {
+        val root = try { JsonConfig.instance.parseToJsonElement(payload).jsonObject }
+        catch (error: Exception) { throw IOException("无法解析语音转写响应", error) }
+        if (flag and 0x02 != 0) {
+            root["error"]?.jsonObject?.let { error ->
+                val message = error["message"]?.jsonPrimitive?.contentOrNull ?: "语音转写失败"
+                throw IOException(message)
+            }
+            if (!finished.isCompleted) finished.complete(currentText())
+            return
+        }
+        root["ready"]?.jsonObject?.get("sessionId")?.jsonPrimitive?.contentOrNull?.let { sessionId ->
+            if (!ready.isCompleted) ready.complete(sessionId)
+        }
+        root["transcription"]?.jsonObject?.let { transcription ->
+            val text = transcription["text"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val isFinal = transcription["isFinal"]?.jsonPrimitive?.booleanOrNull == true
+            val current = synchronized(textLock) {
+                if (isFinal) {
+                    if (text.isNotBlank()) confirmedText += text + if (text.lastOrNull()?.isWhitespace() == true) "" else " "
+                    partialText = ""
+                } else partialText = text
+                confirmedText + partialText
+            }
+            onTranscript(current)
+        }
+        if (root["complete"] != null && !finished.isCompleted) finished.complete(currentText())
+    }
+
+    private suspend fun sendUnary(method: String, payload: String, hiddenLabel: String? = null) {
+        val request = requestBuilder(
+            "$baseUrl/api/exa.language_server_pb.LanguageServerService/$method"
+        ).apply {
+            if (hiddenLabel != null) tag(ApiTraceMetadata::class.java,
+                ApiTraceMetadata(sensitiveBodyLabel = hiddenLabel))
+        }.post(payload.toRequestBody(jsonMediaType)).build()
+        client.newCall(request).await().use { rpcResponse ->
+            if (!rpcResponse.isSuccessful) throw IOException("语音转写请求失败 (${rpcResponse.code})")
+        }
+    }
+
+    private fun currentText(): String = synchronized(textLock) { confirmedText + partialText }
+
+    private fun fail(error: Throwable) {
+        val failure = if (error is Exception) error else IOException(error)
+        if (!ready.isCompleted) ready.completeExceptionally(failure)
+        if (!finished.isCompleted) finished.completeExceptionally(failure)
     }
 }
 

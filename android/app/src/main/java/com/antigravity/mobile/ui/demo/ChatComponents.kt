@@ -4,6 +4,8 @@ import android.net.Uri
 import coil.compose.AsyncImage
 import com.antigravity.mobile.ui.chat.PendingImage
 import com.antigravity.mobile.ui.chat.PendingFile
+import com.antigravity.mobile.ui.chat.VoiceInputPhase
+import com.antigravity.mobile.ui.chat.VoiceInputUiState
 import com.antigravity.mobile.data.model.WorkspaceContextItem
 import com.antigravity.mobile.data.model.SlashCommandDefinition
 import androidx.compose.foundation.background
@@ -426,6 +428,12 @@ internal fun Composer(
     onSend: () -> Unit,
     isSending: Boolean,
     onUnsupported: () -> Unit,
+    voiceInput: VoiceInputUiState = VoiceInputUiState(),
+    onStartVoice: () -> Unit = onUnsupported,
+    onStopVoice: () -> Unit = {},
+    onCancelVoice: () -> Unit = {},
+    onRetryVoice: () -> Unit = {},
+    onDismissVoiceError: () -> Unit = {},
     isRunning: Boolean = false,
     isStopping: Boolean = false,
     onStop: () -> Unit = {},
@@ -447,12 +455,14 @@ internal fun Composer(
             else -> onDismissSuggestions()
         }
     }
+    val voiceActive = voiceInput.phase in setOf(VoiceInputPhase.RECORDING, VoiceInputPhase.FINALIZING)
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty() || fileAttachment != null ||
-        workspaceContexts.isNotEmpty() || slashCommand != null) && !isSending && !isStopping
+        workspaceContexts.isNotEmpty() || slashCommand != null) && !isSending && !isStopping && !voiceActive
     var focused by remember { mutableStateOf(false) }
     var plusMenuOpen by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty() || fileAttachment != null ||
-        workspaceContexts.isNotEmpty() || slashCommand != null || trigger != null
+        workspaceContexts.isNotEmpty() || slashCommand != null || trigger != null ||
+        voiceInput.phase != VoiceInputPhase.IDLE
     val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
     val targetCorner = if (expanded) 30.dp else 36.dp
     val horizontalPadding by animateDpAsState(
@@ -504,6 +514,11 @@ internal fun Composer(
                     fileAttachment?.let { FileAttachmentChip(it, onRemoveFile) }
                 }
             }
+            AnimatedVisibility(voiceInput.phase != VoiceInputPhase.IDLE,
+                enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
+                exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
+                VoiceInputBar(voiceInput, onStopVoice, onCancelVoice, onRetryVoice, onDismissVoiceError)
+            }
             Row(Modifier.fillMaxWidth().animateContentSize(tween(180))
                 .heightIn(min = 58.dp).padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -522,15 +537,15 @@ internal fun Composer(
                         }
                     }
                 }
-                ComposerTextField(draft, onDraftChange, onSend, canSend,
+                ComposerTextField(draft, onDraftChange, onSend, canSend && !voiceActive,
                     if (activeConversation) "回复 Multigravity" else "询问 Multigravity",
                     Modifier.weight(1f).padding(vertical = 12.dp)
                         .then(inputFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
-                        .onFocusChanged { focused = it.isFocused }, expanded)
+                        .onFocusChanged { focused = it.isFocused }, expanded, enabled = !voiceActive)
                 AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
                     exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
                     Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {
-                        ComposerIcon("mic", "语音输入，暂不可用", 26, onUnsupported, enabled = !expanded)
+                        ComposerIcon("mic", "语音输入", 26, onStartVoice, enabled = !expanded)
                         SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active = !expanded)
                     }
                 }
@@ -543,7 +558,8 @@ internal fun Composer(
                             canSend = canSend,
                             onSend = onSend,
                             onOpenPlusMenu = { plusMenuOpen = true },
-                            onUnsupported = onUnsupported,
+                            voiceInput = voiceInput,
+                            onStartVoice = onStartVoice,
                             isRunning = isRunning,
                             isSending = isSending,
                             isStopping = isStopping,
@@ -696,11 +712,86 @@ private fun ComposerContextChip(icon: String, label: String, description: String
 }
 
 @Composable
+private fun VoiceInputBar(
+    state: VoiceInputUiState,
+    onStop: () -> Unit,
+    onCancel: () -> Unit,
+    onRetry: () -> Unit,
+    onDismissError: () -> Unit,
+) {
+    Surface(
+        color = if (state.phase == VoiceInputPhase.ERROR) Color(0xFFFFF4F2) else Color(0xFFF4F7FA),
+        shape = RoundedCornerShape(18.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp),
+    ) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 58.dp).padding(horizontal = 6.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            when (state.phase) {
+                VoiceInputPhase.RECORDING -> {
+                    Box(Modifier.size(48.dp).semantics { contentDescription = "取消语音输入" }
+                        .quietClickable(CircleShape, onClick = onCancel), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Close, null, tint = SecondaryInk, modifier = Modifier.size(21.dp))
+                    }
+                    Row(Modifier.weight(1f).height(30.dp), horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        listOf(.45f, .72f, 1f, .68f, .42f).forEachIndexed { index, weight ->
+                            val height by animateDpAsState(
+                                (6f + 24f * (state.level * 5f * weight).coerceIn(0f, 1f)).dp,
+                                animationSpec = tween(90),
+                                label = "voice level $index",
+                            )
+                            Box(Modifier.width(4.dp).height(height).background(AccentBlue, RoundedCornerShape(2.dp)))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        Text(formatVoiceDuration(state.elapsedMillis), color = Ink, fontSize = 14.sp,
+                            fontFamily = FontFamily.Monospace)
+                    }
+                    Box(Modifier.size(48.dp).semantics { contentDescription = "停止录音并转写" }
+                        .quietClickable(CircleShape, onClick = onStop), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(32.dp).background(Color(0xFFFF453A), CircleShape), contentAlignment = Alignment.Center) {
+                            Box(Modifier.size(11.dp).background(Color.White, RoundedCornerShape(2.dp)))
+                        }
+                    }
+                }
+                VoiceInputPhase.FINALIZING -> {
+                    Spacer(Modifier.width(12.dp))
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = AccentBlue)
+                    Spacer(Modifier.width(12.dp))
+                    Text("正在整理语音文字…", color = Ink, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onCancel, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("取消", color = AccentBlue)
+                    }
+                }
+                VoiceInputPhase.ERROR -> {
+                    Spacer(Modifier.width(12.dp))
+                    Text(state.error ?: "语音转写失败", color = Color(0xFFC7362F), fontSize = 13.sp,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                    TextButton(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)) {
+                        Text("重试", color = AccentBlue)
+                    }
+                    Box(Modifier.size(48.dp).semantics { contentDescription = "关闭语音错误" }
+                        .quietClickable(CircleShape, onClick = onDismissError), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Close, null, tint = SecondaryInk, modifier = Modifier.size(20.dp))
+                    }
+                }
+                VoiceInputPhase.IDLE -> Unit
+            }
+        }
+    }
+}
+
+private fun formatVoiceDuration(elapsedMillis: Long): String {
+    val seconds = (elapsedMillis / 1_000).coerceAtLeast(0)
+    return "%02d:%02d".format(seconds / 60, seconds % 60)
+}
+
+@Composable
 private fun ComposerActions(
     canSend: Boolean,
     onSend: () -> Unit,
     onOpenPlusMenu: () -> Unit,
-    onUnsupported: () -> Unit,
+    voiceInput: VoiceInputUiState,
+    onStartVoice: () -> Unit,
     isRunning: Boolean,
     isSending: Boolean,
     isStopping: Boolean,
@@ -749,7 +840,9 @@ private fun ComposerActions(
             )
             Spacer(Modifier.width(4.dp))
         }
-        ComposerIcon("mic", "语音输入，暂不可用", 27, onUnsupported, active)
+        if (voiceInput.phase == VoiceInputPhase.IDLE) {
+            ComposerIcon("mic", "语音输入", 27, onStartVoice, active)
+        }
         SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active)
     }
 }
@@ -882,10 +975,12 @@ private fun ComposerTextField(
     placeholder: String,
     modifier: Modifier,
     expanded: Boolean,
+    enabled: Boolean = true,
 ) {
     BasicTextField(
         value = value,
         onValueChange = onValueChange,
+        enabled = enabled,
         modifier = modifier,
         textStyle = TextStyle(color = Ink, fontSize = 17.sp, lineHeight = 23.sp),
         maxLines = if (expanded) 4 else 1,
