@@ -483,6 +483,25 @@ class ApiClient(
         } catch (error: Exception) { Result.failure(error) }
     }
 
+    suspend fun fetchModelQuota(forceRefresh: Boolean): Result<ModelQuotaSummary> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val payload = buildJsonObject { put("forceRefresh", forceRefresh) }
+        try {
+            val request = buildAuthorizedRequest(
+                "$baseUrl/api/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+            ).post(payload.toString().toRequestBody(jsonMediaType)).build()
+            client.newCall(request).await().use { response ->
+                when {
+                    response.code == 401 -> Result.failure(GatewayAuthorizationException())
+                    !response.isSuccessful -> Result.failure(RuntimeException("读取模型额度失败: HTTP ${response.code}"))
+                    else -> json.decodeFromString<ModelQuotaResponse>(response.body?.string() ?: "{}").response
+                        ?.let(Result.Companion::success)
+                        ?: Result.failure(RuntimeException("电脑未返回模型额度"))
+                }
+            }
+        } catch (error: Exception) { Result.failure(error) }
+    }
+
     /** Create a new cascade session. */
     suspend fun createCascade(
         workspaceUri: String,

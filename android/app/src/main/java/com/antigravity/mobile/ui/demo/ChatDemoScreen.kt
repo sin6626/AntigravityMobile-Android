@@ -149,6 +149,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var renameTitle by rememberSaveable { mutableStateOf("") }
     var modelPickerOpen by remember { mutableStateOf(false) }
     var workModeOpen by remember { mutableStateOf(false) }
+    var modelQuotaOpen by remember { mutableStateOf(false) }
     val composerFocusRequester = remember { FocusRequester() }
     var focusAfterModelDone by remember { mutableIntStateOf(0) }
     LaunchedEffect(focusAfterModelDone) {
@@ -195,6 +196,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     LaunchedEffect(state.selectedConversationId) {
         modelPickerOpen = false
         workModeOpen = false
+        modelQuotaOpen = false
         showDeleteConfirm = false
         showRename = false
         if (state.selectedConversationId == null && openedFromArchive) {
@@ -745,6 +747,21 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 onRetryModels = viewModel::refreshModels,
                 modelSelectionEnabled = modelEnabled,
                 onDone = { modelPickerOpen = false; focusAfterModelDone++ },
+                onOpenQuota = {
+                    modelPickerOpen = false
+                    modelQuotaOpen = true
+                    viewModel.loadModelQuota()
+                },
+            )
+        }
+        if (modelQuotaOpen && state.isPaired) {
+            ModelQuotaBottomSheet(
+                onDismiss = { modelQuotaOpen = false },
+                summary = state.modelQuotaSummary,
+                loading = state.isLoadingModelQuota,
+                refreshing = state.isRefreshingModelQuota,
+                error = state.modelQuotaError,
+                onRefresh = { viewModel.loadModelQuota(forceRefresh = true) },
             )
         }
         if (workModeOpen && state.isPaired) {

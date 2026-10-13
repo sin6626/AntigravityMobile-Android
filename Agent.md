@@ -9,7 +9,7 @@
 
 - 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
 - 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
-- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作、当前变更 diff 定位评论和 `/plan` 规划入口/计划审阅策略现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的主线包括额度、语音转写和电脑 MCP/权限只读状态。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作、当前变更 diff 定位评论、`/plan` 规划入口/计划审阅策略和官方模型额度现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的主线包括语音转写和电脑 MCP/权限只读状态。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
 - 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
 
 ### 2026-10-13 待审方案与继续执行
@@ -560,3 +560,9 @@ android/app/src/main/java/com/antigravity/mobile/
 - 工作方式面板把单条消息的“直接执行/先规划”和电脑全局的“总是询问/自动继续”分区展示；自动继续使用琥珀警示并明确会跳过人工确认。所有选项至少 48 dp，选中态 180 ms 过渡，含读取、切换、失败保留、重试和明确完成动作；切换会话时迟到响应不会修改新会话草稿。
 - Go 聚焦测试、Android Debug/AndroidTest 构建及 API 37 端到端仪器测试通过，覆盖真实 `/plan` 目录、失败留态、策略重试、完整请求和草稿持久化；视觉截图位于忽略目录 `android/design/.verification/feature-13/work-mode-plan-review.png`。全量 Go 测试仍有既有 Windows 盘符大小写断言和 WebSocket 偶发断连失败，本功能聚焦用例通过。
 - 同一 SHA256 `5FE8ADB7D8D47F5A772DB65707439C3B1AB40CE4F673EE1A1D06659B7BABD33C` 二进制已部署到主网关 58900/PID 27292 与管理网关 58901/PID 52024，Cloudflare PID 2144；本地、公网和模拟器健康检查均为 200。真实桌面只执行 `ALWAYS` 到 `ALWAYS` 的幂等写入并读回成功，没有启动会话或发送消息。
+
+### 2026-10-13 官方模型额度与恢复时间
+- 桌面 2.19.1 使用 `LanguageServerService/RetrieveUserQuotaSummary({forceRefresh})`，返回 `groups[].buckets[]` 的 `remainingFraction/resetTime/window/disabled`；真实账号读回 Gemini 与 Claude/GPT 两个共享组及每周、5 小时窗口。Android 直接复用该官方协议，没有接入项目已有的第三方 Cockpit 多账号池。
+- 模型配置页新增 48 dp“额度”入口；独立底部面板按组展示百分比、无末端杂点的连续进度条和本地恢复时刻，低于 25%/10% 分别用琥珀/红色提示。恢复倒计时每分钟更新，未知组或窗口保留桌面名称。
+- 初次读取、空数据、手动强制刷新和失败重试均有持续状态；刷新失败保留旧额度，不闪空、不丢恢复时间。刷新按钮在请求期间变为进度环，所有额度行提供 TalkBack 完整描述。
+- 时间格式 JVM 测试、Debug/AndroidTest 构建和 API 37 仪器测试通过；端到端覆盖入口、48 dp、分组/比例/恢复时间、`forceRefresh=false/true`、刷新失败留态和重试。截图位于忽略目录 `android/design/.verification/feature-14/model-quota.png`。真实桌面只执行额度读取，没有刷新或改动账号状态；本功能不改 Go 网关，58900/58901 保持上一提交二进制运行。

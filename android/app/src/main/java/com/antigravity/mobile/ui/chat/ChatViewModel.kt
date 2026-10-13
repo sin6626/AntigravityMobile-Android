@@ -33,6 +33,7 @@ import com.antigravity.mobile.data.model.DiffCommentDraft
 import com.antigravity.mobile.data.model.DiffCommentDraftState
 import com.antigravity.mobile.data.model.DiffSide
 import com.antigravity.mobile.data.model.PlanReviewPreference
+import com.antigravity.mobile.data.model.ModelQuotaSummary
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
@@ -132,6 +133,10 @@ data class ChatUiState(
     val isSelectingWorkMode: Boolean = false,
     val workModeError: String? = null,
     val planReviewPolicySuccessCount: Int = 0,
+    val modelQuotaSummary: ModelQuotaSummary? = null,
+    val isLoadingModelQuota: Boolean = false,
+    val isRefreshingModelQuota: Boolean = false,
+    val modelQuotaError: String? = null,
     val contextSuggestions: List<WorkspaceContextItem> = emptyList(),
     val commandSuggestions: List<SlashCommandDefinition> = emptyList(),
     val isLoadingContextSuggestions: Boolean = false,
@@ -934,6 +939,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadModelQuota(forceRefresh: Boolean = false) {
+        val current = _state.value
+        if (current.isLoadingModelQuota || current.isRefreshingModelQuota) return
+        val token = prefs.deviceToken
+        _state.value = current.copy(
+            isLoadingModelQuota = current.modelQuotaSummary == null,
+            isRefreshingModelQuota = current.modelQuotaSummary != null,
+            modelQuotaError = null,
+        )
+        viewModelScope.launch {
+            api.fetchModelQuota(forceRefresh).fold(onSuccess = { quota ->
+                if (prefs.deviceToken == token) _state.value = _state.value.copy(
+                    modelQuotaSummary = quota,
+                    isLoadingModelQuota = false,
+                    isRefreshingModelQuota = false,
+                    modelQuotaError = null,
+                )
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(
+                    isLoadingModelQuota = false,
+                    isRefreshingModelQuota = false,
+                    modelQuotaError = error.message ?: "读取模型额度失败",
+                )
+            })
+        }
+    }
+
     fun clearComposerSuggestions() {
         contextSuggestionsJob?.cancel()
         commandSuggestionsJob?.cancel()
@@ -1042,6 +1076,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
             planReviewPreference = null, isLoadingPlanReviewPreference = false,
             isUpdatingPlanReviewPreference = false, isSelectingWorkMode = false, workModeError = null,
+            modelQuotaSummary = null, isLoadingModelQuota = false, isRefreshingModelQuota = false,
+            modelQuotaError = null,
         )
     }
 

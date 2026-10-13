@@ -409,6 +409,7 @@ internal fun ModelConfigBottomSheet(
     onRetryModels: () -> Unit,
     modelSelectionEnabled: Boolean = true,
     onDone: () -> Unit = onDismiss,
+    onOpenQuota: () -> Unit = {},
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     // 全量聚合与 Gemini 倒序排序
@@ -483,14 +484,20 @@ internal fun ModelConfigBottomSheet(
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 居中标题：“配置”
-            Text(
-                text = "配置",
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = Color(0xFF111111),
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
+            Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(bottom = 8.dp)) {
+                Text(
+                    text = "配置",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color(0xFF111111),
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                TextButton(
+                    onClick = onOpenQuota,
+                    modifier = Modifier.align(Alignment.CenterEnd).heightIn(min = 48.dp)
+                        .semantics { contentDescription = "查看模型额度" },
+                ) { Text("额度", color = Color(0xFF0A84FF), fontSize = 14.sp) }
+            }
 
             // 加载与错误状态提示
             if (models.isEmpty() && (isLoadingModels || modelsError != null)) {

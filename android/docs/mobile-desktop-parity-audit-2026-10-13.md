@@ -48,7 +48,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 下载、分享与导出 | 2.19.1 可把渲染 Markdown 导出 PDF，文件与媒体有保存入口 | 已完成文件与 Artifact 的系统保存、分享；图片同样支持。Android 直接保存 Markdown 原文件，未另造渲染 PDF 管线 | `ApiClient.downloadFile`、`LinkedFileActions.kt`、`FileProvider` | 保持回归 |
 | diff 审阅与评论 | 文件 diff、Review Changes、评论与 Git 操作 | 当前变更阅读与定位评论已完成；Accept、Reject、discard、stage 和 commit 仍待各自动作契约 | `/gateway/cascade/diffs`、`DiffReviewScreen.kt`、`ApiClient.submitDiffComments` | P1 剩 Git 动作协议 |
 | 会话撤回 | 2.19.1 支持只撤回会话 | 已完成会话与文件两种回退范围，并保留草稿和图片 | `ChatViewModel.kt:788-860` | 保持回归 |
-| 模型额度 | 模型和额度受账号方案限制 | 部分完成。客户端已有读取和刷新配额接口，但没有 Android 调用和页面 | `ApiClient.kt:270-315` | P2 |
+| 模型额度 | 模型组共享每周与 5 小时额度，可读剩余比例、恢复时间并强制刷新 | 已完成。模型配置页可查看官方分组额度、倒计时并在失败时保留旧值重试 | `RetrieveUserQuotaSummary`、`ModelQuotaBottomSheet.kt`、`ChatViewModel.loadModelQuota` | 保持回归 |
 | Cockpit 多账号切换 | 未发现 Google 官方将第三方账号池列为桌面对齐能力 | 接口存在但 UI 未接。应作为本项目附加功能单独评估 | `ApiClient.kt:317-337` | 非核心对齐 |
 | MCP、权限和电脑设置 | 桌面管理 MCP、权限、项目设置和插件 | 缺失。手机看不到电脑当前策略、MCP 错误或待审批工具来源 | Android 无设置状态接口 | P2，待协议 |
 | 语音转写 | 2.19.1 之前已有录音和语音转写能力 | 缺失。现有语音入口只提示暂未开放 | `ChatComponents.kt:213` | P2，待语音契约 |
@@ -167,7 +167,9 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
     - 工作方式和全局策略分区展示，包含 48 dp 触控区、180 ms 选中反馈、加载、失败保留、重试、完成动作和 TalkBack 描述。
 
 14. `feat(android): 展示模型额度与恢复时间`
-    - 复用现有配额接口，呈现剩余比例、重置时间和刷新失败。第三方多账号切换另立功能，不混入额度提交。
+    - **已于 2026-10-13 完成。**
+    - 使用桌面官方 `RetrieveUserQuotaSummary`，呈现共享模型组、每周/5 小时剩余比例、本地恢复时间和强制刷新；刷新失败保留旧值。
+    - 第三方 Cockpit 多账号池没有混入此入口，继续作为非核心附加功能单独评估。
 
 15. `feat(android): 添加语音转写草稿`
     - 目标是录音转成可编辑文字，不是语音通话。需要明确权限、录音时长、取消、网络失败和后端转写协议。

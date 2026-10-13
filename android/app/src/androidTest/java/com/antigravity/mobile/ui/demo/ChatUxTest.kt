@@ -131,6 +131,44 @@ class ChatUxTest {
         }
     }
 
+    @Test fun modelQuotaShowsSharedLimitsResetTimeAndRefreshRecovery() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            PreferencesManager(app).apply { clear(); gatewayBaseUrl = gateway.url; deviceToken = "quota-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("model-quota", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.models.isNotEmpty() }
+                compose.onNode(hasSetTextAction()).performClick()
+                compose.onNodeWithContentDescription("选择模型").performClick()
+                compose.onNodeWithContentDescription("查看模型额度").assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f)).performClick()
+                compose.waitUntil(10_000) { vm.state.value.modelQuotaSummary?.groups?.size == 2 }
+                compose.onNodeWithText("模型额度").assertIsDisplayed()
+                compose.onNodeWithText("Gemini 模型").assertIsDisplayed()
+                compose.onNodeWithText("Claude 与 GPT 模型").assertIsDisplayed()
+                compose.onNodeWithText("73%").assertIsDisplayed()
+                compose.onNodeWithText("8%").assertIsDisplayed()
+                compose.onAllNodes(hasText("后恢复", substring = true)).assertCountEquals(3)
+                assertFalse(JSONObject(gateway.requests.last { it.first.contains("RetrieveUserQuotaSummary") }.second)
+                    .getBoolean("forceRefresh"))
+
+                gateway.failurePath = "RetrieveUserQuotaSummary"
+                compose.onNodeWithContentDescription("刷新模型额度").performClick()
+                compose.waitUntil(10_000) { vm.state.value.modelQuotaError != null && !vm.state.value.isRefreshingModelQuota }
+                compose.onNodeWithText("73%").assertIsDisplayed()
+                compose.onNodeWithContentDescription("重试刷新模型额度").assertIsDisplayed()
+                gateway.failurePath = null
+                compose.onNodeWithContentDescription("重试刷新模型额度").performClick()
+                compose.waitUntil(10_000) { vm.state.value.modelQuotaError == null && !vm.state.value.isRefreshingModelQuota }
+                assertTrue(JSONObject(gateway.requests.last { it.first.contains("RetrieveUserQuotaSummary") }.second)
+                    .getBoolean("forceRefresh"))
+                compose.onNodeWithContentDescription("刷新模型额度").assertIsDisplayed()
+                saveScreenshot("model-quota.png")
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun projectCreationAndModelChoiceKeepMembershipDraftAndFailureState() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -2736,6 +2774,15 @@ class ChatUxTest {
                                     {"modelId":"text-fixture","label":"Text fixture","modelOrAlias":{"model":"MODEL_TEXT"},"supportedMimeTypes":{"text/plain":true}},
                                     {"modelId":"restricted","label":"Restricted fixture","modelOrAlias":{"model":"MODEL_HIDDEN"},"allowedTiers":["ENTERPRISE"]}
                                 ]}}}"""
+                                path.contains("RetrieveUserQuotaSummary") -> """{"response":{"groups":[
+                                    {"displayName":"Gemini Models","description":"Shared Gemini limits","buckets":[
+                                        {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.73,"resetTime":"2026-10-14T02:23:51Z"},
+                                        {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1.0,"resetTime":"2026-10-13T14:47:29Z"}
+                                    ]},
+                                    {"displayName":"Claude and GPT models","buckets":[
+                                        {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.08,"resetTime":"2026-10-13T13:31:08Z"}
+                                    ]}
+                                ],"description":"Shared limits"}}"""
                                 path == "/gateway/cascade/new" -> """{"cascadeId":"${if (JSONObject(requestBody).optString("projectId") == "p") "C" else "D"}","status":"ok"}"""
                                 path.startsWith("/api/v1/auth/pair") -> """{"device_id":"test-device","device_token":"new-token"}"""
                                 path.startsWith("/api/v1/auth/endpoints") -> """{"endpoints":$endpointsJson,"platform":"windows"}"""
