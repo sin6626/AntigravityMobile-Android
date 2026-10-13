@@ -319,10 +319,10 @@ internal fun ComposerPlusMenu(
 
                 Spacer(Modifier.height(4.dp))
 
-                // 2. 照片
+                // 2. 图片
                 PlusMenuItem(
                     icon = Icons.Outlined.Image,
-                    label = "照片",
+                    label = "图片",
                     enabled = expanded,
                     onClick = {
                         onDismissRequest()
@@ -335,7 +335,7 @@ internal fun ComposerPlusMenu(
                 // 3. 文件
                 PlusMenuItem(
                     icon = Icons.Outlined.AttachFile,
-                    label = "图片文件",
+                    label = "文件",
                     enabled = expanded,
                     onClick = {
                         onDismissRequest()

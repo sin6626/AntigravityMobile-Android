@@ -39,9 +39,9 @@ class ReducedMotionTest {
         var selected = false
         compose.runOnIdle { scale.value.floatValue = 0f }
         compose.setContent { ComposerPlusMenu(open.value, { open.value = false }, {}, {}, { selected = true; open.value = false }) }
-        compose.onNodeWithText("图片文件").assertIsDisplayed().performClick()
+        compose.onNodeWithText("文件").assertIsDisplayed().performClick()
         org.junit.Assert.assertTrue(selected)
-        compose.onNodeWithText("图片文件").assertDoesNotExist()
+        compose.onNodeWithText("文件").assertDoesNotExist()
     }
 
     @Test fun disablingMotionFinishesPendingStreamWithoutAnotherServerUpdate() {
