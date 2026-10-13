@@ -550,6 +550,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         InteractionPanel(
                             interaction = interaction,
                             isSubmitting = state.isSubmittingInteraction,
+                            error = state.interactionError,
                             onChoose = viewModel::respondToInteraction,
                         )
                     }

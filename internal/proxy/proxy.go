@@ -1211,16 +1211,17 @@ func (p *Proxy) handleUpdateConversationAnnotations(w http.ResponseWriter, r *ht
 
 // InteractionSubmitRequest represents user decision submitted from mobile client.
 type InteractionSubmitRequest struct {
-	CascadeID       string `json:"cascadeId"`
-	TrajectoryID    string `json:"trajectoryId"`
-	StepIndex       int    `json:"stepIndex"`
-	Type            string `json:"type"` // "permission", "ask_question", "file_permission", "run_command"
-	OptionID        string `json:"optionId"`
-	Scope           int    `json:"scope"`
-	Allow           bool   `json:"allow"`
-	WriteInResponse string `json:"writeInResponse"`
-	Skipped         bool   `json:"skipped"`
-	Target          string `json:"target,omitempty"`
+	CascadeID         string   `json:"cascadeId"`
+	TrajectoryID      string   `json:"trajectoryId"`
+	StepIndex         int      `json:"stepIndex"`
+	Type              string   `json:"type"` // "permission", "ask_question", "file_permission", "run_command"
+	OptionID          string   `json:"optionId"`
+	SelectedOptionIDs []string `json:"selectedOptionIds,omitempty"`
+	Scope             int      `json:"scope"`
+	Allow             bool     `json:"allow"`
+	WriteInResponse   string   `json:"writeInResponse"`
+	Skipped           bool     `json:"skipped"`
+	Target            string   `json:"target,omitempty"`
 }
 
 // HandleCascadeInteraction submits user choice to upstream HandleCascadeUserInteraction.
@@ -1307,8 +1308,15 @@ func (p *Proxy) HandleCascadeInteraction(w http.ResponseWriter, r *http.Request)
 				"cancelled": true,
 			}
 		} else {
-			opts := []string{}
-			if req.OptionID != "" && req.OptionID != "5" && req.OptionID != "__write_in__" {
+			opts := make([]string, 0, len(req.SelectedOptionIDs)+1)
+			seen := make(map[string]bool)
+			for _, id := range req.SelectedOptionIDs {
+				if id != "" && id != "5" && id != "__write_in__" && !seen[id] {
+					opts = append(opts, id)
+					seen[id] = true
+				}
+			}
+			if len(opts) == 0 && req.OptionID != "" && req.OptionID != "5" && req.OptionID != "__write_in__" {
 				opts = append(opts, req.OptionID)
 			}
 			interaction.AskQuestion = map[string]interface{}{

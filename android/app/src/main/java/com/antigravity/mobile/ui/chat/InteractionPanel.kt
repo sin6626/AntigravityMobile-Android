@@ -2,6 +2,9 @@ package com.antigravity.mobile.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +20,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,6 +32,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -94,13 +101,16 @@ fun PlanReviewPanel(
 fun InteractionPanel(
     interaction: PendingInteraction,
     isSubmitting: Boolean,
-    onChoose: (InteractionOption?, String) -> Unit,
+    error: String?,
+    onChoose: (List<InteractionOption>, String) -> Unit,
 ) {
-    var writeIn by remember(interaction.stepIndex) { mutableStateOf("") }
+    var writeIn by remember(interaction.trajectoryId, interaction.stepIndex) { mutableStateOf("") }
+    var selectedIds by remember(interaction.trajectoryId, interaction.stepIndex) { mutableStateOf<Set<String>>(emptySet()) }
     Column(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 8.dp)
             .background(Color(0xFFF6F6F6), RoundedCornerShape(22.dp))
-            .heightIn(max = 310.dp).verticalScroll(rememberScrollState())
+            .heightIn(max = 360.dp).verticalScroll(rememberScrollState())
+            .animateContentSize(tween(180))
             .padding(16.dp),
     ) {
         Text(interaction.title.ifBlank { "需要你的选择" }, color = Ink, fontSize = 17.sp)
@@ -113,28 +123,56 @@ fun InteractionPanel(
             Text(interaction.target, color = SecondaryInk, fontSize = 13.sp,
                 maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
-        if (interaction.isMultiSelect) {
-            Spacer(Modifier.height(12.dp))
-            Text("该多选问题请在电脑端处理", color = SecondaryInk, fontSize = 14.sp)
-            return@Column
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = Color(0xFFB3261E), fontSize = 13.sp)
         }
         Spacer(Modifier.height(12.dp))
-        interaction.options.forEach { option ->
-            Text(
-                option.text,
-                modifier = Modifier.fillMaxWidth()
-                    .quietClickable(enabled = !isSubmitting) { onChoose(option, writeIn) }
-                    .padding(vertical = 10.dp),
-                color = if (option.isDeny) Color(0xFFB3261E) else Ink,
-                fontSize = 15.sp,
-            )
+        if (interaction.isMultiSelect) {
+            interaction.options.forEach { option ->
+                val selected = option.id in selectedIds
+                Row(
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .semantics { contentDescription = "选择 ${option.text}" }
+                        .toggleable(
+                            value = selected,
+                            enabled = !isSubmitting,
+                            role = Role.Checkbox,
+                            onValueChange = { checked ->
+                                selectedIds = if (checked) selectedIds + option.id else selectedIds - option.id
+                            },
+                        ),
+                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = selected,
+                        onCheckedChange = null,
+                        enabled = !isSubmitting,
+                        colors = CheckboxDefaults.colors(checkedColor = AccentBlue),
+                    )
+                    Text(option.text, color = Ink, fontSize = 15.sp, modifier = Modifier.weight(1f).padding(vertical = 9.dp))
+                }
+            }
+        } else {
+            interaction.options.forEach { option ->
+                Text(
+                    option.text,
+                    modifier = Modifier.fillMaxWidth()
+                        .quietClickable(enabled = !isSubmitting) { onChoose(listOf(option), writeIn) }
+                        .padding(vertical = 10.dp),
+                    color = if (option.isDeny) Color(0xFFB3261E) else Ink,
+                    fontSize = 15.sp,
+                )
+            }
         }
         if (interaction.hasWriteIn) {
             Spacer(Modifier.height(8.dp))
             BasicTextField(
                 value = writeIn,
                 onValueChange = { writeIn = it },
+                enabled = !isSubmitting,
                 modifier = Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(12.dp))
+                    .semantics { contentDescription = interaction.writeInLabel.ifBlank { "填写回复" } }
                     .padding(12.dp),
                 decorationBox = { inner ->
                     androidx.compose.foundation.layout.Box {
@@ -147,9 +185,42 @@ fun InteractionPanel(
                 },
             )
             if (interaction.type == "ask_question" && writeIn.isNotBlank()) {
-                Text("发送自定义回复", modifier = Modifier.quietClickable(enabled = !isSubmitting) {
-                    onChoose(null, writeIn)
-                }.padding(vertical = 12.dp), color = Color(0xFF0A84FF), fontSize = 15.sp)
+                if (!interaction.isMultiSelect) {
+                    Text("发送自定义回复", modifier = Modifier.quietClickable(enabled = !isSubmitting) {
+                        onChoose(emptyList(), writeIn)
+                    }.padding(vertical = 12.dp), color = AccentBlue, fontSize = 15.sp)
+                }
+            }
+        }
+        if (interaction.isMultiSelect) {
+            val selected = interaction.options.filter { it.id in selectedIds }
+            val canSubmit = selected.isNotEmpty() || writeIn.isNotBlank()
+            Spacer(Modifier.height(10.dp))
+            if (!canSubmit) {
+                Text("请至少选择一项或填写回复", color = SecondaryInk, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+            }
+            Box(
+                Modifier.fillMaxWidth().height(48.dp)
+                    .background(if (canSubmit && !isSubmitting) AccentBlue else Color(0xFFD3D6DA), RoundedCornerShape(14.dp))
+                    .semantics {
+                        stateDescription = when {
+                            isSubmitting -> "正在提交"
+                            canSubmit -> "可以提交"
+                            else -> "需要选择或填写回复"
+                        }
+                    }
+                    .quietClickable(
+                        shape = RoundedCornerShape(14.dp),
+                        enabled = canSubmit && !isSubmitting,
+                    ) { onChoose(selected, writeIn) },
+                contentAlignment = androidx.compose.ui.Alignment.Center,
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(Modifier.size(19.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Text("提交选择", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

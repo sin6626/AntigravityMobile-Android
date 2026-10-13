@@ -693,7 +693,7 @@ class ApiClient(
     suspend fun submitInteraction(
         cascadeId: String,
         interaction: PendingInteraction,
-        option: InteractionOption?,
+        options: List<InteractionOption>,
         writeInResponse: String = "",
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
@@ -704,9 +704,10 @@ class ApiClient(
             trajectoryId = interaction.trajectoryId,
             stepIndex = interaction.stepIndex,
             type = interaction.type,
-            optionId = option?.id ?: if (writeInResponse.isNotBlank()) "__write_in__" else "",
-            scope = option?.scope ?: 1,
-            allow = option?.isDeny != true && (option != null || writeInResponse.isNotBlank()),
+            optionId = options.firstOrNull()?.id ?: if (writeInResponse.isNotBlank()) "__write_in__" else "",
+            selectedOptionIds = options.map { it.id },
+            scope = options.firstOrNull()?.scope ?: 1,
+            allow = options.none { it.isDeny } && (options.isNotEmpty() || writeInResponse.isNotBlank()),
             writeInResponse = writeInResponse,
             target = interaction.target,
         )

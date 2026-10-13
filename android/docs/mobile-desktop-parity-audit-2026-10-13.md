@@ -33,8 +33,8 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 项目与会话浏览 | 项目、多会话、归档、置顶和工作区归属 | 已完成主要浏览和会话管理；多文件夹项目、worktree 选择未呈现 | `ProjectOverview.kt`、`DemoDrawer.kt`、`ChatViewModel.kt:399-565` | P2 补项目结构 |
 | 文字与图片对话 | 消息、图片、流式输出和模型选择 | 已完成，含草稿恢复、失败恢复和阅读锚点 | `ChatViewModel.kt:590-710`、`ConversationContent.kt` | 保持回归 |
 | 模型与推理强度 | 每模型 Low / Medium / High，切换对后续执行生效 | 已完成主要选择体验，模型目录来自后端 | `ModelConfigBottomSheet.kt:41-43`、`ChatViewModel.kt:461-493` | 保持回归 |
-| 单选权限与问答 | 命令权限、确认和澄清问题 | 部分完成，单选和自由输入可提交 | `InteractionPanel.kt`、`ChatViewModel.kt:880-904` | P0 |
-| 多选问答 | 电脑可呈现多选问题 | 缺失。界面明确写“请在电脑端处理”，ViewModel 直接拒绝提交 | `InteractionPanel.kt:54-57`、`ChatViewModel.kt:885` | P0，待协议 |
+| 单选权限与问答 | 命令权限、确认和澄清问题 | 已完成，单选和自由输入可提交 | `InteractionPanel.kt`、`ChatViewModel.respondToInteraction` | 保持回归 |
+| 多选问答 | 电脑可呈现多选问题 | 已完成。支持多项选择、自定义回答、必答校验、失败保留和重试 | `InteractionPanel.kt`、`ChatViewModel.respondToInteraction`、`InteractionSubmitRequest.selectedOptionIds` | 保持回归 |
 | 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 整份方案审阅与 Proceed 已完成：卡片、全屏阅读、滚动位置、提交/失败恢复均已接入；定位评论仍待协议 | `StreamPayload.kt`、`ApiClient.proceedArtifact`、`ChatViewModel.proceedArtifact`、`PlanReviewPanel` | P0 剩定位评论 |
 | 计划定位评论 | 对计划选区评论并要求代理修订 | 缺失。当前只有文件阅读，没有选区评论模型和回传入口 | `LinkedFilePreview.kt`、`Interaction.kt` | P0，待协议 |
 | 运行中排队消息 | Queue、Send Now、编辑和删除 | 部分完成。网关和 Android 模型都有队列数据，API 也有删除与 `deliveryStrategy`，但状态没有接入；运行中发送按钮只执行停止 | `StreamPayload.kt:91-101,145`、`ApiClient.kt:532-633`、`ChatComponents.kt:413,565` | P0 |
@@ -83,9 +83,10 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
    - 卡片出现与消失使用高度和透明度连续过渡；运行状态变化时不抢正文滚动位置。减少动态效果时直接切换最终状态。
 
 2. `feat(android): 支持多选审批与澄清问答`
+   - **已于 2026-10-13 完成。**
    - 复用现有 InteractionPanel 的排版和单选视觉，增加复选状态、完成按钮、自由输入与必答校验。
    - 选项长文本可完整阅读，提交失败保留全部选择。面板高度变化不遮住输入框。
-   - 开工前必须确认后端多选请求字段、选项 ID 数组、scope 与拒绝语义。
+   - 已从网关上游类型确认 `selectedOptionIds`、`writeInResponse`、`skipped/cancelled` 结构，并保留旧 `optionId` 兼容；未增加未经证实的 scope 或拒绝枚举。
 
 3. `feat(android): 展示并管理排队消息`
    - 运行时保留输入与发送能力，发送后在输入框上方显示队列卡片。
@@ -154,7 +155,6 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 
 根据项目约束，以下字段没有文档或真实请求样本时不能开始页面写入逻辑：
 
-- 多选问答的选择数组、scope、拒绝和跳过语义。
 - 普通文件的上传字段、文件名、MIME、大小、数量、模型限制和恢复方式。
 - Planning / Fast 与计划审阅策略的本机枚举。
 - `@` 文件引用、Skills、Rules 和斜杠命令的结构化请求对象。
@@ -178,6 +178,6 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 
 ## 本轮没有实施的内容
 
-本轮只完成调研、源码对照和开发计划，没有发送真实消息、批准计划、停止任务、上传文件、操作桌面会话或修改 Android 功能。后续实施仍按一个功能一个中文 Conventional Commit 提交。
+审计后的前两项已经分别完成：待审方案与继续执行、多选审批与澄清问答。均使用隔离网关和模拟器验证，没有发送真实消息、批准真实计划、停止真实任务或上传文件。其余功能继续按一个功能一个中文 Conventional Commit 提交。
 
 没有把 2.21.1 之后的全文搜索、Automations、侧栏拖拽、UI Extensions、`.zip` 和文件夹附件列为当前缺口。没有把第三方 Cockpit 多账号池当作 Google 官方桌面对齐要求。通知继续遵守用户此前的暂缓决定。

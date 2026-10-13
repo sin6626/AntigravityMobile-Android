@@ -121,6 +121,58 @@ func TestProxyStatusAndRpc(t *testing.T) {
 	t.Logf("Proxied GetStatus returned: %s", rpcRec.Body.String())
 }
 
+func TestHandleCascadeInteractionForwardsMultiSelectAnswers(t *testing.T) {
+	var forwarded struct {
+		CascadeID   string `json:"cascadeId"`
+		Interaction struct {
+			AskQuestion struct {
+				Responses []struct {
+					SelectedOptionIDs []string `json:"selectedOptionIds"`
+					WriteInResponse   string   `json:"writeInResponse"`
+					Skipped           bool     `json:"skipped"`
+				} `json:"responses"`
+				Cancelled bool `json:"cancelled"`
+			} `json:"askQuestion"`
+		} `json:"interaction"`
+	}
+	mockUpstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/HandleCascadeUserInteraction") {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&forwarded); err != nil {
+			t.Fatalf("decode upstream interaction: %v", err)
+		}
+		w.Write([]byte(`{}`))
+	}))
+	defer mockUpstream.Close()
+
+	p := NewProxy(inspector.NewInspector(5 * time.Second))
+	p.updateUpstream(inspector.InstanceInfo{
+		Port:      mockUpstream.Listener.Addr().(*net.TCPAddr).Port,
+		CSRFToken: "test-token",
+		IsHealthy: true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/gateway/cascade/interaction", strings.NewReader(
+		`{"cascadeId":"multi-test","trajectoryId":"trajectory-1","stepIndex":4,"type":"ask_question","optionId":"a","selectedOptionIds":["a","b","a",""],"scope":1,"allow":true,"writeInResponse":"补充说明"}`))
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	responses := forwarded.Interaction.AskQuestion.Responses
+	if forwarded.CascadeID != "multi-test" || len(responses) != 1 {
+		t.Fatalf("unexpected upstream payload: %+v", forwarded)
+	}
+	if got := strings.Join(responses[0].SelectedOptionIDs, ","); got != "a,b" {
+		t.Fatalf("expected deduplicated options a,b, got %q", got)
+	}
+	if responses[0].WriteInResponse != "补充说明" || responses[0].Skipped || forwarded.Interaction.AskQuestion.Cancelled {
+		t.Fatalf("unexpected response values: %+v", responses[0])
+	}
+}
+
 func TestGetAllCascadeTrajectoriesNeedsInput(t *testing.T) {
 	// Setup mock upstream server
 	mockUpstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

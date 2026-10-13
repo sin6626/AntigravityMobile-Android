@@ -2018,6 +2018,71 @@ class ChatUxTest {
         }
     }
 
+    @Test fun multiSelectInteractionKeepsAnswersAcrossFailureAndSubmitsAllOptions() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.interactionFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("multi-select", vm) }
+            val submitStarted = CountDownLatch(1)
+            val submitRelease = CountDownLatch(1)
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.pendingInteraction?.isMultiSelect == true }
+                compose.onNodeWithText("请至少选择一项或填写回复").assertIsDisplayed()
+                compose.onNodeWithText("提交选择").assertIsNotEnabled()
+                    .assert(SemanticsMatcher.expectValue(
+                        androidx.compose.ui.semantics.SemanticsProperties.StateDescription,
+                        "需要选择或填写回复",
+                    ))
+
+                compose.onNodeWithContentDescription("选择 保留动效").performClick().assertIsOn()
+                compose.onNodeWithContentDescription("选择 保留滚动位置").performClick().assertIsOn()
+                compose.onNodeWithContentDescription("补充说明").performTextInput("优先保证动画流畅")
+                saveScreenshot("multi-select-interaction.png")
+
+                gateway.failurePath = "/gateway/cascade/interaction"
+                gateway.block = { path -> if (path.contains("/gateway/cascade/interaction")) {
+                    submitStarted.countDown()
+                    submitRelease.await(10, TimeUnit.SECONDS)
+                } }
+                compose.onNodeWithText("提交选择").performClick()
+                assertTrue(submitStarted.await(5, TimeUnit.SECONDS))
+                compose.onNode(SemanticsMatcher.expectValue(
+                    androidx.compose.ui.semantics.SemanticsProperties.StateDescription,
+                    "正在提交",
+                )).assertIsDisplayed()
+                submitRelease.countDown()
+                compose.waitUntil(10_000) { vm.state.value.interactionError != null && !vm.state.value.isSubmittingInteraction }
+                compose.onNodeWithContentDescription("选择 保留动效").assertIsOn()
+                compose.onNodeWithContentDescription("选择 保留滚动位置").assertIsOn()
+                compose.onNodeWithText("优先保证动画流畅").assertIsDisplayed()
+
+                val failed = JSONObject(gateway.requests.last { it.first == "/gateway/cascade/interaction" }.second)
+                assertEquals("a", failed.getString("optionId"))
+                assertEquals(listOf("a", "b"), failed.getJSONArray("selectedOptionIds").let { ids ->
+                    (0 until ids.length()).map(ids::getString)
+                })
+                assertEquals("优先保证动画流畅", failed.getString("writeInResponse"))
+
+                gateway.failurePath = null
+                gateway.block = {}
+                compose.onNodeWithText("提交选择").performClick()
+                compose.waitUntil(10_000) { gateway.interactionSubmitted && vm.state.value.pendingInteraction == null }
+                compose.onNodeWithText("选择需要保留的体验").assertDoesNotExist()
+            } finally {
+                submitRelease.countDown()
+                compose.runOnIdle { store.clear() }
+            }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2052,6 +2117,8 @@ class ChatUxTest {
         @Volatile var previewFiles = 0
         @Volatile var planFixture = false
         @Volatile var planProceeded = false
+        @Volatile var interactionFixture = false
+        @Volatile var interactionSubmitted = false
         private fun image(width: Int, height: Int) = java.io.ByteArrayOutputStream().let { output ->
             val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.BLUE)
@@ -2116,6 +2183,7 @@ class ChatUxTest {
                                     changes.keys().forEach { ann.put(it, changes.get(it)) }
                                 }
                                 if (path.contains("/revert/execute")) reverted = true
+                                if (path == "/gateway/cascade/interaction") interactionSubmitted = true
                             }
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
@@ -2133,7 +2201,7 @@ class ChatUxTest {
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"}}"""
+                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"}}"""
                                 path.startsWith("/api/v1/files/content") -> JSONObject()
                                     .put("uri", "file:///test/plan.md")
                                     .put("filename", "plan.md")

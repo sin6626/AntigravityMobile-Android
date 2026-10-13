@@ -35,6 +35,7 @@ data class InteractionRespondRequest(
     val stepIndex: Int,
     val type: String,
     val optionId: String,
+    val selectedOptionIds: List<String> = emptyList(),
     val scope: Int,
     val allow: Boolean,
     val writeInResponse: String,

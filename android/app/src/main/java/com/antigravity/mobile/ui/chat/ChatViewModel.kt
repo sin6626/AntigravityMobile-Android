@@ -60,6 +60,7 @@ data class ChatUiState(
     val streamingMessageId: String? = null,
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
+    val interactionError: String? = null,
     val canProceed: Boolean = false,
     val proceedArtifactUri: String? = null,
     val isProceedingArtifact: Boolean = false,
@@ -195,12 +196,16 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     latestAgent.effectiveText != previousText && latestAgent.effectiveText.startsWith(previousText)
                 val outgoing = reconcileOutgoing(previous.outgoing, update.cascadeId, nextMessages)
                 val planChanged = previous.proceedArtifactUri != update.proceedArtifactUri
+                val interactionChanged = previous.pendingInteraction?.let { it.trajectoryId to it.stepIndex } !=
+                    update.pendingInteraction?.let { it.trajectoryId to it.stepIndex }
                 _state.value = _state.value.copy(
                     messages = nextMessages,
                     outgoing = outgoing,
                     isRunning = running || outgoing.any { it.conversationId == update.cascadeId },
                     streamingMessageId = if (running && (growing || previous.streamingMessageId == latestAgent?.id)) latestAgent?.id else null,
                     pendingInteraction = update.pendingInteraction,
+                    isSubmittingInteraction = if (interactionChanged) false else previous.isSubmittingInteraction,
+                    interactionError = if (interactionChanged || update.pendingInteraction == null) null else previous.interactionError,
                     canProceed = update.canProceed,
                     proceedArtifactUri = update.proceedArtifactUri,
                     isProceedingArtifact = if (planChanged) false else previous.isProceedingArtifact,
@@ -346,7 +351,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
             messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
             isLoadingMessages = false, canProceed = false, proceedArtifactUri = null,
-            isProceedingArtifact = false, proceedError = null,
+            isProceedingArtifact = false, proceedError = null, isSubmittingInteraction = false,
+            pendingInteraction = null, interactionError = null,
         )
     }
 
@@ -553,6 +559,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             streamingMessageId = null,
             isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
+            interactionError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -592,6 +599,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             revertMessage = null, revertPreview = null, revertError = null, isLoadingRevert = false, isReverting = false,
             isRunning = false,
             pendingInteraction = null,
+            interactionError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -855,7 +863,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     stream.disconnect()
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
                         draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
-                        pendingInteraction = null, canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
+                        pendingInteraction = null, interactionError = null, canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
                         proceedError = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
                     stream.connect(id); loadMessages(id)
                 } else if (draftKey == id) {
@@ -891,28 +899,40 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun respondToInteraction(option: InteractionOption?, writeInResponse: String = "") {
+    fun respondToInteraction(options: List<InteractionOption>, writeInResponse: String = "") {
         val current = _state.value
         val id = current.selectedConversationId ?: return
         val interaction = current.pendingInteraction ?: return
+        val interactionKey = interaction.trajectoryId to interaction.stepIndex
         val visit = conversationVisit
-        if (interaction.isMultiSelect || current.isSubmittingInteraction) return
-        _state.value = current.copy(isSubmittingInteraction = true, error = null)
+        if (current.isSubmittingInteraction) return
+        val answer = writeInResponse.trim()
+        val selected = if (interaction.isMultiSelect) options.distinctBy { it.id } else options.take(1)
+        if (interaction.type == "ask_question" && selected.isEmpty() && answer.isEmpty()) {
+            _state.value = current.copy(interactionError = "请至少选择一项或填写回复")
+            return
+        }
+        _state.value = current.copy(isSubmittingInteraction = true, interactionError = null)
         viewModelScope.launch {
-            api.submitInteraction(id, interaction, option, writeInResponse).fold(
+            api.submitInteraction(id, interaction, selected, answer).fold(
                 onSuccess = {
-                    if (conversationVisit != visit) return@fold
+                    if (conversationVisit != visit ||
+                        _state.value.pendingInteraction?.let { it.trajectoryId to it.stepIndex } != interactionKey
+                    ) return@fold
                     _state.value = _state.value.copy(
                         pendingInteraction = null,
                         isSubmittingInteraction = false,
+                        interactionError = null,
                     )
                     loadMessages(id)
                 },
                 onFailure = { error ->
-                    if (conversationVisit != visit) return@fold
+                    if (conversationVisit != visit ||
+                        _state.value.pendingInteraction?.let { it.trajectoryId to it.stepIndex } != interactionKey
+                    ) return@fold
                     _state.value = _state.value.copy(
                         isSubmittingInteraction = false,
-                        error = error.message ?: "提交选择失败",
+                        interactionError = error.message ?: "提交选择失败",
                     )
                 },
             )
@@ -971,12 +991,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val outgoing = reconcileOutgoing(current.outgoing, id, merged)
                         val incomingPlanUri = if (changed) current.proceedArtifactUri else payload.proceedArtifactUri
                         val planChanged = current.proceedArtifactUri != incomingPlanUri
+                        val incomingInteraction = if (changed) current.pendingInteraction else payload.pendingInteraction
+                        val interactionChanged = current.pendingInteraction?.let { it.trajectoryId to it.stepIndex } !=
+                            incomingInteraction?.let { it.trajectoryId to it.stepIndex }
                         _state.value = _state.value.copy(
                             messages = merged,
                             outgoing = outgoing,
                             isRunning = (if (changed) current.isRunning else payload.status.contains("RUNNING", ignoreCase = true)) ||
                                 outgoing.any { it.conversationId == id },
-                            pendingInteraction = if (changed) current.pendingInteraction else payload.pendingInteraction,
+                            pendingInteraction = incomingInteraction,
+                            isSubmittingInteraction = if (interactionChanged) false else current.isSubmittingInteraction,
+                            interactionError = if (interactionChanged || incomingInteraction == null) null else current.interactionError,
                             canProceed = if (changed) current.canProceed else payload.canProceed,
                             proceedArtifactUri = incomingPlanUri,
                             isProceedingArtifact = if (planChanged) false else current.isProceedingArtifact,
