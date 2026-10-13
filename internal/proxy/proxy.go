@@ -775,11 +775,9 @@ func (p *Proxy) handleSendUserCascadeMessage(w http.ResponseWriter, r *http.Requ
 		}
 		if comments, ok := rawMap["artifactComments"].([]interface{}); ok {
 			for _, ac := range comments {
-				if acMap, ok := ac.(map[string]interface{}); ok {
-					if uri, ok := acMap["artifactUri"].(string); ok {
-						contentHasher.Write([]byte(uri))
-						contentLen += len(uri)
-					}
+				if encoded, marshalErr := json.Marshal(ac); marshalErr == nil {
+					contentHasher.Write(encoded)
+					contentLen += len(encoded)
 				}
 			}
 		}

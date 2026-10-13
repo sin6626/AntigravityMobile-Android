@@ -2036,7 +2036,7 @@ class ChatUxTest {
                 compose.onNodeWithText("方案等待审阅").assertIsDisplayed()
                 compose.onNodeWithText("文件：plan.md").assertIsDisplayed()
                 saveScreenshot("pending-plan-review.png")
-                compose.onNodeWithText("查看方案").performClick()
+                compose.onNodeWithText("查看与评论").performClick()
                 compose.waitUntil(10_000) { gateway.requests.any { it.first.startsWith("/api/v1/files/content") } }
                 compose.waitUntil(10_000) { compose.onAllNodesWithText("开发方案").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithText("开发方案").assertIsDisplayed()
@@ -2044,7 +2044,7 @@ class ChatUxTest {
                 compose.onNodeWithContentDescription("文件内容").performScrollToIndex(35)
                 compose.onNodeWithText("步骤 35").assertIsDisplayed()
                 compose.onNodeWithText("关闭").performClick()
-                compose.onNodeWithText("查看方案").performClick()
+                compose.onNodeWithText("查看与评论").performClick()
                 compose.onNodeWithText("步骤 35").assertIsDisplayed()
                 compose.onNodeWithText("关闭").performClick()
 
@@ -2076,6 +2076,66 @@ class ChatUxTest {
                 compose.onNodeWithText("方案已批准，正在继续执行").assertIsDisplayed()
             } finally {
                 proceedRelease.countDown()
+                compose.runOnIdle { store.clear() }
+            }
+        }
+    }
+
+    @Test fun planCommentsPersistAfterCloseAndSubmitWithoutApproval() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.planFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("plan-comments", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.canProceed && !vm.state.value.isLoadingMessages }
+                compose.onNodeWithText("查看与评论").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("评论第 1 行").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithContentDescription("评论第 1 行").performClick()
+                compose.onNodeWithContentDescription("方案评论内容").performTextInput("标题需要说明验收目标")
+                compose.onNodeWithText("关闭").performClick()
+
+                compose.onNodeWithText("查看与评论（1）").performClick()
+                compose.onNodeWithText("标题需要说明验收目标").assertIsDisplayed()
+                compose.onNodeWithText("加入评论").performClick()
+                compose.onNodeWithContentDescription("评论第 3 行").performClick()
+                compose.onNodeWithContentDescription("方案评论内容").performTextInput("补充失败后的恢复步骤")
+                compose.onNodeWithText("加入评论").performClick()
+                compose.onNodeWithText("待提交评论 2 条").assertIsDisplayed()
+                saveScreenshot("plan-positioned-comments.png")
+
+                gateway.failurePath = "SendUserCascadeMessage"
+                compose.onNodeWithText("提交反馈（2）").performClick()
+                compose.waitUntil(10_000) { vm.state.value.planCommentError != null && !vm.state.value.isSubmittingPlanComments }
+                compose.onNodeWithText("方案评论提交失败: HTTP 500").assertIsDisplayed()
+                compose.onNodeWithText("待提交评论 2 条").assertIsDisplayed()
+
+                val failed = JSONObject(gateway.requests.last { it.first.contains("SendUserCascadeMessage") }.second)
+                val comments = failed.getJSONArray("artifactComments")
+                assertEquals(2, comments.length())
+                val first = comments.getJSONObject(0)
+                assertEquals("file:///test/plan.md", first.getString("artifactUri"))
+                assertFalse(first.has("approvalStatus"))
+                val firstSelection = first.getJSONObject("scope").also { assertEquals("selections", it.getString("case")) }
+                    .getJSONObject("value").getJSONArray("selections").getJSONObject(0)
+                    .getJSONObject("selection").also { assertEquals("textSelection", it.getString("case")) }
+                    .getJSONObject("value")
+                assertEquals("# 开发方案", firstSelection.getString("content"))
+                assertEquals(0, firstSelection.getInt("startLine"))
+                assertEquals(1, firstSelection.getInt("endLine"))
+
+                gateway.failurePath = null
+                compose.onNodeWithText("提交反馈（2）").performClick()
+                compose.waitUntil(10_000) { gateway.planProceeded && vm.state.value.planCommentSuccessCount == 1 }
+                compose.onNodeWithText("方案等待审阅").assertDoesNotExist()
+            } finally {
                 compose.runOnIdle { store.clear() }
             }
         }

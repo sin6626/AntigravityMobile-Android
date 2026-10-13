@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.antigravity.mobile.data.model.ConversationItem
+import com.antigravity.mobile.data.model.ArtifactCommentDraftState
 import com.antigravity.mobile.data.model.DraftComposerContext
 import com.antigravity.mobile.data.model.LocalDraftSession
 import com.antigravity.mobile.data.model.ProjectItem
@@ -413,6 +414,25 @@ class PreferencesManager(context: Context) {
         prefs.edit().remove(KEY_DRAFT_CONTEXT_PREFIX + cascadeId).apply()
     }
 
+    fun saveArtifactCommentDraft(cascadeId: String, artifactUri: String, value: ArtifactCommentDraftState) {
+        val key = artifactCommentKey(cascadeId, artifactUri)
+        if (value == ArtifactCommentDraftState()) prefs.edit().remove(key).apply()
+        else prefs.edit().putString(key, draftJson.encodeToString(value)).apply()
+    }
+
+    fun loadArtifactCommentDraft(cascadeId: String, artifactUri: String): ArtifactCommentDraftState {
+        val raw = prefs.getString(artifactCommentKey(cascadeId, artifactUri), null) ?: return ArtifactCommentDraftState()
+        return try { draftJson.decodeFromString<ArtifactCommentDraftState>(raw) }
+        catch (_: Exception) { ArtifactCommentDraftState() }
+    }
+
+    fun clearArtifactCommentDraft(cascadeId: String, artifactUri: String) {
+        prefs.edit().remove(artifactCommentKey(cascadeId, artifactUri)).apply()
+    }
+
+    private fun artifactCommentKey(cascadeId: String, artifactUri: String) =
+        KEY_ARTIFACT_COMMENT_PREFIX + cascadeId + ":" + artifactUri
+
     private val draftImageDirectory: File get() = File(appContext.noBackupFilesDir, "android_draft_images")
 
     /** Copy once, outside the system-evictable cache. Call on IO; existing 4×8MB limits still apply. */
@@ -659,6 +679,7 @@ class PreferencesManager(context: Context) {
         private const val KEY_DRAFT_IMAGES_PREFIX = "android_draft_images_"
         private const val KEY_DRAFT_FILE_PREFIX = "android_draft_file_"
         private const val KEY_DRAFT_CONTEXT_PREFIX = "android_draft_context_"
+        private const val KEY_ARTIFACT_COMMENT_PREFIX = "android_artifact_comment_"
         private const val KEY_CACHED_PROJECTS = "cached_projects_json"
         private const val KEY_CACHED_CONVERSATIONS = "cached_conversations_json"
         private const val KEY_DRAFT_SESSIONS = "cached_draft_sessions_json"

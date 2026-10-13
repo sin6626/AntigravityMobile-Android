@@ -166,6 +166,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         viewModel::refreshModels else null
     val snackbar = remember { SnackbarHostState() }
     var observedProceedSuccess by remember { mutableIntStateOf(state.proceedSuccessCount) }
+    var observedPlanCommentSuccess by remember { mutableIntStateOf(state.planCommentSuccessCount) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var tempPhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -237,6 +238,12 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             snackbar.showSnackbar("方案已批准，正在继续执行")
         }
         observedProceedSuccess = state.proceedSuccessCount
+    }
+    LaunchedEffect(state.planCommentSuccessCount) {
+        if (state.planCommentSuccessCount > observedPlanCommentSuccess) {
+            snackbar.showSnackbar("反馈已提交，代理正在修订方案")
+        }
+        observedPlanCommentSuccess = state.planCommentSuccessCount
     }
     val returnFromConversation: () -> Unit = {
         viewModel.closeConversation()
@@ -543,11 +550,15 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
                     ) {
                         val uri = state.proceedArtifactUri.orEmpty()
+                        val commentCount = state.planCommentDraft.comments.size +
+                            if (state.planCommentDraft.activeSelection != null && state.planCommentDraft.activeComment.isNotBlank()) 1 else 0
                         PlanReviewPanel(
                             filename = previewFileName(uri),
                             conversationTitle = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.title
                                 ?: "当前会话",
                             isProceeding = state.isProceedingArtifact,
+                            isSubmittingComments = state.isSubmittingPlanComments,
+                            commentCount = commentCount,
                             error = state.proceedError,
                             onView = { if (uri.isNotBlank()) planPreviewOpen = true },
                             onProceed = viewModel::proceedArtifact,

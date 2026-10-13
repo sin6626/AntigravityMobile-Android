@@ -782,6 +782,22 @@ func TestSendUserCascadeMessageDeduplication(t *testing.T) {
 	if upstreamCallCount != 7 {
 		t.Fatalf("expected different files to pass and the exact repeat to deduplicate, got %d upstream calls", upstreamCallCount)
 	}
+
+	// 8. Comments on the same artifact remain distinct when their ranges or text differ.
+	commentA := `{"cascadeId":"cascade-dup-test","items":[],"artifactComments":[{"artifactUri":"file:///plan.md","scope":{"case":"selections","value":{"selections":[{"selection":{"case":"textSelection","value":{"content":"A","startLine":0,"endLine":1}}}]}},"comment":"Explain A"}]}`
+	commentB := `{"cascadeId":"cascade-dup-test","items":[],"artifactComments":[{"artifactUri":"file:///plan.md","scope":{"case":"selections","value":{"selections":[{"selection":{"case":"textSelection","value":{"content":"B","startLine":2,"endLine":3}}}]}},"comment":"Explain B"}]}`
+	for _, payload := range []string{commentA, commentB, commentB} {
+		req := httptest.NewRequest(http.MethodPost, "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("artifact comment request expected 200, got %d", rec.Code)
+		}
+	}
+	if upstreamCallCount != 9 {
+		t.Fatalf("expected distinct artifact comments to pass and the exact repeat to deduplicate, got %d upstream calls", upstreamCallCount)
+	}
 }
 
 func TestDeleteCascadeTrajectoryProxy(t *testing.T) {

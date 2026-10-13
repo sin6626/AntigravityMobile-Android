@@ -533,3 +533,10 @@ android/app/src/main/java/com/antigravity/mobile/
 - 发送继续复用 `SendUserCascadeMessage.items`：普通文字写入 `text` 项，电脑引用写入 `ContextScopeItem.file/directory`，命令写入 `ContextScopeItem.slashCommand`，没有把路径或命令伪装成普通文本。工作区搜索只返回 URI、相对路径、文件数和字节数，不读取或上传电脑文件内容。
 - 网关新增 `/gateway/commands`，基于当前会话 CascadeConfig 和用户所选模型调用桌面端 `GetSlashCommands`；命令的 plugin/logo 保留原始 JSON 类型。Android API 日志仍记录接口、请求头、参数与响应，但 `modelFacingText` 统一替换为“内部命令内容已隐藏”。
 - Go 工作区/命令聚焦测试、Android 单测与 Debug/AndroidTest 构建通过。API 37 模拟器完整验证了搜索、选择、草稿持久化、失败恢复、重试和结构化请求体；截图位于忽略目录 `android/design/.verification/feature-9/workspace-context-command.png`。真实 Antigravity 2.19.1 返回 57 个命令，`/plan` 存在且无参数；带对象型 plugin 的命令也可解码。主网关 58900 和管理网关 58901 已部署新二进制并恢复健康，主 Cloudflare 隧道已重新启动。
+
+### 2026-10-13 方案定位评论
+- 本机 2.19.1 的 protobuf 描述与桌面前端共同确认 `ArtifactComment` 契约：文本评论使用 `scope={case:"selections", value:{selections:[{selection:{case:"textSelection", value:{content,startLine,endLine}}}]}}`；`startLine` 零基、`endLine` 为尾后行。普通反馈不发送 `approvalStatus`，整份批准为 `APPROVED=1`。多条评论放入同一个 `artifactComments[]`。
+- Android 全屏方案页按 Markdown 顶层段落提供至少 48 dp 的点选范围，选中后以 160 ms 背景/边框过渡显示定位，并在底部展开评论编辑器；可积累、移除最多 20 条评论。评论草稿按会话和 Artifact URI 写入 SharedPreferences，关闭预览、旋转和进程重建后恢复。
+- “提交反馈”只发送定位评论并让代理修订，不附带批准；“继续执行”会按桌面端行为把待提交评论与整份批准合并。提交中禁用冲突动作，失败保留全部内容，成功清理草稿并等待新方案。
+- Go 网关对 `artifactComments` 的短时去重改为完整 JSON 哈希，同一 Artifact 上范围或文字不同的评论不会互相吞掉。聚焦 Go 测试、Android 单测、Debug/AndroidTest 构建通过；API 37 模拟器的评论恢复、失败重试、独立提交和原 Proceed 回归均通过。视觉截图位于忽略目录 `android/design/.verification/feature-10/plan-positioned-comments.png`。
+- 当前源码已部署到主网关 58900/PID 17048 与管理网关 58901/PID 43492，SHA256 为 `41A431D6F51FDBB925B26EE5ECBA067D39C587AB0202D7EF71DC409538EBD18E`；主 Cloudflare PID 42728。本地两端、公网和模拟器到 58901 的健康检查均为 200。

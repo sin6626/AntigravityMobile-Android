@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.GatewayMessageItem
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import org.commonmark.parser.Parser
+import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.node.*
 import org.commonmark.ext.gfm.tables.TablesExtension
 import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
@@ -500,7 +501,7 @@ private val markdownCache = object {
         synchronized(documents) { documents[source]?.let { return it } }
         val parser = Parser.builder().extensions(
             listOf(TablesExtension.create(), StrikethroughExtension.create())
-        ).build()
+        ).includeSourceSpans(IncludeSourceSpans.BLOCKS).build()
         val parsed = parser.parse(normalizeBlockMath(source))
         synchronized(documents) { documents[source] = parsed }
         return parsed

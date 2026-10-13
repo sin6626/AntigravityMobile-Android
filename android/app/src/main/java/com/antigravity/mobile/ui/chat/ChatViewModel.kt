@@ -25,6 +25,9 @@ import com.antigravity.mobile.data.model.MessageAttachment
 import com.antigravity.mobile.data.model.DraftComposerContext
 import com.antigravity.mobile.data.model.WorkspaceContextItem
 import com.antigravity.mobile.data.model.SlashCommandDefinition
+import com.antigravity.mobile.data.model.ArtifactCommentDraft
+import com.antigravity.mobile.data.model.ArtifactCommentDraftState
+import com.antigravity.mobile.data.model.ArtifactTextSelection
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
@@ -88,6 +91,10 @@ data class ChatUiState(
     val isProceedingArtifact: Boolean = false,
     val proceedError: String? = null,
     val proceedSuccessCount: Int = 0,
+    val planCommentDraft: ArtifactCommentDraftState = ArtifactCommentDraftState(),
+    val isSubmittingPlanComments: Boolean = false,
+    val planCommentError: String? = null,
+    val planCommentSuccessCount: Int = 0,
     val conversations: List<ConversationItem> = emptyList(),
     val projects: List<ProjectItem> = emptyList(),
     val models: List<ChatModel> = emptyList(),
@@ -241,6 +248,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     latestAgent.effectiveText != previousText && latestAgent.effectiveText.startsWith(previousText)
                 val outgoing = reconcileOutgoing(previous.outgoing, update.cascadeId, nextMessages)
                 val planChanged = previous.proceedArtifactUri != update.proceedArtifactUri
+                val nextPlanCommentDraft = if (planChanged) loadPlanCommentDraft(update.cascadeId, update.proceedArtifactUri)
+                    else previous.planCommentDraft
                 val interactionChanged = previous.pendingInteraction?.let { it.trajectoryId to it.stepIndex } !=
                     update.pendingInteraction?.let { it.trajectoryId to it.stepIndex }
                 _state.value = _state.value.copy(
@@ -257,6 +266,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     proceedArtifactUri = update.proceedArtifactUri,
                     isProceedingArtifact = if (planChanged) false else previous.isProceedingArtifact,
                     proceedError = if (planChanged || !update.canProceed) null else previous.proceedError,
+                    planCommentDraft = nextPlanCommentDraft,
+                    isSubmittingPlanComments = if (planChanged) false else previous.isSubmittingPlanComments,
+                    planCommentError = if (planChanged || !update.canProceed) null else previous.planCommentError,
                     activeModelId = update.activeModel ?: previous.activeModelId,
                     isLoadingMessages = false, messagesError = null,
                     hasMoreMessages = if (previous.isLoadingMessages || update.isFullSnapshot) update.hasMore else previous.hasMoreMessages,
@@ -269,6 +281,108 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun setDraft(value: String) {
         prefs.setDraftText(draftKey, value)
         _state.value = _state.value.copy(draft = value)
+    }
+
+    private fun loadPlanCommentDraft(cascadeId: String, artifactUri: String?) =
+        artifactUri?.takeIf(String::isNotBlank)?.let { prefs.loadArtifactCommentDraft(cascadeId, it) }
+            ?: ArtifactCommentDraftState()
+
+    private fun savePlanCommentDraft(value: ArtifactCommentDraftState) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        val uri = current.proceedArtifactUri ?: return
+        prefs.saveArtifactCommentDraft(id, uri, value)
+        _state.value = current.copy(planCommentDraft = value, planCommentError = null)
+    }
+
+    fun selectPlanComment(selection: ArtifactTextSelection) {
+        if (selection.content.isBlank() || selection.startLine < 0 || selection.endLine <= selection.startLine) return
+        if (_state.value.planCommentDraft.comments.size >= 20) {
+            _state.value = _state.value.copy(planCommentError = "每次最多提交 20 条评论")
+            return
+        }
+        savePlanCommentDraft(_state.value.planCommentDraft.copy(activeSelection = selection))
+    }
+
+    fun setPlanComment(value: String) {
+        savePlanCommentDraft(_state.value.planCommentDraft.copy(activeComment = value.take(4_000)))
+    }
+
+    fun addPlanComment() {
+        val draft = _state.value.planCommentDraft
+        val selection = draft.activeSelection ?: return
+        val comment = draft.activeComment.trim()
+        if (comment.isEmpty()) {
+            _state.value = _state.value.copy(planCommentError = "请填写评论内容")
+            return
+        }
+        if (draft.comments.size >= 20) {
+            _state.value = _state.value.copy(planCommentError = "每次最多提交 20 条评论")
+            return
+        }
+        savePlanCommentDraft(draft.copy(
+            comments = draft.comments + ArtifactCommentDraft(selection, comment),
+            activeSelection = null,
+            activeComment = "",
+        ))
+    }
+
+    fun removePlanComment(index: Int) {
+        val draft = _state.value.planCommentDraft
+        if (index !in draft.comments.indices) return
+        savePlanCommentDraft(draft.copy(comments = draft.comments.filterIndexed { itemIndex, _ -> itemIndex != index }))
+    }
+
+    fun clearPlanCommentSelection() {
+        savePlanCommentDraft(_state.value.planCommentDraft.copy(activeSelection = null, activeComment = ""))
+    }
+
+    private fun readyPlanComments(draft: ArtifactCommentDraftState): List<ArtifactCommentDraft> =
+        if (draft.activeSelection != null && draft.activeComment.isNotBlank())
+            draft.comments + ArtifactCommentDraft(draft.activeSelection, draft.activeComment.trim())
+        else draft.comments
+
+    fun submitPlanComments() {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        val uri = current.proceedArtifactUri?.takeIf { current.canProceed && it.isNotBlank() } ?: return
+        if (current.isSubmittingPlanComments || current.isProceedingArtifact) return
+        val comments = readyPlanComments(current.planCommentDraft)
+        if (comments.isEmpty()) {
+            _state.value = current.copy(planCommentError = "请先点选方案段落并填写评论")
+            return
+        }
+        val visit = conversationVisit
+        val model = current.modelOverrideId?.let { selected ->
+            current.models.firstOrNull { it.id == selected || it.model == selected }?.model
+        }
+        _state.value = current.copy(isSubmittingPlanComments = true, planCommentError = null)
+        viewModelScope.launch {
+            api.submitArtifactComments(id, uri, comments, model).fold(
+                onSuccess = {
+                    if (conversationVisit != visit) return@fold
+                    prefs.clearArtifactCommentDraft(id, uri)
+                    val latest = _state.value
+                    _state.value = latest.copy(
+                        canProceed = false,
+                        proceedArtifactUri = null,
+                        planCommentDraft = ArtifactCommentDraftState(),
+                        isSubmittingPlanComments = false,
+                        planCommentError = null,
+                        planCommentSuccessCount = latest.planCommentSuccessCount + 1,
+                        isRunning = true,
+                    )
+                    loadMessages(id)
+                },
+                onFailure = { error ->
+                    if (conversationVisit != visit) return@fold
+                    _state.value = _state.value.copy(
+                        isSubmittingPlanComments = false,
+                        planCommentError = error.message ?: "方案评论提交失败",
+                    )
+                },
+            )
+        }
     }
 
     private fun currentComposerContext() = DraftComposerContext(_state.value.workspaceContexts, _state.value.slashCommand)
@@ -633,7 +747,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             selectedConversationId = null, conversations = emptyList(), projects = emptyList(),
             messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
             isLoadingMessages = false, canProceed = false, proceedArtifactUri = null,
-            isProceedingArtifact = false, proceedError = null, isSubmittingInteraction = false,
+            isProceedingArtifact = false, proceedError = null,
+            planCommentDraft = ArtifactCommentDraftState(), isSubmittingPlanComments = false, planCommentError = null,
+            isSubmittingInteraction = false,
             pendingInteraction = null, interactionError = null, queuedMessages = emptyList(),
             busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
@@ -879,6 +995,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             subagents = emptyList(), activeSubagent = activeSubagent, isLoadingSubagents = true, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
+            planCommentDraft = ArtifactCommentDraftState(), isSubmittingPlanComments = false, planCommentError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
@@ -961,6 +1078,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
+            planCommentDraft = ArtifactCommentDraftState(), isSubmittingPlanComments = false, planCommentError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
@@ -1640,7 +1758,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         pendingInteraction = null, interactionError = null, queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(),
                         queueError = null, runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
                         canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
-                        proceedError = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
+                        proceedError = null, planCommentDraft = ArtifactCommentDraftState(),
+                        isSubmittingPlanComments = false, planCommentError = null,
+                        revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
                     stream.connect(id); loadMessages(id)
                 } else if (draftKey == id) {
                     _state.value = _state.value.copy(draft = text, attachments = draftAttachments[id].orEmpty())
@@ -1719,22 +1839,27 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val current = _state.value
         val id = current.selectedConversationId ?: return
         val uri = current.proceedArtifactUri?.takeIf { current.canProceed && it.isNotBlank() } ?: return
-        if (current.isProceedingArtifact) return
+        if (current.isProceedingArtifact || current.isSubmittingPlanComments) return
         val visit = conversationVisit
         val model = current.modelOverrideId?.let { selected ->
             current.models.firstOrNull { it.id == selected || it.model == selected }?.model
         }
+        val comments = readyPlanComments(current.planCommentDraft)
         _state.value = current.copy(isProceedingArtifact = true, proceedError = null)
         viewModelScope.launch {
-            api.proceedArtifact(id, uri, model).fold(
+            api.proceedArtifact(id, uri, comments, model).fold(
                 onSuccess = {
                     if (conversationVisit != visit) return@fold
+                    prefs.clearArtifactCommentDraft(id, uri)
                     val latest = _state.value
                     _state.value = latest.copy(
                         canProceed = false,
                         proceedArtifactUri = null,
                         isProceedingArtifact = false,
                         proceedError = null,
+                        planCommentDraft = ArtifactCommentDraftState(),
+                        isSubmittingPlanComments = false,
+                        planCommentError = null,
                         proceedSuccessCount = latest.proceedSuccessCount + 1,
                         isRunning = true,
                     )
@@ -1767,6 +1892,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val outgoing = reconcileOutgoing(current.outgoing, id, merged)
                         val incomingPlanUri = if (changed) current.proceedArtifactUri else payload.proceedArtifactUri
                         val planChanged = current.proceedArtifactUri != incomingPlanUri
+                        val incomingPlanCommentDraft = if (planChanged) loadPlanCommentDraft(id, incomingPlanUri)
+                            else current.planCommentDraft
                         val incomingInteraction = if (changed) current.pendingInteraction else payload.pendingInteraction
                         val interactionChanged = current.pendingInteraction?.let { it.trajectoryId to it.stepIndex } !=
                             incomingInteraction?.let { it.trajectoryId to it.stepIndex }
@@ -1784,6 +1911,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             proceedArtifactUri = incomingPlanUri,
                             isProceedingArtifact = if (planChanged) false else current.isProceedingArtifact,
                             proceedError = if (planChanged || (!changed && !payload.canProceed)) null else current.proceedError,
+                            planCommentDraft = incomingPlanCommentDraft,
+                            isSubmittingPlanComments = if (planChanged) false else current.isSubmittingPlanComments,
+                            planCommentError = if (planChanged || (!changed && !payload.canProceed)) null else current.planCommentError,
                             activeModelId = if (changed) current.activeModelId else payload.activeModel ?: current.activeModelId,
                             isLoadingMessages = false,
                             hasMoreMessages = payload.hasMore,

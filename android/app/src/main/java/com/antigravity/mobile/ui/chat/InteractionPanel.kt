@@ -50,6 +50,8 @@ fun PlanReviewPanel(
     filename: String,
     conversationTitle: String,
     isProceeding: Boolean,
+    isSubmittingComments: Boolean,
+    commentCount: Int,
     error: String?,
     onView: () -> Unit,
     onProceed: () -> Unit,
@@ -78,19 +80,25 @@ fun PlanReviewPanel(
                     .quietClickable(shape = RoundedCornerShape(14.dp), onClick = onView),
                 contentAlignment = androidx.compose.ui.Alignment.Center,
             ) {
-                Text("查看方案", color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    if (commentCount > 0) "查看与评论（$commentCount）" else "查看与评论",
+                    color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                )
             }
             Box(
                 Modifier.weight(1f).height(48.dp)
-                    .background(if (isProceeding) AccentBlue.copy(alpha = .55f) else AccentBlue, RoundedCornerShape(14.dp))
-                    .semantics { stateDescription = if (isProceeding) "正在提交" else "可以继续执行" }
-                    .quietClickable(shape = RoundedCornerShape(14.dp), enabled = !isProceeding, onClick = onProceed),
+                    .background(if (isProceeding || isSubmittingComments) AccentBlue.copy(alpha = .55f) else AccentBlue, RoundedCornerShape(14.dp))
+                    .semantics { stateDescription = if (isProceeding || isSubmittingComments) "正在提交" else "可以继续执行" }
+                    .quietClickable(shape = RoundedCornerShape(14.dp), enabled = !isProceeding && !isSubmittingComments, onClick = onProceed),
                 contentAlignment = androidx.compose.ui.Alignment.Center,
             ) {
-                if (isProceeding) {
+                if (isProceeding || isSubmittingComments) {
                     CircularProgressIndicator(Modifier.size(19.dp), color = Color.White, strokeWidth = 2.dp)
                 } else {
-                    Text("继续执行", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (commentCount > 0) "执行并提交评论" else "继续执行",
+                        color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    )
                 }
             }
         }

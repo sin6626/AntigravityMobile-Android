@@ -35,15 +35,15 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 模型与推理强度 | 每模型 Low / Medium / High，切换对后续执行生效 | 已完成主要选择体验，模型目录来自后端 | `ModelConfigBottomSheet.kt:41-43`、`ChatViewModel.kt:461-493` | 保持回归 |
 | 单选权限与问答 | 命令权限、确认和澄清问题 | 已完成，单选和自由输入可提交 | `InteractionPanel.kt`、`ChatViewModel.respondToInteraction` | 保持回归 |
 | 多选问答 | 电脑可呈现多选问题 | 已完成。支持多项选择、自定义回答、必答校验、失败保留和重试 | `InteractionPanel.kt`、`ChatViewModel.respondToInteraction`、`InteractionSubmitRequest.selectedOptionIds` | 保持回归 |
-| 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 整份方案审阅与 Proceed 已完成：卡片、全屏阅读、滚动位置、提交/失败恢复均已接入；定位评论仍待协议 | `StreamPayload.kt`、`ApiClient.proceedArtifact`、`ChatViewModel.proceedArtifact`、`PlanReviewPanel` | P0 剩定位评论 |
-| 计划定位评论 | 对计划选区评论并要求代理修订 | 缺失。当前只有文件阅读，没有选区评论模型和回传入口 | `LinkedFilePreview.kt`、`Interaction.kt` | P0，待协议 |
+| 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 已完成。支持整份阅读与批准，也可把待提交定位评论和批准放在同一请求中 | `ApiClient.proceedArtifact`、`ChatViewModel.proceedArtifact`、`PlanReviewPanel` | 保持回归 |
+| 计划定位评论 | 对计划选区评论并要求代理修订 | 已完成。按 Markdown 段落定位原文与行范围，可积累多条、持久化草稿、独立提交修订并失败重试 | `ArtifactCommentDraft.kt`、`LinkedFilePreview.kt`、`ApiClient.submitArtifactComments` | 保持回归 |
 | 运行中排队消息 | Queue、Send Now、编辑和删除 | 已完成。历史/实时队列、运行中新增队列、立即发送、编辑回填、删除、失败留态和草稿恢复均已接入 | `QueuedMessagesPanel.kt`、`ChatViewModel.queueCurrentMessage`、`ChatViewModel.sendQueuedMessageNow` | 保持回归 |
 | 后台任务 | 查看任务、命令、状态并单独停止 | 已完成。历史/实时状态、摘要、命令、动态时长、单项停止、失败留态与空列表清理均已接入 | `RunningTasksPanel.kt`、`ChatViewModel.stopRunningTask`、`ApiClient.stopTask` | 保持回归 |
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 查看与导航已完成：直属子代理、状态、步骤、父子层级、进入只读轨迹和逐级返回均已接入；定向消息仍待公开调用契约 | `/gateway/subagents`、`SubagentsPanel.kt`、`ChatViewModel.openSubagent` | P0 剩定向消息协议 |
 | 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 已完成。文件选择、模型 MIME 校验、8 MB 单文件草稿、进程/失败恢复、普通与排队发送、文件胶囊和无障碍均已接入；使用 `media[].mimeType/displayName/inlineData` | `ChatViewModel.addFile/send`、`PreferencesManager`、`ApiClient.sendMessage`、`ClientModelConfig.supportedMimeTypes` | 保持回归；多文件/文件夹不在 2.19.1 范围 |
-| 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 网关查询已完成：返回文件/目录稳定 URI、相对路径与真实 `scopeItem`；Android 面板和发送仍待接入 | `/gateway/workspace/context`、`SendUserCascadeMessageRequest.items` | P1，进行中 |
+| 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 已完成。`@` 检索、独立胶囊、草稿恢复和结构化 `file/directory` 发送均已接入 | `/gateway/workspace/context`、`DraftComposerContext`、`SendUserCascadeMessageRequest.items` | 保持回归 |
 | Planning / Fast 与审阅策略 | 2.17 已有 `/plan` 和计划审阅策略；当前文档另有 Planning / Fast 说明 | 缺失。新会话只传工作区、提示、模型和项目，没有模式或策略字段 | `ApiClient.kt:399-437` | P1，待本机枚举 |
-| 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 缺失可发现的命令菜单和上下文胶囊。纯文本是否被电脑端解析尚未验证 | `Composer` 仅普通文本输入 | P1，待协议 |
+| 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 斜杠命令已完成真实目录发现、独立胶囊和结构化发送；Skills / Rules 独立管理入口仍未实现 | `/gateway/commands`、`Composer`、`ContextScopeItem.slashCommand` | P2 剩管理入口 |
 | 文件和 Artifact 阅读 | 文件树、Markdown、媒体、Artifact 和浏览器录制 | 部分完成。聊天文件链接可预览 Markdown、代码、文本和图片；PDF、Office、音视频直接显示不支持 | `LinkedFilePreview.kt:55-82,119-179` | P1 |
 | 下载、分享与导出 | 2.19.1 可把渲染 Markdown 导出 PDF，文件与媒体有保存入口 | 部分完成。`downloadFile` 已存在但 Android 没有调用，预览页只有复制原文和关闭 | `ApiClient.kt:903-950`、`LinkedFilePreview.kt:139-174` | P1 |
 | diff 审阅与评论 | 文件 diff、Review Changes、评论与 Git 操作 | 缺失。Android 会请求回退预览作为执行前置条件，但确认框没有展示文件或 diff，更没有当前工作区变更审阅和定位评论 | `ChatDemoScreen.kt:585-619`、`ChatViewModel.kt:788-860` | P1，待协议 |
@@ -129,13 +129,18 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
    - 查询不跟随符号链接，拒绝远程和受限根目录，沿用敏感文件过滤并跳过版本库、依赖、构建缓存和验收材料；50,000 项扫描上限通过 `truncated` 告知客户端。
 
 9. `feat(android): 添加电脑文件引用与命令发现`
+   - **已于 2026-10-13 完成。**
    - 在输入框内用独立胶囊区分手机附件、电脑文件和斜杠命令。
    - `@` 与 `/` 面板跟随键盘，长路径可辨识，选择后焦点回到输入框。加载、空结果和网络失败都有可恢复状态。
 
 10. `feat(android): 支持方案定位评论`
+    - **已于 2026-10-13 完成。**
     - 选区后出现克制的评论入口，评论草稿在关闭和旋转后保留。
     - 评论提交与 Proceed 分开。用户可只提意见，让电脑端重新生成方案。
-    - 开工前确认 Artifact comment 的范围对象、审批状态枚举和多评论提交结构。
+    - 已从本机 2.19.1 protobuf 与桌面前端确认：定位评论使用 `scope.selections[].selection.textSelection`，范围为零基起始行和尾后结束行；普通反馈省略审批状态，Proceed 使用 `APPROVED=1`；多条评论通过同一 `artifactComments[]` 提交。
+    - Android 按 Markdown 可读段落点选并高亮，支持 20 条评论、移除、关闭/旋转/进程恢复、失败留态和重试；只提交评论不会附带整份批准，Proceed 会按桌面行为合并待提交评论。
+    - 网关短时去重改为哈希完整评论对象，避免同一方案上的不同范围或文字被误判重复。
+    - 聚焦 Go 测试、Android 单测、Debug/AndroidTest 构建及 API 37 两条仪器测试通过；主网关 58900、管理网关 58901、主公网和模拟器链路均已部署并健康。
 
 11. `feat(android): 扩展文件与 Artifact 阅读操作`
     - 普通文件增加下载和系统分享；PDF、Office、音频、视频按平台能力选择系统预览或下载说明。

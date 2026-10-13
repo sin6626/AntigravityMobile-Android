@@ -833,12 +833,12 @@ class ApiClient(
     suspend fun proceedArtifact(
         cascadeId: String,
         artifactUri: String,
+        comments: List<ArtifactCommentDraft> = emptyList(),
         model: String? = null
-    ): Result<Unit> = withContext(Dispatchers.IO) {
-        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
-        val url = "$baseUrl/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage"
-
-        val comment = buildJsonObject {
+    ): Result<Unit> {
+        val localized = try { comments.map { artifactCommentPayload(artifactUri, it) } }
+        catch (error: IllegalArgumentException) { return Result.failure(error) }
+        val approval = buildJsonObject {
             put("artifactUri", artifactUri)
             put("scope", buildJsonObject {
                 put("case", "fullFile")
@@ -847,11 +847,62 @@ class ApiClient(
             put("approvalStatus", 1)
             put("comment", "")
         }
+        return sendArtifactComments(cascadeId, localized + approval, model, "执行方案推进失败")
+    }
+
+    suspend fun submitArtifactComments(
+        cascadeId: String,
+        artifactUri: String,
+        comments: List<ArtifactCommentDraft>,
+        model: String? = null,
+    ): Result<Unit> {
+        if (comments.isEmpty() || comments.size > 20) return Result.failure(IllegalArgumentException("请添加 1 至 20 条评论"))
+        val payloads = try { comments.map { artifactCommentPayload(artifactUri, it) } }
+        catch (error: IllegalArgumentException) { return Result.failure(error) }
+        return sendArtifactComments(cascadeId, payloads, model, "方案评论提交失败")
+    }
+
+    private fun artifactCommentPayload(artifactUri: String, draft: ArtifactCommentDraft): JsonObject {
+        require(artifactUri.isNotBlank()) { "方案地址无效" }
+        require(draft.comment.isNotBlank() && draft.comment.length <= 4_000) { "评论须为 1 至 4000 个字符" }
+        require(draft.selection.content.isNotBlank() && draft.selection.content.length <= 20_000) { "评论选区无效" }
+        require(draft.selection.startLine >= 0 && draft.selection.endLine > draft.selection.startLine) { "评论行号无效" }
+        return buildJsonObject {
+            put("artifactUri", artifactUri)
+            put("scope", buildJsonObject {
+                put("case", "selections")
+                put("value", buildJsonObject {
+                    put("selections", buildJsonArray {
+                        add(buildJsonObject {
+                            put("selection", buildJsonObject {
+                                put("case", "textSelection")
+                                put("value", buildJsonObject {
+                                    put("content", draft.selection.content)
+                                    put("startLine", draft.selection.startLine)
+                                    put("endLine", draft.selection.endLine)
+                                })
+                            })
+                        })
+                    })
+                })
+            })
+            put("comment", draft.comment.trim())
+        }
+    }
+
+    private suspend fun sendArtifactComments(
+        cascadeId: String,
+        comments: List<JsonObject>,
+        model: String?,
+        failureLabel: String,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val url = "$baseUrl/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage"
 
         val payload = buildJsonObject {
             put("cascadeId", cascadeId)
             put("items", JsonArray(emptyList()))
-            put("artifactComments", buildJsonArray { add(comment) })
+            put("artifactComments", buildJsonArray { comments.forEach(::add) })
             if (!model.isNullOrBlank()) {
                 put("model", model)
             }
@@ -869,7 +920,7 @@ class ApiClient(
                 if (response.isSuccessful) {
                     Result.success(Unit)
                 } else {
-                    Result.failure(RuntimeException("执行方案推进失败: HTTP ${response.code}"))
+                    Result.failure(RuntimeException("$failureLabel: HTTP ${response.code}"))
                 }
             }
         } catch (e: Exception) {
