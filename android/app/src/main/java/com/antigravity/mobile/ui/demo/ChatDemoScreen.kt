@@ -97,6 +97,7 @@ import com.antigravity.mobile.ui.chat.PairingScreen
 import com.antigravity.mobile.ui.chat.InteractionPanel
 import com.antigravity.mobile.ui.chat.PlanReviewPanel
 import com.antigravity.mobile.ui.chat.QueuedMessagesPanel
+import com.antigravity.mobile.ui.chat.RunningTasksPanel
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -553,6 +554,18 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             isSubmitting = state.isSubmittingInteraction,
                             error = state.interactionError,
                             onChoose = viewModel::respondToInteraction,
+                        )
+                    }
+                    AnimatedVisibility(
+                        visible = state.runningTasks.isNotEmpty(),
+                        enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
+                        exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
+                    ) {
+                        RunningTasksPanel(
+                            tasks = state.runningTasks,
+                            stoppingIds = state.stoppingTaskIds,
+                            error = state.tasksError,
+                            onStop = viewModel::stopRunningTask,
                         )
                     }
                     AnimatedVisibility(

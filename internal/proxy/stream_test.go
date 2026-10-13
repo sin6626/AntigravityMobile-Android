@@ -133,6 +133,16 @@ func TestSanitizeWebSocketHeaders(t *testing.T) {
 	})
 }
 
+func TestStreamUpdatePayloadIncludesEmptyRunningTasks(t *testing.T) {
+	data, err := json.Marshal(StreamUpdatePayload{CascadeID: "test-cascade", RunningTasks: []RunningTaskItem{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"runningTasks":[]`) {
+		t.Fatalf("expected an explicit empty runningTasks field, got %s", data)
+	}
+}
+
 func TestWebSocketUpgradeWithMangledHeaders(t *testing.T) {
 	// Verify that a request with comma-separated Sec-WebSocket-Key (like Cloudflare Tunnel produces)
 	// successfully upgrades to 101 Switching Protocols without error.
@@ -289,4 +299,3 @@ func TestRawTrajectorySignature(t *testing.T) {
 		t.Fatalf("expected different signature on status transition, got %q", sig5)
 	}
 }
-

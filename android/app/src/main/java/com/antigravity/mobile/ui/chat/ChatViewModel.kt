@@ -15,6 +15,7 @@ import com.antigravity.mobile.data.model.PairingInfo
 import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
 import com.antigravity.mobile.data.model.QueuedMessageItem
+import com.antigravity.mobile.data.model.RunningTaskItem
 import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.model.ChatModel
@@ -66,6 +67,9 @@ data class ChatUiState(
     val queuedMessages: List<QueuedMessageItem> = emptyList(),
     val busyQueuedMessageIds: Set<String> = emptySet(),
     val queueError: String? = null,
+    val runningTasks: List<RunningTaskItem> = emptyList(),
+    val stoppingTaskIds: Set<String> = emptySet(),
+    val tasksError: String? = null,
     val canProceed: Boolean = false,
     val proceedArtifactUri: String? = null,
     val isProceedingArtifact: Boolean = false,
@@ -212,6 +216,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isSubmittingInteraction = if (interactionChanged) false else previous.isSubmittingInteraction,
                     interactionError = if (interactionChanged || update.pendingInteraction == null) null else previous.interactionError,
                     queuedMessages = update.queuedMessages ?: previous.queuedMessages,
+                    runningTasks = update.runningTasks.orEmpty(),
                     canProceed = update.canProceed,
                     proceedArtifactUri = update.proceedArtifactUri,
                     isProceedingArtifact = if (planChanged) false else previous.isProceedingArtifact,
@@ -360,6 +365,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isProceedingArtifact = false, proceedError = null, isSubmittingInteraction = false,
             pendingInteraction = null, interactionError = null, queuedMessages = emptyList(),
             busyQueuedMessageIds = emptySet(), queueError = null,
+            runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
         )
     }
 
@@ -568,6 +574,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             pendingInteraction = null,
             interactionError = null,
             queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
+            runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -609,6 +616,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             pendingInteraction = null,
             interactionError = null,
             queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
+            runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -832,6 +840,41 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         _state.value = _state.value.copy(
                             busyQueuedMessageIds = _state.value.busyQueuedMessageIds - message.id,
                             queueError = error.message ?: "删除排队消息失败",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun stopRunningTask(task: RunningTaskItem) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        val taskId = task.stableId
+        if (taskId in current.stoppingTaskIds || task !in current.runningTasks) return
+        val visit = conversationVisit
+        _state.value = current.copy(
+            stoppingTaskIds = current.stoppingTaskIds + taskId,
+            tasksError = null,
+        )
+        viewModelScope.launch {
+            api.stopTask(id, taskId, task.stepIndex).fold(
+                onSuccess = {
+                    if (conversationVisit == visit && _state.value.selectedConversationId == id) {
+                        _state.value = _state.value.copy(
+                            runningTasks = _state.value.runningTasks.filterNot { it.stableId == taskId },
+                            stoppingTaskIds = _state.value.stoppingTaskIds - taskId,
+                            tasksError = null,
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    if (error is GatewayAuthorizationException) {
+                        expirePairing()
+                    } else if (conversationVisit == visit && _state.value.selectedConversationId == id) {
+                        _state.value = _state.value.copy(
+                            stoppingTaskIds = _state.value.stoppingTaskIds - taskId,
+                            tasksError = error.message ?: "停止后台任务失败",
                         )
                     }
                 },
@@ -1140,7 +1183,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
                         draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
                         pendingInteraction = null, interactionError = null, queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(),
-                        queueError = null, canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
+                        queueError = null, runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
+                        canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
                         proceedError = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
                     stream.connect(id); loadMessages(id)
                 } else if (draftKey == id) {
@@ -1280,6 +1324,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             isSubmittingInteraction = if (interactionChanged) false else current.isSubmittingInteraction,
                             interactionError = if (interactionChanged || incomingInteraction == null) null else current.interactionError,
                             queuedMessages = if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(),
+                            runningTasks = if (changed) current.runningTasks else payload.runningTasks.orEmpty(),
                             canProceed = if (changed) current.canProceed else payload.canProceed,
                             proceedArtifactUri = incomingPlanUri,
                             isProceedingArtifact = if (planChanged) false else current.isProceedingArtifact,

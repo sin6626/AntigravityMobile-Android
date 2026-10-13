@@ -2156,6 +2156,74 @@ class ChatUxTest {
         }
     }
 
+    @Test fun runningTasksShowProgressAndOnlyStopTheSelectedTask() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.running = true
+            gateway.taskFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("running-tasks", vm) }
+            val stopStarted = CountDownLatch(1)
+            val stopRelease = CountDownLatch(1)
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.runningTasks.size == 2 }
+                compose.onNodeWithText("2 个正在执行").assertIsDisplayed()
+                compose.onNodeWithText("运行浏览器检查").assertIsDisplayed()
+                compose.onNodeWithText("npm run test:e2e").assertIsDisplayed()
+                compose.onNodeWithContentDescription("停止生成").assertIsDisplayed()
+                compose.onNodeWithContentDescription("收起后台任务").performClick()
+                compose.onNodeWithContentDescription("展开后台任务").performClick()
+                compose.onNodeWithText("运行浏览器检查").assertIsDisplayed()
+                compose.onNodeWithContentDescription("收起后台任务").performClick()
+                compose.onNodeWithText("运行浏览器检查").assertDoesNotExist()
+                compose.onNodeWithContentDescription("展开后台任务").performClick()
+                compose.onNodeWithText("运行浏览器检查").assertIsDisplayed()
+                saveScreenshot("running-tasks.png")
+
+                gateway.failurePath = "/gateway/cascade/task/stop"
+                gateway.block = { path -> if (path.contains("/gateway/cascade/task/stop")) {
+                    stopStarted.countDown()
+                    stopRelease.await(10, TimeUnit.SECONDS)
+                } }
+                compose.onNodeWithContentDescription("停止后台任务 运行浏览器检查").performClick()
+                assertTrue(stopStarted.await(5, TimeUnit.SECONDS))
+                compose.onNodeWithText("正在停止…").assertIsDisplayed()
+                stopRelease.countDown()
+                compose.waitUntil(10_000) { vm.state.value.tasksError != null && vm.state.value.stoppingTaskIds.isEmpty() }
+                assertEquals(2, vm.state.value.runningTasks.size)
+
+                gateway.failurePath = null
+                gateway.block = {}
+                compose.onNodeWithContentDescription("停止后台任务 运行浏览器检查").performClick()
+                compose.waitUntil(10_000) { vm.state.value.runningTasks.size == 1 }
+                compose.onNodeWithText("运行浏览器检查").assertDoesNotExist()
+                compose.onNodeWithText("生成预览资源").assertIsDisplayed()
+
+                val stopRequest = gateway.requests.last { it.first.contains("/gateway/cascade/task/stop") }
+                val stopBody = JSONObject(stopRequest.second)
+                assertEquals("A", stopBody.getString("cascadeId"))
+                assertEquals("task-browser", stopBody.getString("taskId"))
+                assertEquals(8, stopBody.getInt("stepIndex"))
+                assertFalse(stopBody.has("cascade_id"))
+
+                compose.onNodeWithContentDescription("停止后台任务 生成预览资源").performClick()
+                compose.waitUntil(10_000) { vm.state.value.runningTasks.isEmpty() }
+                compose.onNodeWithText("后台任务").assertDoesNotExist()
+                compose.onNodeWithContentDescription("停止生成").assertIsDisplayed()
+            } finally {
+                stopRelease.countDown()
+                compose.runOnIdle { store.clear() }
+            }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2195,7 +2263,9 @@ class ChatUxTest {
         @Volatile var queueFixture = false
         @Volatile var queuedDraftText: String? = null
         @Volatile var sentNowText: String? = null
+        @Volatile var taskFixture = false
         private val deletedQueueIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private val stoppedTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private fun queuedMessagesJson(): String {
             val messages = mutableListOf<JSONObject>()
             if ("q-edit" !in deletedQueueIds) messages += JSONObject()
@@ -2205,6 +2275,18 @@ class ChatUxTest {
             queuedDraftText?.takeIf { "q-new" !in deletedQueueIds }?.let { messages += JSONObject()
                 .put("id", "q-new").put("text", it).put("createdAt", "2026-10-13T08:02:00Z") }
             return org.json.JSONArray(messages).toString()
+        }
+        private fun runningTasksJson(): String {
+            val tasks = mutableListOf<JSONObject>()
+            if ("task-browser" !in stoppedTaskIds) tasks += JSONObject()
+                .put("id", "task-browser").put("stepIndex", 8).put("toolName", "run_command")
+                .put("toolSummary", "运行浏览器检查").put("commandLine", "npm run test:e2e")
+                .put("startedAt", "2026-10-13T08:00:00Z")
+            if ("task-preview" !in stoppedTaskIds) tasks += JSONObject()
+                .put("id", "task-preview").put("stepIndex", 9).put("toolName", "run_command")
+                .put("toolSummary", "生成预览资源").put("commandLine", "./gradlew renderPreview")
+                .put("startedAt", "2026-10-13T08:01:00Z")
+            return org.json.JSONArray(tasks).toString()
         }
         private fun image(width: Int, height: Int) = java.io.ByteArrayOutputStream().let { output ->
             val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
@@ -2279,6 +2361,9 @@ class ChatUxTest {
                                 if (path.contains("DeleteAgentMessage")) {
                                     deletedQueueIds += JSONObject(requestBody).getString("messageId")
                                 }
+                                if (path.contains("/gateway/cascade/task/stop")) {
+                                    stoppedTaskIds += JSONObject(requestBody).getString("taskId")
+                                }
                             }
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
@@ -2296,7 +2381,7 @@ class ChatUxTest {
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"}}"""
+                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"},"runningTasks":${if (taskFixture) runningTasksJson() else "[]"}}"""
                                 path.startsWith("/api/v1/files/content") -> JSONObject()
                                     .put("uri", "file:///test/plan.md")
                                     .put("filename", "plan.md")

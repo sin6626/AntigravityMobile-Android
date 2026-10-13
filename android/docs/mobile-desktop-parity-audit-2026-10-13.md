@@ -38,7 +38,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 整份方案审阅与 Proceed 已完成：卡片、全屏阅读、滚动位置、提交/失败恢复均已接入；定位评论仍待协议 | `StreamPayload.kt`、`ApiClient.proceedArtifact`、`ChatViewModel.proceedArtifact`、`PlanReviewPanel` | P0 剩定位评论 |
 | 计划定位评论 | 对计划选区评论并要求代理修订 | 缺失。当前只有文件阅读，没有选区评论模型和回传入口 | `LinkedFilePreview.kt`、`Interaction.kt` | P0，待协议 |
 | 运行中排队消息 | Queue、Send Now、编辑和删除 | 已完成。历史/实时队列、运行中新增队列、立即发送、编辑回填、删除、失败留态和草稿恢复均已接入 | `QueuedMessagesPanel.kt`、`ChatViewModel.queueCurrentMessage`、`ChatViewModel.sendQueuedMessageNow` | 保持回归 |
-| 后台任务 | 查看任务、命令、状态并单独停止 | 部分完成。数据模型和停止接口已存在，没有 Android 状态和卡片 | `StreamPayload.kt:103-128,146`、`ApiClient.kt:663-688` | P0 |
+| 后台任务 | 查看任务、命令、状态并单独停止 | 已完成。历史/实时状态、摘要、命令、动态时长、单项停止、失败留态与空列表清理均已接入 | `RunningTasksPanel.kt`、`ChatViewModel.stopRunningTask`、`ApiClient.stopTask` | 保持回归 |
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 缺失。当前没有独立子代理身份、导航或定向消息模型 | 官方 Changelog；Android 无对应 UI/请求 | P0，待协议 |
 | 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 缺失。系统“文件”入口仍只允许四种图片，草稿与发送模型也是 `PendingImage` / `images` / `media` | `ChatDemoScreen.kt:545`、`ChatViewModel.kt:86,296-317`、`ApiClient.kt:532-599` | P0，待协议 |
 | 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 缺失。发送项只有文本，没有结构化文件引用或上下文对象 | `ApiClient.kt:545-573` | P1，待协议 |
@@ -95,6 +95,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
    - 展开、折叠、插入、删除和快速反向操作保持连续；TalkBack 读出队列长度和三个动作。
 
 4. `feat(android): 展示并停止后台任务`
+   - **已于 2026-10-13 完成。**
    - 显示真实命令摘要、运行状态和持续时间，允许单独停止，不把“停止当前回复”当作“所有后台任务都已停止”。
    - 状态更新只改对应行，列表不闪烁、不跳位；停止中禁用重复操作，失败恢复按钮。
 
@@ -179,6 +180,6 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 
 ## 本轮没有实施的内容
 
-审计后的前三项已经分别完成：待审方案与继续执行、多选审批与澄清问答、排队消息管理。均使用隔离网关和模拟器验证，没有发送真实消息、批准真实计划、停止真实任务或上传文件。其余功能继续按一个功能一个中文 Conventional Commit 提交。
+审计后的前四项已经分别完成：待审方案与继续执行、多选审批与澄清问答、排队消息管理、后台任务查看与单项停止。均使用隔离网关和模拟器验证，没有发送真实消息、批准真实计划、停止真实任务或上传文件。其余功能继续按一个功能一个中文 Conventional Commit 提交。
 
 没有把 2.21.1 之后的全文搜索、Automations、侧栏拖拽、UI Extensions、`.zip` 和文件夹附件列为当前缺口。没有把第三方 Cockpit 多账号池当作 Google 官方桌面对齐要求。通知继续遵守用户此前的暂缓决定。

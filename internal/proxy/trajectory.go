@@ -145,7 +145,7 @@ type CascadeMessagesResponse struct {
 	NextOffset         int                  `json:"nextOffset"`
 	Messages           []CascadeMessageItem `json:"messages"`
 	QueuedMessages     []QueuedMessageItem  `json:"queuedMessages"`
-	RunningTasks       []RunningTaskItem    `json:"runningTasks,omitempty"`
+	RunningTasks       []RunningTaskItem    `json:"runningTasks"`
 	ActiveModel        string               `json:"activeModel,omitempty"`
 	ModelDisplayName   string               `json:"modelDisplayName,omitempty"`
 	CascadeConfig      json.RawMessage      `json:"cascadeConfig,omitempty"`
@@ -763,7 +763,7 @@ type TrajectoryDetails struct {
 	Steps              []TrajectoryStep     `json:"steps"`
 	AllMessages        []CascadeMessageItem `json:"allMessages"`
 	QueuedMessages     []QueuedMessageItem  `json:"queuedMessages"`
-	RunningTasks       []RunningTaskItem    `json:"runningTasks,omitempty"`
+	RunningTasks       []RunningTaskItem    `json:"runningTasks"`
 	ActiveModel        string               `json:"activeModel,omitempty"`
 	ModelDisplayName   string               `json:"modelDisplayName,omitempty"`
 	CascadeConfig      json.RawMessage      `json:"cascadeConfig,omitempty"`
@@ -1433,7 +1433,7 @@ func (p *Proxy) ParseTrajectoryDetails(rawResp *upstreamTrajectoryResp) Trajecto
 	}
 	queuedMessages = p.FilterQueuedMessagesAgainstTrajectory(rawResp.Trajectory.CascadeID, queuedMessages, steps, allMessages)
 
-	var runningTasks []RunningTaskItem
+	runningTasks := []RunningTaskItem{}
 	for idx, s := range steps {
 		stepIdx := idx
 		if s.Metadata.SourceTrajectoryStepInfo != nil && s.Metadata.SourceTrajectoryStepInfo.StepIndex > 0 {

@@ -6,6 +6,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import com.antigravity.mobile.data.model.RunningTaskItem
+import com.antigravity.mobile.ui.chat.RunningTasksPanel
 import org.junit.Rule
 import org.junit.Test
 
@@ -57,5 +59,23 @@ class ReducedMotionTest {
         compose.onNodeWithText(full).assertExists()
         compose.runOnIdle { source.value += "。" }
         compose.onNodeWithText(full + "。").assertExists()
+    }
+
+    @Test fun runningTasksRemainUsableWithMotionDisabled() {
+        var stopped = ""
+        compose.runOnIdle { scale.value.floatValue = 0f }
+        compose.setContent {
+            RunningTasksPanel(
+                tasks = listOf(RunningTaskItem(id = "task-1", stepIndex = 1, toolSummary = "检查界面", commandLine = "run ui")),
+                stoppingIds = emptySet(),
+                error = null,
+                onStop = { stopped = it.id },
+            )
+        }
+        compose.onNodeWithContentDescription("收起后台任务").performClick()
+        compose.onNodeWithText("检查界面").assertDoesNotExist()
+        compose.onNodeWithContentDescription("展开后台任务").performClick()
+        compose.onNodeWithContentDescription("停止后台任务 检查界面").performClick()
+        org.junit.Assert.assertEquals("task-1", stopped)
     }
 }

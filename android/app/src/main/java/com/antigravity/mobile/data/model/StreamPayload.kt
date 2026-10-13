@@ -113,6 +113,9 @@ data class RunningTaskItem(
     val command: String? = null,
     val status: String? = null
 ) {
+    val stableId: String
+        get() = id.ifBlank { "task-$stepIndex" }
+
     val displayTitle: String
         get() = toolSummary?.takeIf { it.isNotBlank() }
             ?: toolAction?.takeIf { it.isNotBlank() }

@@ -29,7 +29,7 @@ type StreamUpdatePayload struct {
 	Steps              []TrajectoryStep     `json:"steps,omitempty"`
 	Messages           []CascadeMessageItem `json:"messages,omitempty"`
 	QueuedMessages     []QueuedMessageItem  `json:"queuedMessages"`
-	RunningTasks       []RunningTaskItem    `json:"runningTasks,omitempty"`
+	RunningTasks       []RunningTaskItem    `json:"runningTasks"`
 	IsFullSnapshot     bool                 `json:"isFullSnapshot"`
 	CascadeConfigRaw   string               `json:"cascadeConfigRaw,omitempty"`
 	CanProceed         bool                 `json:"canProceed"`
