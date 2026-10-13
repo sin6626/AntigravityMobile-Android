@@ -847,7 +847,7 @@ class ApiClient(
             put("approvalStatus", 1)
             put("comment", "")
         }
-        return sendArtifactComments(cascadeId, localized + approval, model, "执行方案推进失败")
+        return sendReviewComments(cascadeId, "artifactComments", localized + approval, model, "执行方案推进失败")
     }
 
     suspend fun submitArtifactComments(
@@ -859,7 +859,60 @@ class ApiClient(
         if (comments.isEmpty() || comments.size > 20) return Result.failure(IllegalArgumentException("请添加 1 至 20 条评论"))
         val payloads = try { comments.map { artifactCommentPayload(artifactUri, it) } }
         catch (error: IllegalArgumentException) { return Result.failure(error) }
-        return sendArtifactComments(cascadeId, payloads, model, "方案评论提交失败")
+        return sendReviewComments(cascadeId, "artifactComments", payloads, model, "方案评论提交失败")
+    }
+
+    suspend fun fetchConversationDiffs(cascadeId: String): Result<ConversationDiffResponse> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        val encodedId = URLEncoder.encode(cascadeId, "UTF-8")
+        try {
+            val request = buildAuthorizedRequest("$baseUrl/gateway/cascade/diffs?cascadeId=$encodedId").get().build()
+            client.newCall(request).await().use { response ->
+                if (!response.isSuccessful) {
+                    return@withContext Result.failure(RuntimeException("读取当前变更失败: HTTP ${response.code}"))
+                }
+                Result.success(json.decodeFromString(response.body?.string() ?: "{}"))
+            }
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
+    }
+
+    suspend fun submitDiffComments(
+        cascadeId: String,
+        comments: List<DiffCommentDraft>,
+        model: String? = null,
+    ): Result<Unit> {
+        if (comments.isEmpty() || comments.size > 20) return Result.failure(IllegalArgumentException("请添加 1 至 20 条评论"))
+        val payloads = try {
+            comments.groupBy(DiffCommentDraft::fileUri).map { (fileUri, fileComments) ->
+                require(fileUri.isNotBlank()) { "文件地址无效" }
+                buildJsonObject {
+                    put("fileUri", fileUri)
+                    putJsonArray("diffCommentInfos") {
+                        fileComments.forEach { draft ->
+                            require(draft.comment.isNotBlank() && draft.comment.length <= 4_000) { "评论须为 1 至 4000 个字符" }
+                            require(draft.selection.content.isNotBlank() && draft.selection.content.length <= 20_000) { "评论选区无效" }
+                            require(draft.selection.startLine >= 0 && draft.selection.endLine > draft.selection.startLine) { "评论行号无效" }
+                            addJsonObject {
+                                put("comment", draft.comment.trim())
+                                put(if (draft.side == DiffSide.ORIGINAL) "originalSelection" else "modifiedSelection",
+                                    textSelectionPayload(draft.selection))
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (error: IllegalArgumentException) {
+            return Result.failure(error)
+        }
+        return sendReviewComments(cascadeId, "fileDiffComments", payloads, model, "变更评论提交失败")
+    }
+
+    private fun textSelectionPayload(selection: ArtifactTextSelection) = buildJsonObject {
+        put("content", selection.content)
+        put("startLine", selection.startLine)
+        put("endLine", selection.endLine)
     }
 
     private fun artifactCommentPayload(artifactUri: String, draft: ArtifactCommentDraft): JsonObject {
@@ -890,8 +943,9 @@ class ApiClient(
         }
     }
 
-    private suspend fun sendArtifactComments(
+    private suspend fun sendReviewComments(
         cascadeId: String,
+        fieldName: String,
         comments: List<JsonObject>,
         model: String?,
         failureLabel: String,
@@ -902,7 +956,7 @@ class ApiClient(
         val payload = buildJsonObject {
             put("cascadeId", cascadeId)
             put("items", JsonArray(emptyList()))
-            put("artifactComments", buildJsonArray { comments.forEach(::add) })
+            put(fieldName, buildJsonArray { comments.forEach(::add) })
             if (!model.isNullOrBlank()) {
                 put("model", model)
             }

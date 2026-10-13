@@ -134,6 +134,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val projectListState = rememberLazyListState()
     var planPreviewOpen by rememberSaveable(state.selectedConversationId, state.proceedArtifactUri) { mutableStateOf(false) }
+    var diffReviewOpen by rememberSaveable(state.selectedConversationId) { mutableStateOf(false) }
     val planPreviewListState = rememberSaveable(
         state.selectedConversationId,
         state.proceedArtifactUri,
@@ -167,6 +168,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     var observedProceedSuccess by remember { mutableIntStateOf(state.proceedSuccessCount) }
     var observedPlanCommentSuccess by remember { mutableIntStateOf(state.planCommentSuccessCount) }
+    var observedDiffCommentSuccess by remember { mutableIntStateOf(state.diffCommentSuccessCount) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     var tempPhotoUri by remember { mutableStateOf<Uri?>(null) }
@@ -244,6 +246,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
             snackbar.showSnackbar("反馈已提交，代理正在修订方案")
         }
         observedPlanCommentSuccess = state.planCommentSuccessCount
+    }
+    LaunchedEffect(state.diffCommentSuccessCount) {
+        if (state.diffCommentSuccessCount > observedDiffCommentSuccess) {
+            diffReviewOpen = false
+            snackbar.showSnackbar("变更反馈已提交，代理正在处理")
+        }
+        observedDiffCommentSuccess = state.diffCommentSuccessCount
     }
     val returnFromConversation: () -> Unit = {
         viewModel.closeConversation()
@@ -401,6 +410,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                     isArchived = state.conversations.firstOrNull { it.id == state.selectedConversationId }?.isArchived == true,
                                     onPin = { state.selectedConversationId?.let { id -> viewModel.setPinned(id, state.conversations.firstOrNull { it.id == id }?.isPinned != true) } },
                                     onArchive = { state.selectedConversationId?.let { id -> viewModel.setArchived(id, state.conversations.firstOrNull { it.id == id }?.isArchived != true) } },
+                                    onReviewChanges = {
+                                        diffReviewOpen = true
+                                        viewModel.loadDiffReview()
+                                    },
                                     actionsEnabled = state.activeSubagent == null && !state.selectedConversationId.orEmpty().startsWith("local:") &&
                                         state.selectedConversationId !in state.busyConversations && !state.isReverting,
                                 )
@@ -698,6 +711,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 listState = planPreviewListState,
                 fullScreen = true,
             )
+        }
+        if (diffReviewOpen && state.selectedConversationId != null && state.activeSubagent == null) {
+            DiffReviewScreen(viewModel = viewModel, onDismiss = { diffReviewOpen = false })
         }
         if (modelPickerOpen && state.isPaired) {
             ModelConfigBottomSheet(

@@ -1674,6 +1674,57 @@ class ChatUxTest {
         }
     }
 
+    @Test fun currentChangesKeepPositionedCommentsAndSubmitDesktopShape() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.diffFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("diff-review", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "A" && !vm.state.value.isLoadingMessages }
+                compose.onNodeWithContentDescription("更多选项").performClick()
+                compose.onNodeWithText("审阅变更").performClick()
+                compose.onNodeWithText("Agent.md").assertIsDisplayed()
+                compose.onNodeWithText("new line").assertIsDisplayed()
+                compose.onNodeWithContentDescription("评论新增第 2 行")
+                    .assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f)).performClick()
+                compose.onNodeWithContentDescription("变更评论内容").performTextInput("这里应保留原来的命名")
+                compose.onNodeWithText("加入评论").performClick()
+                compose.onNodeWithText("待提交评论 1 条").assertIsDisplayed()
+                saveScreenshot("current-changes-positioned-comment.png")
+
+                compose.onNodeWithText("关闭").performClick()
+                compose.onNodeWithContentDescription("更多选项").performClick()
+                compose.onNodeWithText("审阅变更").performClick()
+                compose.onNodeWithText("待提交评论 1 条").assertIsDisplayed()
+                compose.onNodeWithText("提交反馈（1）").performClick()
+                compose.waitUntil(10_000) {
+                    gateway.requests.any { (path, body) -> path.contains("SendUserCascadeMessage") &&
+                        JSONObject(body.ifBlank { "{}" }).optJSONArray("fileDiffComments")?.length() == 1 }
+                }
+                val sent = JSONObject(gateway.requests.last { (path, body) -> path.contains("SendUserCascadeMessage") &&
+                    JSONObject(body.ifBlank { "{}" }).optJSONArray("fileDiffComments")?.length() == 1 }.second)
+                assertEquals(0, sent.getJSONArray("items").length())
+                val fileComment = sent.getJSONArray("fileDiffComments").getJSONObject(0)
+                assertEquals("file:///test/Agent.md", fileComment.getString("fileUri"))
+                val info = fileComment.getJSONArray("diffCommentInfos").getJSONObject(0)
+                assertFalse(info.has("originalSelection"))
+                assertEquals("这里应保留原来的命名", info.getString("comment"))
+                val selection = info.getJSONObject("modifiedSelection")
+                assertEquals("new line", selection.getString("content"))
+                assertEquals(1, selection.getInt("startLine"))
+                assertEquals(2, selection.getInt("endLine"))
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun revertPreviewKeepsDialogSizeAndDefaultsToRestoringFiles() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -2526,6 +2577,7 @@ class ChatUxTest {
         @Volatile var sentNowText: String? = null
         @Volatile var taskFixture = false
         @Volatile var subagentFixture = false
+        @Volatile var diffFixture = false
         private val deletedQueueIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private val stoppedTaskIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         private fun queuedMessagesJson(): String {
@@ -2648,6 +2700,9 @@ class ChatUxTest {
                                     {"id":"sub-running","parentConversationId":"A","rootConversationId":"A","title":"检查登录动效","status":"RUNNING","stepCount":6,"nestingDepth":1},
                                     {"id":"sub-waiting","parentConversationId":"A","rootConversationId":"A","title":"等待用户选择","status":"WAITING","stepCount":4,"nestingDepth":1,"needsInput":true}
                                 ]}""" else """{"subagents":[]}"""
+                                path.startsWith("/gateway/cascade/diffs") -> if (diffFixture) """{"cascadeId":"A","files":[
+                                    {"fileUri":"file:///test/Agent.md","fileName":"Agent.md","actionType":"MODIFY","originalContent":"alpha\nold line\nomega","modifiedContent":"alpha\nnew line\nomega","firstTouchedStepIndex":2,"lastTouchedStepIndex":4}
+                                ]}""" else """{"cascadeId":"$id","files":[]}"""
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
                                     """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"},"runningTasks":${if (taskFixture) runningTasksJson() else "[]"}}"""

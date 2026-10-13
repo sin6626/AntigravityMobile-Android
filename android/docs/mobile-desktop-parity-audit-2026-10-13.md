@@ -46,7 +46,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 斜杠命令已完成真实目录发现、独立胶囊和结构化发送；Skills / Rules 独立管理入口仍未实现 | `/gateway/commands`、`Composer`、`ContextScopeItem.slashCommand` | P2 剩管理入口 |
 | 文件和 Artifact 阅读 | 文件树、Markdown、媒体、Artifact 和浏览器录制 | 已完成手机适配范围：Markdown、代码、文本和图片原生阅读；PDF、Office、音视频下载后交给系统兼容应用预览或播放 | `LinkedFilePreview.kt`、`LinkedFileActions.kt` | 保持回归；不内嵌 Office 阅读器 |
 | 下载、分享与导出 | 2.19.1 可把渲染 Markdown 导出 PDF，文件与媒体有保存入口 | 已完成文件与 Artifact 的系统保存、分享；图片同样支持。Android 直接保存 Markdown 原文件，未另造渲染 PDF 管线 | `ApiClient.downloadFile`、`LinkedFileActions.kt`、`FileProvider` | 保持回归 |
-| diff 审阅与评论 | 文件 diff、Review Changes、评论与 Git 操作 | 缺失。Android 会请求回退预览作为执行前置条件，但确认框没有展示文件或 diff，更没有当前工作区变更审阅和定位评论 | `ChatDemoScreen.kt:585-619`、`ChatViewModel.kt:788-860` | P1，待协议 |
+| diff 审阅与评论 | 文件 diff、Review Changes、评论与 Git 操作 | 当前变更阅读与定位评论已完成；Accept、Reject、discard、stage 和 commit 仍待各自动作契约 | `/gateway/cascade/diffs`、`DiffReviewScreen.kt`、`ApiClient.submitDiffComments` | P1 剩 Git 动作协议 |
 | 会话撤回 | 2.19.1 支持只撤回会话 | 已完成会话与文件两种回退范围，并保留草稿和图片 | `ChatViewModel.kt:788-860` | 保持回归 |
 | 模型额度 | 模型和额度受账号方案限制 | 部分完成。客户端已有读取和刷新配额接口，但没有 Android 调用和页面 | `ApiClient.kt:270-315` | P2 |
 | Cockpit 多账号切换 | 未发现 Google 官方将第三方账号池列为桌面对齐能力 | 接口存在但 UI 未接。应作为本项目附加功能单独评估 | `ApiClient.kt:317-337` | 非核心对齐 |
@@ -151,8 +151,12 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
     - 没有增加内嵌 Office/PDF/媒体依赖，也没有把 Markdown 渲染为另一份 PDF；Android 分享/保存原始 Artifact，避免内容与桌面源文件不一致。
 
 12. `feat(android): 添加当前变更 diff 审阅`
+    - **已于 2026-10-13 完成读取与定位评论。**
     - 与“回退到某条消息”使用不同标题、颜色和确认文案。
     - 第一版先读 diff 和定位评论。Accept、Reject、Git discard、stage 和 commit 必须按真实后端动作分别设计。
+    - 网关按本机 2.19.1 的 `GetTrajectoryFileDiffs` 读取当前会话文件变更，过滤 Artifact、Knowledge、noop 与内容未变项；Android 展示文件、增删行号和折叠上下文。
+    - 新增行使用 `modifiedSelection`，删除行使用 `originalSelection`，行号为零基起始和尾后结束；评论草稿按会话保存，关闭后可继续编辑，提交失败不丢内容。
+    - Go 聚焦测试、Android 单测/构建和 API 37 仪器测试通过；同一二进制已部署到 58900 与 58901，本地、公网、模拟器健康及 58901 真实 diff 读取均通过。
 
 ### 第三批：模式与管理
 
@@ -179,7 +183,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 - 普通文件上游是否另有限制单文件大小或多文件数量；Android 首版先限制为单个小文件，上传字段、文件名、MIME、模型能力和落盘恢复方式已经确认。
 - Planning / Fast 与计划审阅策略的本机枚举。
 - `@` 文件引用、Skills、Rules 和斜杠命令的结构化请求对象。
-- Artifact 选区评论、diff 评论和批准或拒绝的范围对象。
+- diff 的 Accept、Reject、Git discard、stage 和 commit 动作对象；读取与定位评论对象已经确认并接入。
 - 子代理定向消息的公开 HTTP/RPC 入口和停止目标。身份与父子关系已经由轨迹元数据确认并接入。
 - MCP、权限和项目 worktree 的读取与修改接口。
 

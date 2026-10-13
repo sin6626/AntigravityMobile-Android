@@ -28,6 +28,10 @@ import com.antigravity.mobile.data.model.SlashCommandDefinition
 import com.antigravity.mobile.data.model.ArtifactCommentDraft
 import com.antigravity.mobile.data.model.ArtifactCommentDraftState
 import com.antigravity.mobile.data.model.ArtifactTextSelection
+import com.antigravity.mobile.data.model.ConversationDiffResponse
+import com.antigravity.mobile.data.model.DiffCommentDraft
+import com.antigravity.mobile.data.model.DiffCommentDraftState
+import com.antigravity.mobile.data.model.DiffSide
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
 import com.antigravity.mobile.data.service.ConnectionManager
@@ -97,6 +101,12 @@ data class ChatUiState(
     val isSubmittingPlanComments: Boolean = false,
     val planCommentError: String? = null,
     val planCommentSuccessCount: Int = 0,
+    val diffReview: ConversationDiffResponse? = null,
+    val isLoadingDiffReview: Boolean = false,
+    val diffReviewError: String? = null,
+    val diffCommentDraft: DiffCommentDraftState = DiffCommentDraftState(),
+    val isSubmittingDiffComments: Boolean = false,
+    val diffCommentSuccessCount: Int = 0,
     val conversations: List<ConversationItem> = emptyList(),
     val projects: List<ProjectItem> = emptyList(),
     val models: List<ChatModel> = emptyList(),
@@ -389,6 +399,152 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     _state.value = _state.value.copy(
                         isSubmittingPlanComments = false,
                         planCommentError = error.message ?: "方案评论提交失败",
+                    )
+                },
+            )
+        }
+    }
+
+    fun loadDiffReview() {
+        val current = _state.value
+        val id = current.selectedConversationId?.takeUnless { it.startsWith("local:") } ?: return
+        if (current.isLoadingDiffReview || current.isSubmittingDiffComments) return
+        val visit = conversationVisit
+        _state.value = current.copy(isLoadingDiffReview = true, diffReviewError = null)
+        viewModelScope.launch {
+            api.fetchConversationDiffs(id).fold(
+                onSuccess = { review ->
+                    if (conversationVisit != visit || _state.value.selectedConversationId != id) return@fold
+                    val available = review.files.mapTo(hashSetOf(), com.antigravity.mobile.data.model.ConversationDiffFile::fileUri)
+                    val draft = _state.value.diffCommentDraft
+                    _state.value = _state.value.copy(
+                        diffReview = review,
+                        isLoadingDiffReview = false,
+                        diffReviewError = null,
+                        diffCommentDraft = draft.copy(
+                            comments = draft.comments.filter { it.fileUri in available },
+                            activeFileUri = draft.activeFileUri?.takeIf { it in available },
+                            activeSide = draft.activeSide.takeIf { draft.activeFileUri in available },
+                            activeSelection = draft.activeSelection.takeIf { draft.activeFileUri in available },
+                            activeComment = draft.activeComment.takeIf { draft.activeFileUri in available }.orEmpty(),
+                        ),
+                    )
+                },
+                onFailure = { error ->
+                    if (conversationVisit != visit || _state.value.selectedConversationId != id) return@fold
+                    if (error is GatewayAuthorizationException) { expirePairing(); return@fold }
+                    _state.value = _state.value.copy(
+                        isLoadingDiffReview = false,
+                        diffReviewError = error.message ?: "读取当前变更失败",
+                    )
+                },
+            )
+        }
+    }
+
+    fun selectDiffComment(fileUri: String, side: DiffSide, selection: ArtifactTextSelection) {
+        val current = _state.value
+        if (fileUri.isBlank() || selection.content.isBlank() || selection.startLine < 0 ||
+            selection.endLine <= selection.startLine || current.diffReview?.files?.none { it.fileUri == fileUri } != false
+        ) return
+        if (current.diffCommentDraft.comments.size >= 20) {
+            _state.value = current.copy(diffReviewError = "每次最多提交 20 条评论")
+            return
+        }
+        _state.value = current.copy(
+            diffCommentDraft = current.diffCommentDraft.copy(
+                activeFileUri = fileUri,
+                activeSide = side,
+                activeSelection = selection,
+            ),
+            diffReviewError = null,
+        )
+    }
+
+    fun setDiffComment(value: String) {
+        _state.value = _state.value.copy(
+            diffCommentDraft = _state.value.diffCommentDraft.copy(activeComment = value.take(4_000)),
+            diffReviewError = null,
+        )
+    }
+
+    fun addDiffComment() {
+        val current = _state.value
+        val draft = current.diffCommentDraft
+        val fileUri = draft.activeFileUri ?: return
+        val side = draft.activeSide ?: return
+        val selection = draft.activeSelection ?: return
+        val comment = draft.activeComment.trim()
+        if (comment.isEmpty()) {
+            _state.value = current.copy(diffReviewError = "请填写评论内容")
+            return
+        }
+        if (draft.comments.size >= 20) {
+            _state.value = current.copy(diffReviewError = "每次最多提交 20 条评论")
+            return
+        }
+        _state.value = current.copy(
+            diffCommentDraft = draft.copy(
+                comments = draft.comments + DiffCommentDraft(fileUri, side, selection, comment),
+                activeFileUri = null, activeSide = null, activeSelection = null, activeComment = "",
+            ),
+            diffReviewError = null,
+        )
+    }
+
+    fun removeDiffComment(index: Int) {
+        val current = _state.value
+        if (index !in current.diffCommentDraft.comments.indices || current.isSubmittingDiffComments) return
+        _state.value = current.copy(diffCommentDraft = current.diffCommentDraft.copy(
+            comments = current.diffCommentDraft.comments.filterIndexed { itemIndex, _ -> itemIndex != index }),
+            diffReviewError = null)
+    }
+
+    fun clearDiffCommentSelection() {
+        val current = _state.value
+        if (current.isSubmittingDiffComments) return
+        _state.value = current.copy(diffCommentDraft = current.diffCommentDraft.copy(
+            activeFileUri = null, activeSide = null, activeSelection = null, activeComment = ""),
+            diffReviewError = null)
+    }
+
+    fun submitDiffComments() {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        if (current.isSubmittingDiffComments || current.isSending) return
+        val draft = current.diffCommentDraft
+        val comments = if (draft.activeFileUri != null && draft.activeSide != null &&
+            draft.activeSelection != null && draft.activeComment.isNotBlank()
+        ) draft.comments + DiffCommentDraft(draft.activeFileUri, draft.activeSide,
+            draft.activeSelection, draft.activeComment.trim()) else draft.comments
+        if (comments.isEmpty()) {
+            _state.value = current.copy(diffReviewError = "请先点选红色或绿色变更行并填写评论")
+            return
+        }
+        val visit = conversationVisit
+        val model = current.modelOverrideId?.let { selected ->
+            current.models.firstOrNull { it.id == selected || it.model == selected }?.model
+        }
+        _state.value = current.copy(isSubmittingDiffComments = true, diffReviewError = null)
+        viewModelScope.launch {
+            api.submitDiffComments(id, comments, model).fold(
+                onSuccess = {
+                    if (conversationVisit != visit || _state.value.selectedConversationId != id) return@fold
+                    val latest = _state.value
+                    _state.value = latest.copy(
+                        diffCommentDraft = DiffCommentDraftState(),
+                        isSubmittingDiffComments = false,
+                        diffReviewError = null,
+                        diffCommentSuccessCount = latest.diffCommentSuccessCount + 1,
+                        isRunning = true,
+                    )
+                    loadMessages(id)
+                },
+                onFailure = { error ->
+                    if (conversationVisit != visit || _state.value.selectedConversationId != id) return@fold
+                    _state.value = _state.value.copy(
+                        isSubmittingDiffComments = false,
+                        diffReviewError = error.message ?: "变更评论提交失败",
                     )
                 },
             )
@@ -759,6 +915,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isLoadingMessages = false, canProceed = false, proceedArtifactUri = null,
             isProceedingArtifact = false, proceedError = null,
             planCommentDraft = ArtifactCommentDraftState(), isSubmittingPlanComments = false, planCommentError = null,
+            diffReview = null, isLoadingDiffReview = false, diffReviewError = null,
+            diffCommentDraft = DiffCommentDraftState(), isSubmittingDiffComments = false,
             isSubmittingInteraction = false,
             pendingInteraction = null, interactionError = null, queuedMessages = emptyList(),
             busyQueuedMessageIds = emptySet(), queueError = null,
@@ -1006,6 +1164,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             subagents = emptyList(), activeSubagent = activeSubagent, isLoadingSubagents = true, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             planCommentDraft = ArtifactCommentDraftState(), isSubmittingPlanComments = false, planCommentError = null,
+            diffReview = null, isLoadingDiffReview = false, diffReviewError = null,
+            diffCommentDraft = DiffCommentDraftState(), isSubmittingDiffComments = false,
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,
@@ -1089,6 +1249,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             planCommentDraft = ArtifactCommentDraftState(), isSubmittingPlanComments = false, planCommentError = null,
+            diffReview = null, isLoadingDiffReview = false, diffReviewError = null,
+            diffCommentDraft = DiffCommentDraftState(), isSubmittingDiffComments = false,
             hasMoreMessages = false,
             nextMessageOffset = 0,
             error = null,

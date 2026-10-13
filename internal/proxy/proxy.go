@@ -330,6 +330,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.handleCascadeTaskStop(w, r)
 		return
 	}
+	if r.URL.Path == "/gateway/cascade/diffs" {
+		p.HandleCascadeDiffs(w, r)
+		return
+	}
 	if r.URL.Path == "/gateway/cascade/revert/preview" {
 		p.HandleCascadeRevertPreview(w, r)
 		return
@@ -773,11 +777,15 @@ func (p *Proxy) handleSendUserCascadeMessage(w http.ResponseWriter, r *http.Requ
 				contentLen += len(txt)
 			}
 		}
-		if comments, ok := rawMap["artifactComments"].([]interface{}); ok {
-			for _, ac := range comments {
-				if encoded, marshalErr := json.Marshal(ac); marshalErr == nil {
-					contentHasher.Write(encoded)
-					contentLen += len(encoded)
+		for _, field := range []string{"artifactComments", "fileDiffComments", "fileComments"} {
+			if comments, ok := rawMap[field].([]interface{}); ok {
+				contentHasher.Write([]byte(field))
+				contentLen += len(field)
+				for _, comment := range comments {
+					if encoded, marshalErr := json.Marshal(comment); marshalErr == nil {
+						contentHasher.Write(encoded)
+						contentLen += len(encoded)
+					}
 				}
 			}
 		}

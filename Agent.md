@@ -9,7 +9,7 @@
 
 - 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
 - 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
-- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送和电脑工作区上下文查询现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的半成品包括：电脑文件引用 Android 入口、文件下载/分享与配额已有部分接口但缺少 Android 完整入口。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作和当前变更 diff 定位评论现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的主线包括会话模式、额度、语音转写和电脑 MCP/权限只读状态。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
 - 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
 
 ### 2026-10-13 待审方案与继续执行
@@ -546,3 +546,10 @@ android/app/src/main/java/com/antigravity/mobile/
 - 文件使用既有 `/api/v1/files/raw` 下载到按 URI 隔离的应用缓存，再通过 FileProvider 只读授权；保存使用系统 CreateDocument，用户自行选择位置。文件名经过目录分隔符和控制字符清理，MIME 对 PDF、Office、常见文本、图片、音视频和压缩包做确定性映射。
 - `ApiClient.downloadFile` 现传递当前会话 ID，使用单文件 `.tmp` 原子替换并检查删除/重命名结果；设备令牌仅附加到与当前网关同源的请求，外部链接不会收到凭据。没有新增第三方依赖，也没有在 Compose 内实现 Office/PDF/音视频解析器。
 - Android 单测、Debug/AndroidTest 构建和 API 37 三项仪器回归通过，覆盖 PDF 操作区、真实下载内容与 `cascade_id`、图片缩放/关闭和方案评论。截图位于忽略目录 `android/design/.verification/feature-11/linked-file-system-actions.png`。本功能不改 Go 网关，58900/58901 继续运行上一提交已部署的版本。
+
+### 2026-10-13 当前变更 diff 审阅
+- 本机 2.19.1 protobuf 与桌面调用确认读取使用 `GetTrajectoryFileDiffs({conversationId})`。网关新增鉴权后的 `/gateway/cascade/diffs`，只返回普通文件的真实变更，过滤 Artifact、Knowledge、noop 和内容相同项；不可读取 URI 单独返回，不伪造成空 diff。
+- Android 从会话更多菜单进入全屏“审阅变更”，展示文件切换、创建/删除/修改标记、原始与修改行号、折叠上下文，以及加载、空、失败重试和提交状态。文件切换使用 160 ms 选中反馈，变化行提供至少 48 dp 点击区，关闭后保留评论草稿。
+- 桌面协议确认 `FileDiffComment.diffCommentInfos`：删除行写 `originalSelection`，新增行写 `modifiedSelection`，`startLine` 为零基、`endLine` 为尾后行。多文件评论按 URI 分组后放入 `fileDiffComments[]`；短时去重覆盖完整定位评论，失败不清草稿。
+- Go 聚焦测试、Android 单测、Debug/AndroidTest 构建及 API 37 仪器测试通过。仪器测试覆盖入口、定位、48 dp、关闭恢复与请求形状；截图位于忽略目录 `android/design/.verification/feature-12/current-changes-positioned-comment.png`。Accept、Reject、discard、stage 和 commit 未找到独立可验证动作契约，继续保留为后续任务。
+- 当前源码已部署到主网关 58900/PID 19744 与管理网关 58901/PID 39116，SHA256 为 `E000427CF61B116B7D965914FC0D9B4C923B2F048C5EF3B32BD479F4A554D917`；主 Cloudflare PID 15372。本地两端、公网、模拟器到 58901 的健康检查均为 200；58901 真实读取 73 个会话并在第 2 个会话返回 8 个普通文件 diff，仅执行只读验证。

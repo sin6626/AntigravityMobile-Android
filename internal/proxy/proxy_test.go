@@ -798,6 +798,22 @@ func TestSendUserCascadeMessageDeduplication(t *testing.T) {
 	if upstreamCallCount != 9 {
 		t.Fatalf("expected distinct artifact comments to pass and the exact repeat to deduplicate, got %d upstream calls", upstreamCallCount)
 	}
+
+	// 9. Positioned diff comments use their side and line range in the deduplication key.
+	diffCommentA := `{"cascadeId":"cascade-dup-test","items":[],"fileDiffComments":[{"fileUri":"file:///Agent.md","diffCommentInfos":[{"modifiedSelection":{"content":"new A","startLine":1,"endLine":2},"comment":"Keep A"}]}]}`
+	diffCommentB := `{"cascadeId":"cascade-dup-test","items":[],"fileDiffComments":[{"fileUri":"file:///Agent.md","diffCommentInfos":[{"originalSelection":{"content":"old B","startLine":3,"endLine":4},"comment":"Restore B"}]}]}`
+	for _, payload := range []string{diffCommentA, diffCommentB, diffCommentB} {
+		req := httptest.NewRequest(http.MethodPost, "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("diff comment request expected 200, got %d", rec.Code)
+		}
+	}
+	if upstreamCallCount != 11 {
+		t.Fatalf("expected distinct diff comments to pass and the exact repeat to deduplicate, got %d upstream calls", upstreamCallCount)
+	}
 }
 
 func TestDeleteCascadeTrajectoryProxy(t *testing.T) {

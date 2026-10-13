@@ -232,6 +232,7 @@ internal fun ConversationTopBar(
     isArchived: Boolean = false,
     onPin: () -> Unit = {},
     onArchive: () -> Unit = {},
+    onReviewChanges: (() -> Unit)? = null,
     leadingDescription: String = if (returnToProjects) "返回项目列表" else "打开菜单",
 ) {
     var menuOpen by remember { mutableStateOf(false) }
@@ -255,7 +256,8 @@ internal fun ConversationTopBar(
                 RoundIconButton("more_vert", "更多选项", { menuOpen = true })
                 ConversationActionsMenu(menuOpen, { menuOpen = false }, title, isPinned, isArchived, actionsEnabled,
                     { menuOpen = false; onRename() }, { menuOpen = false; onPin() },
-                    { menuOpen = false; onArchive() }, { menuOpen = false; onDelete() })
+                    { menuOpen = false; onArchive() }, { menuOpen = false; onDelete() },
+                    onReview = onReviewChanges?.let { review -> { menuOpen = false; review() } })
             }
         }
     }
@@ -873,7 +875,8 @@ private fun ComposerTextField(
 @Composable
 internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, title: String,
     pinned: Boolean, archived: Boolean, enabled: Boolean, onRename: () -> Unit,
-    onPin: () -> Unit, onArchive: () -> Unit, onDelete: () -> Unit, showTitle: Boolean = true) {
+    onPin: () -> Unit, onArchive: () -> Unit, onDelete: () -> Unit, showTitle: Boolean = true,
+    onReview: (() -> Unit)? = null) {
     val visibility = remember { MutableTransitionState(false) }
     visibility.targetState = expanded
     if (!expanded && visibility.isIdle && !visibility.currentState) return
@@ -923,6 +926,7 @@ internal fun ConversationActionsMenu(expanded: Boolean, onDismiss: () -> Unit, t
                 }
                 if (!archived) ConversationMenuRow("push_pin", if (pinned) "取消置顶" else "置顶", enabled && expanded, onPin)
                 if (!showTitle) ConversationMenuRow("edit", "重命名", enabled && expanded, onRename)
+                onReview?.let { ConversationMenuRow("edit_square", "审阅变更", enabled && expanded, it) }
                 ConversationMenuRow(if (archived) "unarchive" else "archive", if (archived) "恢复会话" else "归档", enabled && expanded, onArchive)
                 ConversationMenuRow("delete", "删除会话", enabled && expanded, onDelete, Color(0xFFCC2332))
             }
