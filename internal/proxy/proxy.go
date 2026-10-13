@@ -338,6 +338,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		p.HandlePlanReviewPreference(w, r)
 		return
 	}
+	if r.URL.Path == "/gateway/desktop/status" {
+		p.HandleDesktopStatus(w, r)
+		return
+	}
 	if r.URL.Path == "/gateway/cascade/revert/preview" {
 		p.HandleCascadeRevertPreview(w, r)
 		return

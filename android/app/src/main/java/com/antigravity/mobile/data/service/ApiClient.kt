@@ -476,6 +476,19 @@ class ApiClient(
         } catch (error: Exception) { Result.failure(error) }
     }
 
+    suspend fun fetchDesktopStatus(): Result<DesktopStatus> = withContext(Dispatchers.IO) {
+        val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
+        try {
+            client.newCall(buildAuthorizedRequest("$baseUrl/gateway/desktop/status").get().build()).await().use { response ->
+                when {
+                    response.code == 401 -> Result.failure(GatewayAuthorizationException())
+                    !response.isSuccessful -> Result.failure(RuntimeException("读取电脑状态失败: HTTP ${response.code}"))
+                    else -> Result.success(json.decodeFromString<DesktopStatus>(response.body?.string() ?: "{}"))
+                }
+            }
+        } catch (error: Exception) { Result.failure(error) }
+    }
+
     suspend fun updatePlanReviewPreference(policy: String): Result<PlanReviewPreference> = withContext(Dispatchers.IO) {
         val baseUrl = currentBaseUrl ?: return@withContext Result.failure(IllegalStateException("未配置网关地址"))
         val payload = buildJsonObject { put("policy", policy) }

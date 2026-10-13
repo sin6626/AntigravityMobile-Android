@@ -9,8 +9,15 @@
 
 - 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
 - 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
-- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作、当前变更 diff 定位评论、`/plan` 规划入口/计划审阅策略和官方模型额度现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的主线包括语音转写和电脑 MCP/权限只读状态。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送、电脑工作区引用、文件系统操作、当前变更 diff 定位评论、`/plan` 规划入口/计划审阅策略、官方模型额度、语音转写草稿和电脑 MCP/权限只读状态现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
 - 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
+
+### 2026-10-13 电脑 MCP 与权限只读状态
+
+- 侧栏新增“电脑状态”，打开原生只读底部面板。权限区分开展示执行预设及来源、终端命令、工作区外文件、沙箱和方案审阅；MCP 区展示连接状态、可用工具数、非空工具错误、认证需求和服务器错误。加载、空状态、刷新、保留旧数据重试、48 dp 操作区、180 ms 内容/状态色过渡及 TalkBack 描述均已接入。
+- 网关新增鉴权后的 `/gateway/desktop/status`，调用本机 2.19.1 `GetMcpServerStates` 并裁剪响应，不暴露启动命令、工具说明/schema、认证 URL 或令牌。桌面权限按同版本前端逻辑读取全局 `permissionPreset`，缺失时由 `autoExecutionPolicy` 推导；方案审阅继续读取同一配置的 `artifactReviewMode`。真实 `toolErrors` 是与工具对齐的空字符串数组，只统计非空项，避免把 57 个空位误报为 57 个错误。
+- Go 聚焦测试、Android `DesktopStatusTest`、Debug/AndroidTest 构建和 API 37 端到端测试通过；失败刷新会保留旧状态。真实模拟器页面确认当前电脑为 Turbo、始终审阅、`cua-driver` 已连接、57 个工具可用且 0 个错误，截图在忽略目录 `.verification/feature-16/`。
+- 同一网关二进制已部署到 58900/PID 40756 和 58901/PID 51068，SHA256 为 `9FF3564A73E53C6ABE088989D23228DA823DCE9D65A0ACA37FBCBE5624529535`；本地两端、公网和模拟器链路健康，cloudflared PID 2144 保持运行。修改 MCP 配置、OAuth、全局权限和项目 worktree 仍需分别确认安全写入契约，不在只读状态提交中猜测实现。
 
 ### 2026-10-13 待审方案与继续执行
 

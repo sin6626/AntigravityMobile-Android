@@ -73,6 +73,7 @@ internal fun DemoDrawer(
     onNewProjectConversation: (ProjectItem) -> Unit = {},
     creationUnavailableReason: String? = null,
     onRetryModels: (() -> Unit)? = null,
+    onDesktopStatus: () -> Unit = {},
 ) {
     var searchOpen by remember { mutableStateOf(false) }
     var searchText by remember { mutableStateOf("") }
@@ -86,6 +87,7 @@ internal fun DemoDrawer(
                 DrawerMenuItem("chat_bubble", "聊天", onNewChat)
                 DrawerMenuItem("archive", "已归档", onArchived)
                 DrawerMenuItem("folder", "项目") { projectsOpen = !projectsOpen }
+                DrawerMenuItem("computer", "电脑状态", onDesktopStatus)
                 projectsError?.let { LoadFailure(it, isLoadingProjects, onRetryProjects) }
                 conversationsError?.let { LoadFailure(it, isLoading, onRetryConversations) }
                 if (projectsOpen || searchText.isNotBlank()) {

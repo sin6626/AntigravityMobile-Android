@@ -34,6 +34,7 @@ import com.antigravity.mobile.data.model.DiffCommentDraftState
 import com.antigravity.mobile.data.model.DiffSide
 import com.antigravity.mobile.data.model.PlanReviewPreference
 import com.antigravity.mobile.data.model.ModelQuotaSummary
+import com.antigravity.mobile.data.model.DesktopStatus
 import com.antigravity.mobile.data.service.ApiClient
 import com.antigravity.mobile.data.service.AudioTranscriptionSession
 import com.antigravity.mobile.data.service.GatewayAuthorizationException
@@ -140,6 +141,10 @@ data class ChatUiState(
     val isLoadingModelQuota: Boolean = false,
     val isRefreshingModelQuota: Boolean = false,
     val modelQuotaError: String? = null,
+    val desktopStatus: DesktopStatus? = null,
+    val isLoadingDesktopStatus: Boolean = false,
+    val isRefreshingDesktopStatus: Boolean = false,
+    val desktopStatusError: String? = null,
     val voiceInput: VoiceInputUiState = VoiceInputUiState(),
     val contextSuggestions: List<WorkspaceContextItem> = emptyList(),
     val commandSuggestions: List<SlashCommandDefinition> = emptyList(),
@@ -1000,6 +1005,35 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun loadDesktopStatus() {
+        val current = _state.value
+        if (current.isLoadingDesktopStatus || current.isRefreshingDesktopStatus) return
+        val token = prefs.deviceToken
+        _state.value = current.copy(
+            isLoadingDesktopStatus = current.desktopStatus == null,
+            isRefreshingDesktopStatus = current.desktopStatus != null,
+            desktopStatusError = null,
+        )
+        viewModelScope.launch {
+            api.fetchDesktopStatus().fold(onSuccess = { status ->
+                if (prefs.deviceToken == token) _state.value = _state.value.copy(
+                    desktopStatus = status,
+                    isLoadingDesktopStatus = false,
+                    isRefreshingDesktopStatus = false,
+                    desktopStatusError = null,
+                )
+            }, onFailure = { error ->
+                if (prefs.deviceToken != token) return@fold
+                if (error is GatewayAuthorizationException) expirePairing()
+                else _state.value = _state.value.copy(
+                    isLoadingDesktopStatus = false,
+                    isRefreshingDesktopStatus = false,
+                    desktopStatusError = error.message ?: "读取电脑状态失败",
+                )
+            })
+        }
+    }
+
     fun selectPlanningMode(enabled: Boolean) {
         val current = _state.value
         if (!enabled) {
@@ -1202,6 +1236,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isUpdatingPlanReviewPreference = false, isSelectingWorkMode = false, workModeError = null,
             modelQuotaSummary = null, isLoadingModelQuota = false, isRefreshingModelQuota = false,
             modelQuotaError = null,
+            desktopStatus = null, isLoadingDesktopStatus = false, isRefreshingDesktopStatus = false,
+            desktopStatusError = null,
         )
     }
 

@@ -169,6 +169,38 @@ class ChatUxTest {
         }
     }
 
+    @Test fun desktopStatusShowsPermissionsMcpHealthAndKeepsDataOnRefreshFailure() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            PreferencesManager(app).apply { clear(); gatewayBaseUrl = gateway.url; deviceToken = "desktop-status-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("desktop-status", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.onNodeWithContentDescription("打开菜单").performClick()
+                compose.onNodeWithText("电脑状态").assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f)).performClick()
+                compose.waitUntil(10_000) { vm.state.value.desktopStatus?.mcpServers?.size == 2 }
+                compose.onNodeWithText("权限与审批").assertIsDisplayed()
+                compose.onNodeWithText("Turbo").assertIsDisplayed()
+                compose.onNodeWithText("来源：由电脑终端与文件设置推导").assertIsDisplayed()
+                compose.onNodeWithText("1/2 已连接").assertIsDisplayed()
+                compose.onNodeWithText("cua-driver").assertIsDisplayed()
+                compose.onNodeWithText("57 个工具可用").assertIsDisplayed()
+                compose.onNodeWithText("需要在电脑端完成认证").assertIsDisplayed()
+
+                gateway.failurePath = "/gateway/desktop/status"
+                compose.onNodeWithContentDescription("刷新电脑状态").performClick()
+                compose.waitUntil(10_000) { vm.state.value.desktopStatusError != null && !vm.state.value.isRefreshingDesktopStatus }
+                compose.onNodeWithText("cua-driver").assertIsDisplayed()
+                compose.onNodeWithContentDescription("重试读取电脑状态").assertIsDisplayed()
+                gateway.failurePath = null
+                compose.onNodeWithContentDescription("重试读取电脑状态").performClick()
+                compose.waitUntil(10_000) { vm.state.value.desktopStatusError == null && !vm.state.value.isRefreshingDesktopStatus }
+                saveScreenshot("desktop-status.png")
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun projectCreationAndModelChoiceKeepMembershipDraftAndFailureState() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -2857,6 +2889,10 @@ class ChatUxTest {
                                 path.startsWith("/gateway/workspace/context") -> """{"workspaceUri":"file:///test/project","items":[{"type":"file","name":"ChatViewModel.kt","relativePath":"src/ChatViewModel.kt","rootName":"project","rootUri":"file:///test/project","uri":"file:///test/project/src/ChatViewModel.kt","size":42,"scopeItem":{"file":{"absoluteUri":"file:///test/project/src/ChatViewModel.kt","workspaceUrisToRelativePaths":{"file:///test/project":"src/ChatViewModel.kt"},"numFiles":1,"numBytes":42}}}]}"""
                                 path.startsWith("/gateway/commands") -> """{"commands":[{"info":{"name":"plan","modelFacingText":"<PLAN />","type":"SLASH_COMMAND_TYPE_SYSTEM","icon":"ballot"},"title":"plan","description":"先制定方案"}]}"""
                                 path == "/gateway/preferences/plan-review" -> """{"policy":"$planReviewPolicy","planningCommand":"plan","planningModeToggleSupported":false}"""
+                                path == "/gateway/desktop/status" -> """{"permission":{"preset":"TURBO","source":"EFFECTIVE_SETTINGS","terminalPolicy":"CASCADE_COMMANDS_AUTO_EXECUTION_EAGER","nonWorkspaceFilePolicy":"AGENT_SETTING_POLICY_ALLOW","sandboxEnabled":false,"planReviewPolicy":"ALWAYS"},"mcpServers":[
+                                    {"name":"cua-driver","status":"MCP_SERVER_STATUS_READY","enabled":true,"toolCount":57,"enabledToolCount":57,"toolErrorCount":0},
+                                    {"name":"browser-tools","status":"MCP_SERVER_STATUS_ERROR","enabled":true,"toolCount":4,"enabledToolCount":3,"toolErrorCount":1,"error":"连接进程已退出","requiresAuthentication":true}
+                                ]}"""
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 path.startsWith("/gateway/subagents") -> if (subagentFixture && path.contains("parentId=A")) """{"subagents":[
                                     {"id":"sub-running","parentConversationId":"A","rootConversationId":"A","title":"检查登录动效","status":"RUNNING","stepCount":6,"nestingDepth":1},

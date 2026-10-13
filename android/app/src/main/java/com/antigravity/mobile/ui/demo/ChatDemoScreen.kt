@@ -155,6 +155,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     var modelPickerOpen by remember { mutableStateOf(false) }
     var workModeOpen by remember { mutableStateOf(false) }
     var modelQuotaOpen by remember { mutableStateOf(false) }
+    var desktopStatusOpen by remember { mutableStateOf(false) }
     val composerFocusRequester = remember { FocusRequester() }
     var focusAfterModelDone by remember { mutableIntStateOf(0) }
     LaunchedEffect(focusAfterModelDone) {
@@ -242,6 +243,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         modelPickerOpen = false
         workModeOpen = false
         modelQuotaOpen = false
+        desktopStatusOpen = false
         showDeleteConfirm = false
         showRename = false
         if (state.selectedConversationId == null && openedFromArchive) {
@@ -379,6 +381,13 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         drawerState.close()
                         pairSuccessAtOpen = state.pairSuccessCount
                         pairingSettingsOpen = true
+                    }
+                },
+                onDesktopStatus = {
+                    scope.launch {
+                        drawerState.close()
+                        desktopStatusOpen = true
+                        viewModel.loadDesktopStatus()
                     }
                 },
             )
@@ -813,6 +822,16 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                 refreshing = state.isRefreshingModelQuota,
                 error = state.modelQuotaError,
                 onRefresh = { viewModel.loadModelQuota(forceRefresh = true) },
+            )
+        }
+        if (desktopStatusOpen && state.isPaired) {
+            DesktopStatusBottomSheet(
+                onDismiss = { desktopStatusOpen = false },
+                status = state.desktopStatus,
+                loading = state.isLoadingDesktopStatus,
+                refreshing = state.isRefreshingDesktopStatus,
+                error = state.desktopStatusError,
+                onRefresh = viewModel::loadDesktopStatus,
             )
         }
         if (workModeOpen && state.isPaired) {
