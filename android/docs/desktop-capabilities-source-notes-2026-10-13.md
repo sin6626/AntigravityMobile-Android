@@ -73,4 +73,6 @@ Google 将 Antigravity IDE、独立 Antigravity 2.0、CLI、IDE 扩展分别发�
 
 本机 2.19.1 二进制补充核验确认了子代理元数据和内部工具形态：会话摘要包含 `parentConversationId`、`rootConversationId`、`nestingDepth`、`subagentSpec` / `agentScript`；内部 `send_message` 工具使用 `Recipient` 和 `Message`，其中 Recipient 可为会话 ID 或 `@children`。当前只发现内部工具执行入口，没有发现可由 Android 安全调用的等价 HTTP/RPC，因此移动端只接入子代理查看和轨迹导航，不据此猜测定向消息请求。
 
+普通文件契约也已由本机二进制与隔离真实会话交叉确认。`SendUserCascadeMessageRequest.GetMedia` 使用公共 `Media` 类型；有效 JSON 字段是 `mimeType`、`displayName` 和 base64 `inlineData`。纯文本探针发送成功后，`GetCascadeTrajectory` 读回相同 MIME 与名称，正文已被服务端写入 `.user_uploaded/uploaded_media_*.txt` 并改以 `uri` 表示。`ClientModelConfig.supportedMimeTypes` 是 MIME 能力的权威来源；没有发现独立 `files` 数组。两次隔离诊断会话均已删除。
+
 官方能力部分仅使用 Google 官方文档和官方发布说明，并已打开核查正文；协议边界另以本机二进制符号和仓库源码交叉确认。当前文档可能继续变化，引用用于证明官方能力，无法代替真实请求验证。本文未操作真实会话，未上传文件、发出审批、撤回代码、改桌面设置或启用官方远程控制。

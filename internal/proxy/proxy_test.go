@@ -766,6 +766,22 @@ func TestSendUserCascadeMessageDeduplication(t *testing.T) {
 	if upstreamCallCount != 5 {
 		t.Fatalf("expected upstreamCallCount to be 5 for NEXT_INVOCATION (should not be deduplicated against WHEN_IDLE), got %d", upstreamCallCount)
 	}
+
+	// 7. The prompt may be identical while the attached file differs; both sends must reach upstream.
+	fileA := `{"cascadeId":"cascade-dup-test","items":[{"text":"Review attachment"}],"media":[{"mimeType":"text/plain","displayName":"a.txt","inlineData":"QUFB"}]}`
+	fileB := `{"cascadeId":"cascade-dup-test","items":[{"text":"Review attachment"}],"media":[{"mimeType":"text/plain","displayName":"b.txt","inlineData":"QkJC"}]}`
+	for _, payload := range []string{fileA, fileB, fileB} {
+		req := httptest.NewRequest(http.MethodPost, "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		p.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("file request expected 200, got %d", rec.Code)
+		}
+	}
+	if upstreamCallCount != 7 {
+		t.Fatalf("expected different files to pass and the exact repeat to deduplicate, got %d upstream calls", upstreamCallCount)
+	}
 }
 
 func TestDeleteCascadeTrajectoryProxy(t *testing.T) {
@@ -1009,6 +1025,37 @@ func TestSendUserCascadeMessageModelSwitching(t *testing.T) {
 	pCfg3 := cfg3["plannerConfig"].(map[string]interface{})
 	if pCfg3["planModel"] != "MODEL_PLACEHOLDER_M318" {
 		t.Errorf("Case 3 expected planModel MODEL_PLACEHOLDER_M318, got %v", pCfg3["planModel"])
+	}
+}
+
+func TestSendUserCascadeMessagePreservesFileMedia(t *testing.T) {
+	var forwarded map[string]interface{}
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/SendUserCascadeMessage") {
+			_ = json.NewDecoder(r.Body).Decode(&forwarded)
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	p := NewProxy(inspector.NewInspector(5 * time.Second))
+	p.updateUpstream(inspector.InstanceInfo{Port: upstream.Listener.Addr().(*net.TCPAddr).Port, CSRFToken: "test", IsHealthy: true})
+	payload := `{"cascadeId":"file-contract","items":[{"text":"Read it"}],"media":[{"mimeType":"text/plain","displayName":"notes.txt","inlineData":"RklMRQ=="}]}`
+	req := httptest.NewRequest(http.MethodPost, "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Antigravity-Model", "gemini-3.8-flash-high")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	media, ok := forwarded["media"].([]interface{})
+	if !ok || len(media) != 1 {
+		t.Fatalf("expected one forwarded media item, got %#v", forwarded["media"])
+	}
+	file := media[0].(map[string]interface{})
+	if file["mimeType"] != "text/plain" || file["displayName"] != "notes.txt" || file["inlineData"] != "RklMRQ==" {
+		t.Fatalf("file media changed during forwarding: %#v", file)
 	}
 }
 

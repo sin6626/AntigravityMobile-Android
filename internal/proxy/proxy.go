@@ -791,6 +791,25 @@ func (p *Proxy) handleSendUserCascadeMessage(w http.ResponseWriter, r *http.Requ
 				}
 			}
 		}
+		if media, ok := rawMap["media"].([]interface{}); ok {
+			for _, item := range media {
+				mediaMap, ok := item.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				mimeType, _ := mediaMap["mimeType"].(string)
+				displayName, _ := mediaMap["displayName"].(string)
+				uri, _ := mediaMap["uri"].(string)
+				inlineData, _ := mediaMap["inlineData"].(string)
+				prefix := inlineData
+				if len(prefix) > 1024 {
+					prefix = prefix[:1024]
+				}
+				tag := fmt.Sprintf(":media:%s:%s:%s:%d:%s", mimeType, displayName, uri, len(inlineData), prefix)
+				contentHasher.Write([]byte(tag))
+				contentLen += len(tag)
+			}
+		}
 
 		if clientMsgID == "" && cascadeID != "" && contentLen > 0 {
 			strategyKey := fmt.Sprintf("%v", rawMap["deliveryStrategy"])

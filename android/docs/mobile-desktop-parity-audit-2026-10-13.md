@@ -40,7 +40,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 运行中排队消息 | Queue、Send Now、编辑和删除 | 已完成。历史/实时队列、运行中新增队列、立即发送、编辑回填、删除、失败留态和草稿恢复均已接入 | `QueuedMessagesPanel.kt`、`ChatViewModel.queueCurrentMessage`、`ChatViewModel.sendQueuedMessageNow` | 保持回归 |
 | 后台任务 | 查看任务、命令、状态并单独停止 | 已完成。历史/实时状态、摘要、命令、动态时长、单项停止、失败留态与空列表清理均已接入 | `RunningTasksPanel.kt`、`ChatViewModel.stopRunningTask`、`ApiClient.stopTask` | 保持回归 |
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 查看与导航已完成：直属子代理、状态、步骤、父子层级、进入只读轨迹和逐级返回均已接入；定向消息仍待公开调用契约 | `/gateway/subagents`、`SubagentsPanel.kt`、`ChatViewModel.openSubagent` | P0 剩定向消息协议 |
-| 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 缺失。系统“文件”入口仍只允许四种图片，草稿与发送模型也是 `PendingImage` / `images` / `media` | `ChatDemoScreen.kt:545`、`ChatViewModel.kt:86,296-317`、`ApiClient.kt:532-599` | P0，待协议 |
+| 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 网关契约已确认，Android UI/草稿仍缺失。2.19.1 使用 `media[].mimeType/displayName/inlineData`，发送后落盘为 `.user_uploaded` URI；模型目录动态给出 `supportedMimeTypes` | `SendUserCascadeMessage`、`ClientModelConfig.supportedMimeTypes`、`proxy.go` 文件媒体去重测试 | P0，下一项做 Android |
 | 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 缺失。发送项只有文本，没有结构化文件引用或上下文对象 | `ApiClient.kt:545-573` | P1，待协议 |
 | Planning / Fast 与审阅策略 | 2.17 已有 `/plan` 和计划审阅策略；当前文档另有 Planning / Fast 说明 | 缺失。新会话只传工作区、提示、模型和项目，没有模式或策略字段 | `ApiClient.kt:399-437` | P1，待本机枚举 |
 | 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 缺失可发现的命令菜单和上下文胶囊。纯文本是否被电脑端解析尚未验证 | `Composer` 仅普通文本输入 | P1，待协议 |
@@ -109,8 +109,10 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 ### 第二批：上下文、文件和审阅
 
 6. `feat(gateway): 明确并转发文件附件契约`
+   - **已于 2026-10-13 完成。**
    - 先从本机 2.19.1 请求中确认文件名、MIME、内容或句柄字段、大小、数量、模型限制和失败码。
-   - 网关只做必要的鉴权、校验和转发。不能根据图片协议猜一个通用 `files` 数组。
+   - 已确认通用附件继续使用既有 `media`，字段为 `mimeType/displayName/inlineData`，不是新造 `files` 数组；上游接收后清空内联正文并生成 `.user_uploaded` URI。格式能力来自每个模型的 `supportedMimeTypes`。
+   - 网关保持 50 MB 总请求上限和原样转发，并把文件 MIME、名称、URI、正文长度/前缀纳入短时去重，避免相同提示附带不同文件时误丢第二条。Android 首版采用更小的本地限制，不把网关总上限展示为单文件承诺。
 
 7. `feat(android): 支持普通文件草稿与发送`
    - “图片”和“文件”继续是两个入口。文件胶囊显示类型、名称、大小、上传状态和移除操作。
@@ -159,7 +161,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 
 根据项目约束，以下字段没有文档或真实请求样本时不能开始页面写入逻辑：
 
-- 普通文件的上传字段、文件名、MIME、大小、数量、模型限制和恢复方式。
+- 普通文件上游是否另有限制单文件大小或多文件数量；Android 首版先限制为单个小文件，上传字段、文件名、MIME、模型能力和落盘恢复方式已经确认。
 - Planning / Fast 与计划审阅策略的本机枚举。
 - `@` 文件引用、Skills、Rules 和斜杠命令的结构化请求对象。
 - Artifact 选区评论、diff 评论和批准或拒绝的范围对象。
