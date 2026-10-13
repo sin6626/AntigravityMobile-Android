@@ -1,6 +1,9 @@
 package com.antigravity.mobile.ui.demo
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -17,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +32,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import com.antigravity.mobile.data.model.ConversationItem
 import com.antigravity.mobile.data.model.ProjectItem
+import com.antigravity.mobile.ui.chat.ChatUiState
+import androidx.compose.foundation.layout.heightIn
 
 @Composable
 internal fun ProjectOverview(
@@ -42,7 +48,8 @@ internal fun ProjectOverview(
     error: String? = null,
     onRetry: () -> Unit = {},
     onNewConversation: (ProjectItem) -> Unit = {},
-    canCreate: Boolean = true,
+    creationUnavailableReason: String? = null,
+    onRetryModels: (() -> Unit)? = null,
 ) {
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
@@ -81,10 +88,8 @@ internal fun ProjectOverview(
                     enter = expandVertically(tween(200), expandFrom = Alignment.Top) + fadeIn(tween(150)),
                     exit = shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(120))) {
                     Column {
-                    Text("新建会话", modifier = Modifier.fillMaxWidth()
-                        .quietClickable(enabled = canCreate) { onNewConversation(project) }
-                        .padding(start = 68.dp, end = 28.dp, top = 14.dp, bottom = 14.dp),
-                        color = if (canCreate) SecondaryInk else SecondaryInk.copy(alpha = 0.4f), fontSize = 15.sp)
+                    ProjectCreateAction(creationUnavailableReason, { onNewConversation(project) },
+                        Modifier.padding(start = 68.dp, end = 28.dp), onRetryModels)
                     if (projectChats.isEmpty()) {
                         Text("暂无对话", modifier = Modifier.padding(start = 68.dp, bottom = 13.dp),
                             color = SecondaryInk, fontSize = 15.sp)
@@ -114,6 +119,35 @@ internal fun ProjectLabel(project: ProjectItem, projects: List<ProjectItem>, fon
         Text(project.name, color = Ink, fontSize = fontSize.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         project.disambiguatingLocation(projects)?.let { location ->
             Text(location, color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+        }
+    }
+}
+
+internal fun ChatUiState.projectCreationUnavailableReason(): String? = when {
+    creatingProjectKey != null -> "正在创建会话…"
+    isReverting -> "正在回退，请稍候"
+    isSending -> "正在发送，请稍候"
+    isLoadingModels -> if (models.isEmpty()) "正在加载模型…" else "正在刷新模型…"
+    models.isEmpty() -> if (modelsError != null) "模型加载失败" else "暂无可用模型"
+    else -> null
+}
+
+@Composable
+internal fun ProjectCreateAction(reason: String?, onCreate: () -> Unit, modifier: Modifier,
+    onRetryModels: (() -> Unit)? = null, fontSize: Int = 15) {
+    Column(modifier) {
+        Text("新建会话", modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .semantics { if (reason != null) stateDescription = reason }
+            .quietClickable(enabled = reason == null, onClick = onCreate)
+            .padding(vertical = 14.dp),
+            color = if (reason == null) SecondaryInk else SecondaryInk.copy(alpha = 0.4f), fontSize = fontSize.sp)
+        AnimatedContent(reason, transitionSpec = {
+            (fadeIn(tween(120)) togetherWith fadeOut(tween(100))).using(SizeTransform { _, _ -> tween(180) })
+        }, label = "project creation feedback") { status ->
+            if (status != null) Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(status, color = SecondaryInk, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                if (onRetryModels != null) TextButton(onClick = onRetryModels) { Text("重试", color = AccentBlue) }
+            }
         }
     }
 }

@@ -143,7 +143,9 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val modelLabel = chosenModel?.label ?: "选择模型"
     val gptModelBadge = formatGptModelBadge(chosenModel)
     val modelEnabled = !state.isSending && !state.isReverting && state.creatingProjectKey == null
-    val canCreate = modelEnabled && state.models.isNotEmpty() && !state.isLoadingModels
+    val creationUnavailableReason = state.projectCreationUnavailableReason()
+    val retryProjectModels: (() -> Unit)? = if (modelEnabled && state.models.isEmpty() && !state.isLoadingModels)
+        viewModel::refreshModels else null
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -228,7 +230,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
         gesturesEnabled = !openedFromProject,
         drawerContent = {
             DemoDrawer(
-                canCreate = canCreate,
+                creationUnavailableReason = creationUnavailableReason,
+                onRetryModels = retryProjectModels,
                 onNewProjectConversation = { project -> viewModel.createProjectConversation(project) {
                     archivedOpen = false; openedFromArchive = false; openedFromProject = true; projectsSelected = true
                     scope.launch { drawerState.close() }
@@ -387,7 +390,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     beyondViewportPageCount = 1) { page ->
                 if (page == 1) {
                     ProjectOverview(
-                        canCreate = canCreate,
+                        creationUnavailableReason = creationUnavailableReason,
+                        onRetryModels = retryProjectModels,
                         onNewConversation = { project -> viewModel.createProjectConversation(project) {
                             archivedOpen = false; openedFromArchive = false; openedFromProject = true
                         } },

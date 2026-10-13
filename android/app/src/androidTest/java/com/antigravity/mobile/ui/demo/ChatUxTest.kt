@@ -141,8 +141,10 @@ class ChatUxTest {
             try {
                 compose.setContent { ChatDemoScreen(vm, {}) }
                 compose.waitUntil(10_000) { vm.state.value.models.size == 3 && vm.state.value.projects.size == 1 }
+                compose.onNode(hasSetTextAction()).performClick()
                 compose.onNodeWithContentDescription("选择模型").performClick()
                 compose.onNodeWithText("Claude fixture").performClick()
+                compose.onNodeWithText("完成").performClick()
                 assertEquals("claude-fixture", prefs.selectedModelId)
                 compose.runOnIdle { vm.setDraft("首页草稿保留") }
                 compose.onNode(hasText("项目") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
@@ -175,8 +177,10 @@ class ChatUxTest {
                 compose.runOnIdle { vm.openConversation("A") }
                 compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
                 val actual = vm.state.value.activeModelId
+                compose.onNode(hasSetTextAction()).performClick()
                 compose.onNodeWithContentDescription("选择模型").performClick()
                 compose.onNodeWithText("Gemini fixture").performClick()
+                compose.onNodeWithText("完成").performClick()
                 gateway.failurePath = "/api/exa.language_server_pb.LanguageServerService/SendUserCascadeMessage"
                 compose.runOnIdle { vm.setDraft("失败保留正文"); vm.send() }
                 compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.error != null }
@@ -187,6 +191,7 @@ class ChatUxTest {
                 gateway.failurePath = null
                 compose.runOnIdle { vm.selectModel("gemini-3.8-flash-high"); vm.send() }
                 compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.activeModelId == "gemini-3.8-flash-high" }
+                compose.onNode(hasSetTextAction()).performClick()
                 compose.onNodeWithContentDescription("选择模型").performClick()
                 saveScreenshot("features-model-picker.png")
             } finally { compose.runOnIdle { store.clear() } }
@@ -1319,6 +1324,44 @@ class ChatUxTest {
             compose.runOnIdle { store.clear() }
             runBlocking { api.deleteConversation(id).getOrThrow() }
         }
+    }
+
+    @Test fun projectCreationFeedbackExplainsFailureAndPreventsBusyClicks() {
+        val reason = mutableStateOf<String?>("模型加载失败")
+        var created = 0
+        var retries = 0
+        val drawer = mutableStateOf(false)
+        val project = ProjectItem(rawId = "p", name = "Project")
+        compose.setContent {
+            val retry: (() -> Unit)? = if (reason.value == "模型加载失败") ({ retries++; reason.value = "正在加载模型…" }) else null
+            if (drawer.value) DemoDrawer(Modifier.fillMaxSize(), emptyList(), listOf(project), false, false,
+                {}, {}, {}, {}, {}, onNewProjectConversation = { created++ },
+                creationUnavailableReason = reason.value, onRetryModels = retry)
+            else ProjectOverview(listOf(project), emptyList(), false, {}, setOf(project.navigationKey()), {},
+                androidx.compose.foundation.lazy.rememberLazyListState(), onNewConversation = { created++ },
+                creationUnavailableReason = reason.value, onRetryModels = retry)
+        }
+        compose.onNodeWithText("模型加载失败").assertIsDisplayed()
+        compose.onNodeWithText("新建会话").assertIsNotEnabled()
+        saveScreenshot("project-create-failure.png")
+        compose.onNodeWithText("重试").performClick()
+        assertEquals(1, retries)
+        compose.onNodeWithText("正在加载模型…").assertIsDisplayed()
+        compose.onNodeWithText("重试").assertDoesNotExist()
+        compose.runOnIdle { reason.value = null }
+        compose.onNodeWithText("新建会话").assertIsEnabled().performClick()
+        assertEquals(1, created)
+        compose.runOnIdle { drawer.value = true; reason.value = "正在创建会话…" }
+        compose.onNodeWithText("项目").performClick()
+        compose.onNodeWithText("Project").performClick()
+        compose.onNodeWithText("正在创建会话…").assertIsDisplayed()
+        compose.onNodeWithText("新建会话").assertIsNotEnabled()
+        saveScreenshot("project-create-busy.png")
+        compose.runOnIdle { reason.value = "正在发送，请稍候" }
+        compose.onNodeWithText("正在发送，请稍候").assertIsDisplayed()
+        compose.runOnIdle { reason.value = "正在回退，请稍候" }
+        compose.onNodeWithText("正在回退，请稍候").assertIsDisplayed()
+        assertEquals(1, created)
     }
 
     @Test fun sameNameProjectsKeepTheirLocationsAndSeparateExpansion() {
