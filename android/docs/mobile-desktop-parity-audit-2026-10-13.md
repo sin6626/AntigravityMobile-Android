@@ -41,7 +41,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 后台任务 | 查看任务、命令、状态并单独停止 | 已完成。历史/实时状态、摘要、命令、动态时长、单项停止、失败留态与空列表清理均已接入 | `RunningTasksPanel.kt`、`ChatViewModel.stopRunningTask`、`ApiClient.stopTask` | 保持回归 |
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 查看与导航已完成：直属子代理、状态、步骤、父子层级、进入只读轨迹和逐级返回均已接入；定向消息仍待公开调用契约 | `/gateway/subagents`、`SubagentsPanel.kt`、`ChatViewModel.openSubagent` | P0 剩定向消息协议 |
 | 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 已完成。文件选择、模型 MIME 校验、8 MB 单文件草稿、进程/失败恢复、普通与排队发送、文件胶囊和无障碍均已接入；使用 `media[].mimeType/displayName/inlineData` | `ChatViewModel.addFile/send`、`PreferencesManager`、`ApiClient.sendMessage`、`ClientModelConfig.supportedMimeTypes` | 保持回归；多文件/文件夹不在 2.19.1 范围 |
-| 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 缺失。发送项只有文本，没有结构化文件引用或上下文对象 | `ApiClient.kt:545-573` | P1，待协议 |
+| 电脑工作区 `@` 上下文 | 输入区能检索并引用项目文件，文件附件与工作区引用是两种动作 | 网关查询已完成：返回文件/目录稳定 URI、相对路径与真实 `scopeItem`；Android 面板和发送仍待接入 | `/gateway/workspace/context`、`SendUserCascadeMessageRequest.items` | P1，进行中 |
 | Planning / Fast 与审阅策略 | 2.17 已有 `/plan` 和计划审阅策略；当前文档另有 Planning / Fast 说明 | 缺失。新会话只传工作区、提示、模型和项目，没有模式或策略字段 | `ApiClient.kt:399-437` | P1，待本机枚举 |
 | 斜杠命令、Skills 和 Rules | 输入区可发现 `/plan` 等命令，Skills 与 Rules 影响代理上下文 | 缺失可发现的命令菜单和上下文胶囊。纯文本是否被电脑端解析尚未验证 | `Composer` 仅普通文本输入 | P1，待协议 |
 | 文件和 Artifact 阅读 | 文件树、Markdown、媒体、Artifact 和浏览器录制 | 部分完成。聊天文件链接可预览 Markdown、代码、文本和图片；PDF、Office、音视频直接显示不支持 | `LinkedFilePreview.kt:55-82,119-179` | P1 |
@@ -123,7 +123,10 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
    - 新会话、现有会话与运行中 `deliveryStrategy=2` 都发送命名 `media`；队列响应保留 MIME/显示名/内联内容，使编辑与立即发送不会把普通文件误作图片。接口日志保留名称和 MIME、隐藏正文。
 
 8. `feat(gateway): 暴露电脑工作区上下文查询`
-   - 明确文件引用对象、稳定 URI、目录范围、搜索分页和敏感路径权限。
+   - **已于 2026-10-13 完成。**
+   - 本机 2.19.1 protobuf 确认请求对象为 `items[].item.file|directory`，路径对象使用 `absoluteUri`、`workspaceUrisToRelativePaths`、`numFiles` 和 `numBytes`；网关不把引用降级成文本或手机附件。
+   - `/gateway/workspace/context` 支持普通目录和多根 `.code-workspace`，返回根名、相对路径、稳定 URI、大小和可发送 `scopeItem`；`limit/cursor` 提供确定性分页，同名结果保留根和长路径。
+   - 查询不跟随符号链接，拒绝远程和受限根目录，沿用敏感文件过滤并跳过版本库、依赖、构建缓存和验收材料；50,000 项扫描上限通过 `truncated` 告知客户端。
 
 9. `feat(android): 添加电脑文件引用与命令发现`
    - 在输入框内用独立胶囊区分手机附件、电脑文件和斜杠命令。

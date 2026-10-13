@@ -75,4 +75,6 @@ Google 将 Antigravity IDE、独立 Antigravity 2.0、CLI、IDE 扩展分别发�
 
 普通文件契约也已由本机二进制与隔离真实会话交叉确认。`SendUserCascadeMessageRequest.GetMedia` 使用公共 `Media` 类型；有效 JSON 字段是 `mimeType`、`displayName` 和 base64 `inlineData`。纯文本探针发送成功后，`GetCascadeTrajectory` 读回相同 MIME 与名称，正文已被服务端写入 `.user_uploaded/uploaded_media_*.txt` 并改以 `uri` 表示。`ClientModelConfig.supportedMimeTypes` 是 MIME 能力的权威来源；没有发现独立 `files` 数组。两次隔离诊断会话均已删除。
 
+电脑工作区引用契约已从同一本机 2.19.1 protobuf 描述符确认。`SendUserCascadeMessageRequest.items` 为 `TextOrScopeItem[]`，其 oneof 可以是 `text` 或 `item`；文件与目录分别使用 `ContextScopeItem.file` / `directory`，共同的 `PathScopeItem` 包含 `absoluteUri`、`workspaceUrisToRelativePaths`、`numFiles` 和 `numBytes`。桌面搜索 RPC 是 `GetMatchingContextScopeItems`，文件/目录枚举分别为 `CONTEXT_SCOPE_TYPE_FILE` 与 `CONTEXT_SCOPE_TYPE_DIRECTORY`；因此移动端应发送结构化 scope item，不能只在提示文字里拼接 `@路径`。
+
 官方能力部分仅使用 Google 官方文档和官方发布说明，并已打开核查正文；协议边界另以本机二进制符号和仓库源码交叉确认。当前文档可能继续变化，引用用于证明官方能力，无法代替真实请求验证。本文未操作真实会话，未上传文件、发出审批、撤回代码、改桌面设置或启用官方远程控制。

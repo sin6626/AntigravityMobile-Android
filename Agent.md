@@ -9,7 +9,7 @@
 
 - 用户要求继续核对手机端与电脑 Antigravity 的功能差距，仍以 UI、UX 和动画为首要验收标准。本轮已完成证据化审计与实施顺序，没有直接把官网其他产品线的新功能算成本机缺口。
 - 本机 `C:\Users\F\AppData\Local\Programs\antigravity\Antigravity.exe` 的 ProductVersion 为 2.19.1.0、FileVersion 为 2.19.1。官网同时存在 Antigravity IDE 与独立 Antigravity 2.0 两套版本说明，最终报告需分开标注本机可见能力、官方当前能力和高于 2.19.1 的待升级能力。
-- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航和普通文件发送现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的半成品包括：电脑工作区上下文、文件下载/分享与配额已有部分接口但缺少 Android 完整入口。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
+- 方案 Artifact 审阅、多选问答、排队消息、后台任务、子代理查看/导航、普通文件发送和电脑工作区上下文查询现已闭环。子代理定向消息只有本机内部工具结构，尚无可验证的移动端 HTTP/RPC，所以子轨迹暂为只读。仍待完成的半成品包括：电脑文件引用 Android 入口、文件下载/分享与配额已有部分接口但缺少 Android 完整入口。第三方 Cockpit 多账号池不属于 Google 官方核心对齐项。
 - 审计结果在 `android/docs/mobile-desktop-parity-audit-2026-10-13.md`，官方来源在 `android/docs/desktop-capabilities-source-notes-2026-10-13.md`。P0 顺序为方案审阅、多选交互、排队消息、后台任务/子代理，再核普通文件协议；每个功能单独中文 Conventional Commit，并一起验收 UI、UX、动画、错误恢复和无障碍。通知仍遵守此前暂缓决定；接口枚举或附件契约不明时只列协议问题，不猜值实现。
 
 ### 2026-10-13 待审方案与继续执行
@@ -61,6 +61,14 @@
 - `SendUserCascadeMessage` 对普通文件只发送 `media[].mimeType/displayName/inlineData`，没有伪造 `files` 数组；新会话、现有会话与 `deliveryStrategy=2` 排队均走同一字段。队列响应新增结构化附件元数据，编辑/立即发送会在删除上游队列项前确认文件可恢复，避免数据丢失。
 - `ApiTraceInterceptor` 对小/大请求都记录附件数量、MIME 与显示名，`inlineData/base64Data` 始终显示为“已隐藏”。模型解析、草稿恢复、普通发送、运行中排队、载荷字段和 Go 队列元数据测试均通过；原生测试同时发现并修复“新会话仅文件时错误走纯文本创建”的分支。
 - 同一源码已部署到 58900/PID 44764 与 58901/PID 39684，SHA256 为 `F41DCD08C2D3C189DE72A0B21721E2D2A6CB4FCF567ADDF58BBFBA936FFE726F`。主公网 Cloudflare PID 38868；58901 明确设置 `CF_TUNNEL_ENABLED=false`，沿用隔离数据和既有配对。本地、模拟器和公网健康均为 200，真实 Android 鉴权、模型、会话、子代理和项目接口均返回 200。
+
+### 2026-10-13 电脑工作区上下文查询
+
+- 本机 2.19.1 protobuf 描述符确认 `SendUserCascadeMessageRequest.items` 是 `TextOrScopeItem[]`；文件与目录引用使用 `item.file` / `item.directory`，路径对象的稳定字段为 `absoluteUri` 和 `workspaceUrisToRelativePaths`。同时确认桌面搜索 RPC 的文件/目录类型枚举，没有把 `@路径` 猜成普通文本或手机附件。
+- 新增鉴权后的 `GET /gateway/workspace/context`，按 `workspaceUri/query/limit/cursor` 返回文件与目录、根目录名称、相对路径、稳定 URI、大小及可直接发送的 `scopeItem`。普通目录与多根 `.code-workspace` 都保留各自根 URI，分页顺序确定，同名文件可由根名和长路径区分。
+- 搜索只进入用户选中的本地工作区，不跟随符号链接；拒绝远程工作区和不安全根目录，沿用文件接口的敏感目录/凭据文件拦截，并跳过 Git、依赖、构建缓存和项目验收材料目录。单次最多扫描 50,000 项并显式返回 `truncated`，避免大仓库请求长时间占用网关。
+- Go 测试覆盖分页、scope item 字段、多根工作区、敏感文件和依赖目录不暴露；`IsSafeFilePath` 同步修复为允许配置根目录本身，并在 Windows 下按不区分大小写比较，子路径边界仍要求目录分隔符。
+- 当前源码已部署到 58900/PID 9240 与 58901/PID 35652，SHA256 为 `811A8C2E07C1B75DA1B86224B2B0197EFE1B2E345E209D7E85BEADF7F3E5EDBF`；主公网 Cloudflare PID 5644。真实工作区查询返回 `ChatViewModel.kt` 的根名、相对路径和 scope item，本地、模拟器现有鉴权调用及公网健康检查均正常。
 
 ### 2026-10-13 按用户要求修正附件菜单命名
 

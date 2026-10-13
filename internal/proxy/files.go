@@ -257,7 +257,15 @@ func IsSafeFilePath(path string) bool {
 	}
 
 	for _, prefix := range AllowedWorkspaceRoots() {
-		if strings.HasPrefix(resolved, prefix) {
+		root := filepath.Clean(prefix)
+		candidate := resolved
+		if runtime.GOOS == "windows" {
+			root = strings.ToLower(root)
+			candidate = strings.ToLower(candidate)
+		}
+		relative, err := filepath.Rel(root, candidate)
+		if err == nil && relative != ".." && !filepath.IsAbs(relative) &&
+			!strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 			return true
 		}
 	}
