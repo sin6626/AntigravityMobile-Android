@@ -96,6 +96,7 @@ import com.antigravity.mobile.ui.chat.ChatViewModel
 import com.antigravity.mobile.ui.chat.PairingScreen
 import com.antigravity.mobile.ui.chat.InteractionPanel
 import com.antigravity.mobile.ui.chat.PlanReviewPanel
+import com.antigravity.mobile.ui.chat.QueuedMessagesPanel
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -554,6 +555,20 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onChoose = viewModel::respondToInteraction,
                         )
                     }
+                    AnimatedVisibility(
+                        visible = state.queuedMessages.isNotEmpty(),
+                        enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
+                        exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
+                    ) {
+                        QueuedMessagesPanel(
+                            messages = state.queuedMessages,
+                            busyIds = state.busyQueuedMessageIds,
+                            error = state.queueError,
+                            onSendNow = viewModel::sendQueuedMessageNow,
+                            onEdit = viewModel::editQueuedMessage,
+                            onDelete = viewModel::deleteQueuedMessage,
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth(widthFactor)
@@ -571,20 +586,27 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             attachments = state.attachments,
                             onDraftChange = viewModel::setDraft,
                             onTakePhoto = {
-                                val tempFile = File(context.cacheDir, "camera_capture_${System.currentTimeMillis()}.jpg")
-                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", tempFile)
-                                tempPhotoUri = uri
-                                cameraLauncher.launch(uri)
+                                if (state.busyQueuedMessageIds.isEmpty()) {
+                                    val tempFile = File(context.cacheDir, "camera_capture_${System.currentTimeMillis()}.jpg")
+                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", tempFile)
+                                    tempPhotoUri = uri
+                                    cameraLauncher.launch(uri)
+                                }
                             },
                             onPickImage = {
-                                imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                if (state.busyQueuedMessageIds.isEmpty()) {
+                                    imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                }
                             },
                             onPickFile = {
-                                filePicker.launch(arrayOf("image/jpeg", "image/png", "image/webp", "image/gif"))
+                                if (state.busyQueuedMessageIds.isEmpty()) {
+                                    filePicker.launch(arrayOf("image/jpeg", "image/png", "image/webp", "image/gif"))
+                                }
                             },
                             onRemoveImage = viewModel::removeImage,
                             onSend = viewModel::send,
-                            isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting || state.selectedConversationId in state.busyConversations,
+                            isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
+                                state.busyQueuedMessageIds.isNotEmpty() || state.selectedConversationId in state.busyConversations,
                             isRunning = state.isRunning,
                             isStopping = state.isStopping,
                             onStop = viewModel::stopGeneration,

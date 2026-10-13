@@ -410,7 +410,7 @@ internal fun Composer(
     modelEnabled: Boolean = true,
     inputFocusRequester: FocusRequester? = null,
 ) {
-    val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isRunning && !isStopping
+    val canSend = (draft.isNotBlank() || attachments.isNotEmpty()) && !isSending && !isStopping
     var focused by remember { mutableStateOf(false) }
     var plusMenuOpen by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty()
@@ -559,23 +559,46 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
 @Composable
 private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean, isSending: Boolean,
     isStopping: Boolean, onStop: () -> Unit, active: Boolean = true) {
-    val enabled = active && !isStopping && (if (isRunning) !isSending else canSend)
-    Box(
-        modifier = Modifier.size(48.dp)
-            .quietClickable(CircleShape, enabled = enabled, onClick = if (isRunning) onStop else onSend)
-            .semantics {
-                contentDescription = if (isRunning) "停止生成" else "发送消息"
-                stateDescription = if (isStopping) "正在停止" else if (isSending) "正在发送" else ""
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(Modifier.size(44.dp).background(if (enabled || isStopping) AccentBlue else Color(0xFFD2D3D5), CircleShape), contentAlignment = Alignment.Center) {
-            Crossfade(targetState = if (isStopping || isSending) "busy" else if (isRunning) "stop" else "send",
-                animationSpec = androidx.compose.animation.core.tween(120), label = "send action") { action ->
-                when (action) {
-                    "busy" -> CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
-                    "stop" -> Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(23.dp))
-                    else -> Symbol("arrow_upward", size = 26, color = Color.White)
+    val queueing = isRunning && canSend
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        AnimatedVisibility(
+            queueing && !isSending && !isStopping,
+            enter = expandHorizontally(tween(160), expandFrom = Alignment.End) + fadeIn(tween(120)),
+            exit = shrinkHorizontally(tween(140), shrinkTowards = Alignment.End) + fadeOut(tween(100)),
+        ) {
+            Box(
+                Modifier.size(48.dp).semantics { contentDescription = "停止生成" }
+                    .quietClickable(CircleShape, enabled = active, onClick = onStop),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.size(40.dp).background(AccentBlue, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp))
+                }
+            }
+        }
+        val stopsGeneration = isRunning && !queueing && !isSending
+        val enabled = active && !isStopping && if (stopsGeneration) true else canSend
+        Box(
+            modifier = Modifier.size(48.dp)
+                .quietClickable(CircleShape, enabled = enabled, onClick = if (stopsGeneration) onStop else onSend)
+                .semantics {
+                    contentDescription = when {
+                        stopsGeneration -> "停止生成"
+                        queueing || isSending && isRunning -> "排队发送消息"
+                        else -> "发送消息"
+                    }
+                    stateDescription = if (isStopping) "正在停止" else if (isSending) "正在发送" else ""
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(44.dp).background(if (enabled || isStopping || isSending) AccentBlue else Color(0xFFD2D3D5), CircleShape), contentAlignment = Alignment.Center) {
+                Crossfade(targetState = if (isStopping || isSending) "busy" else if (stopsGeneration) "stop" else "send",
+                    animationSpec = androidx.compose.animation.core.tween(120), label = "send action") { action ->
+                    when (action) {
+                        "busy" -> CircularProgressIndicator(Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                        "stop" -> Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(23.dp))
+                        else -> Symbol("arrow_upward", size = 26, color = Color.White)
+                    }
                 }
             }
         }

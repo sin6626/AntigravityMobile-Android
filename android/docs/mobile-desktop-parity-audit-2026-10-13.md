@@ -37,7 +37,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 | 多选问答 | 电脑可呈现多选问题 | 已完成。支持多项选择、自定义回答、必答校验、失败保留和重试 | `InteractionPanel.kt`、`ChatViewModel.respondToInteraction`、`InteractionSubmitRequest.selectedOptionIds` | 保持回归 |
 | 方案审阅与 Proceed | `/plan`、计划评论、Proceed 和 Review | 整份方案审阅与 Proceed 已完成：卡片、全屏阅读、滚动位置、提交/失败恢复均已接入；定位评论仍待协议 | `StreamPayload.kt`、`ApiClient.proceedArtifact`、`ChatViewModel.proceedArtifact`、`PlanReviewPanel` | P0 剩定位评论 |
 | 计划定位评论 | 对计划选区评论并要求代理修订 | 缺失。当前只有文件阅读，没有选区评论模型和回传入口 | `LinkedFilePreview.kt`、`Interaction.kt` | P0，待协议 |
-| 运行中排队消息 | Queue、Send Now、编辑和删除 | 部分完成。网关和 Android 模型都有队列数据，API 也有删除与 `deliveryStrategy`，但状态没有接入；运行中发送按钮只执行停止 | `StreamPayload.kt:91-101,145`、`ApiClient.kt:532-633`、`ChatComponents.kt:413,565` | P0 |
+| 运行中排队消息 | Queue、Send Now、编辑和删除 | 已完成。历史/实时队列、运行中新增队列、立即发送、编辑回填、删除、失败留态和草稿恢复均已接入 | `QueuedMessagesPanel.kt`、`ChatViewModel.queueCurrentMessage`、`ChatViewModel.sendQueuedMessageNow` | 保持回归 |
 | 后台任务 | 查看任务、命令、状态并单独停止 | 部分完成。数据模型和停止接口已存在，没有 Android 状态和卡片 | `StreamPayload.kt:103-128,146`、`ApiClient.kt:663-688` | P0 |
 | 子代理 | 2.16 有实时卡片，2.19.1 可直接给子代理发消息 | 缺失。当前没有独立子代理身份、导航或定向消息模型 | 官方 Changelog；Android 无对应 UI/请求 | P0，待协议 |
 | 普通文件附件 | 基线前已支持 PDF、纯文本、JSON、Markdown、CSV、音频和 Office 文档，能力受模型限制 | 缺失。系统“文件”入口仍只允许四种图片，草稿与发送模型也是 `PendingImage` / `images` / `media` | `ChatDemoScreen.kt:545`、`ChatViewModel.kt:86,296-317`、`ApiClient.kt:532-599` | P0，待协议 |
@@ -89,6 +89,7 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
    - 已从网关上游类型确认 `selectedOptionIds`、`writeInResponse`、`skipped/cancelled` 结构，并保留旧 `optionId` 兼容；未增加未经证实的 scope 或拒绝枚举。
 
 3. `feat(android): 展示并管理排队消息`
+   - **已于 2026-10-13 完成。**
    - 运行时保留输入与发送能力，发送后在输入框上方显示队列卡片。
    - 每项支持立即发送、编辑和删除。编辑先回填草稿，接口失败时恢复原队列位置。
    - 展开、折叠、插入、删除和快速反向操作保持连续；TalkBack 读出队列长度和三个动作。
@@ -178,6 +179,6 @@ Google 官方 Remote Control 的手机工作流也是这个顺序：看活动会
 
 ## 本轮没有实施的内容
 
-审计后的前两项已经分别完成：待审方案与继续执行、多选审批与澄清问答。均使用隔离网关和模拟器验证，没有发送真实消息、批准真实计划、停止真实任务或上传文件。其余功能继续按一个功能一个中文 Conventional Commit 提交。
+审计后的前三项已经分别完成：待审方案与继续执行、多选审批与澄清问答、排队消息管理。均使用隔离网关和模拟器验证，没有发送真实消息、批准真实计划、停止真实任务或上传文件。其余功能继续按一个功能一个中文 Conventional Commit 提交。
 
 没有把 2.21.1 之后的全文搜索、Automations、侧栏拖拽、UI Extensions、`.zip` 和文件夹附件列为当前缺口。没有把第三方 Cockpit 多账号池当作 Google 官方桌面对齐要求。通知继续遵守用户此前的暂缓决定。

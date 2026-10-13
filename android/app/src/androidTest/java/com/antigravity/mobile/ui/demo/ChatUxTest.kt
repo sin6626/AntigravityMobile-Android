@@ -2083,6 +2083,79 @@ class ChatUxTest {
         }
     }
 
+    @Test fun queuedMessagesCanBeEditedDeletedAndSentNowWhileRunning() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.running = true
+            gateway.queueFixture = true
+            PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url
+                deviceToken = "test-token"
+                lastConversationId = "A"
+            }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("queued-messages", vm) }
+            val editStarted = CountDownLatch(1)
+            val editRelease = CountDownLatch(1)
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.queuedMessages.size == 2 && vm.state.value.isRunning }
+                compose.onNodeWithText("2 条等待当前任务空闲").assertIsDisplayed()
+                compose.onNodeWithContentDescription("收起排队消息").performClick()
+                compose.onNodeWithText("先补充单元测试").assertDoesNotExist()
+                compose.onNodeWithContentDescription("展开排队消息").performClick()
+                compose.onNodeWithText("先补充单元测试").assertIsDisplayed()
+                saveScreenshot("queued-messages.png")
+
+                gateway.failurePath = "DeleteAgentMessage"
+                gateway.block = { path -> if (path.contains("DeleteAgentMessage")) {
+                    editStarted.countDown()
+                    editRelease.await(10, TimeUnit.SECONDS)
+                } }
+                compose.onNodeWithContentDescription("编辑 先补充单元测试").performClick()
+                assertTrue(editStarted.await(5, TimeUnit.SECONDS))
+                compose.onNodeWithText("处理中…").assertIsDisplayed()
+                editRelease.countDown()
+                compose.waitUntil(10_000) { vm.state.value.queueError != null && vm.state.value.busyQueuedMessageIds.isEmpty() }
+                assertEquals(2, vm.state.value.queuedMessages.size)
+                assertEquals("", vm.state.value.draft)
+                compose.onNodeWithText("先补充单元测试").assertIsDisplayed()
+
+                gateway.failurePath = null
+                gateway.block = {}
+                compose.onNodeWithContentDescription("编辑 先补充单元测试").performClick()
+                compose.waitUntil(10_000) { vm.state.value.queuedMessages.size == 1 && vm.state.value.draft == "先补充单元测试" }
+                compose.onNodeWithContentDescription("停止生成").assertIsDisplayed()
+                compose.onNodeWithContentDescription("排队发送消息").assertIsDisplayed().performClick()
+                compose.waitUntil(10_000) {
+                    gateway.queuedDraftText == "先补充单元测试" && vm.state.value.queuedMessages.any { it.id == "q-new" }
+                }
+                assertEquals("", vm.state.value.draft)
+
+                compose.onNodeWithContentDescription("删除 然后检查动画").performClick()
+                compose.waitUntil(10_000) { vm.state.value.queuedMessages.none { it.id == "q-delete" } }
+                compose.onNodeWithContentDescription("立即发送 先补充单元测试").performClick()
+                compose.waitUntil(10_000) { gateway.sentNowText == "先补充单元测试" && vm.state.value.queuedMessages.isEmpty() }
+                compose.onNodeWithText("排队消息").assertDoesNotExist()
+
+                val queued = gateway.requests.map { it.first to JSONObject(it.second.ifBlank { "{}" }) }
+                    .last { (path, body) -> path.contains("SendUserCascadeMessage") && body.optInt("deliveryStrategy") == 2 }
+                assertEquals("先补充单元测试", queued.second.getString("text"))
+                val sentNowIndex = gateway.requests.indexOfLast { (path, body) ->
+                    path.contains("SendUserCascadeMessage") && JSONObject(body.ifBlank { "{}" }).optInt("deliveryStrategy") == 1
+                }
+                val deleteNewIndex = gateway.requests.indexOfLast { (path, body) ->
+                    path.contains("DeleteAgentMessage") && JSONObject(body.ifBlank { "{}" }).optString("messageId") == "q-new"
+                }
+                assertTrue("Send Now must remove the queued copy before injecting it", deleteNewIndex in 0 until sentNowIndex)
+            } finally {
+                editRelease.countDown()
+                compose.runOnIdle { store.clear() }
+            }
+        }
+    }
+
     private class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
@@ -2119,6 +2192,20 @@ class ChatUxTest {
         @Volatile var planProceeded = false
         @Volatile var interactionFixture = false
         @Volatile var interactionSubmitted = false
+        @Volatile var queueFixture = false
+        @Volatile var queuedDraftText: String? = null
+        @Volatile var sentNowText: String? = null
+        private val deletedQueueIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        private fun queuedMessagesJson(): String {
+            val messages = mutableListOf<JSONObject>()
+            if ("q-edit" !in deletedQueueIds) messages += JSONObject()
+                .put("id", "q-edit").put("text", "先补充单元测试").put("createdAt", "2026-10-13T08:00:00Z")
+            if ("q-delete" !in deletedQueueIds) messages += JSONObject()
+                .put("id", "q-delete").put("text", "然后检查动画").put("createdAt", "2026-10-13T08:01:00Z")
+            queuedDraftText?.takeIf { "q-new" !in deletedQueueIds }?.let { messages += JSONObject()
+                .put("id", "q-new").put("text", it).put("createdAt", "2026-10-13T08:02:00Z") }
+            return org.json.JSONArray(messages).toString()
+        }
         private fun image(width: Int, height: Int) = java.io.ByteArrayOutputStream().let { output ->
             val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
             bitmap.eraseColor(android.graphics.Color.BLUE)
@@ -2158,6 +2245,11 @@ class ChatUxTest {
                                 val request = JSONObject(requestBody)
                                 if (path == "/gateway/cascade/new" && request.optString("projectId") == "p") createdProject = true
                                 if ((request.optJSONArray("artifactComments")?.length() ?: 0) > 0) planProceeded = true
+                                if (queueFixture && request.optInt("deliveryStrategy") == 2) {
+                                    queuedDraftText = request.optString("text")
+                                    deletedQueueIds.remove("q-new")
+                                }
+                                if (queueFixture && request.optInt("deliveryStrategy") == 1) sentNowText = request.optString("text")
                                 when (request.optString("model")) {
                                     "MODEL_PLACEHOLDER_M318" -> activeModel = "gemini-3.8-flash-high"
                                     "MODEL_PLACEHOLDER_M26" -> activeModel = "claude-fixture"
@@ -2184,6 +2276,9 @@ class ChatUxTest {
                                 }
                                 if (path.contains("/revert/execute")) reverted = true
                                 if (path == "/gateway/cascade/interaction") interactionSubmitted = true
+                                if (path.contains("DeleteAgentMessage")) {
+                                    deletedQueueIds += JSONObject(requestBody).getString("messageId")
+                                }
                             }
                             val id = if (path.contains("cascadeId=A")) "A" else "B"
                             val body = when {
@@ -2201,7 +2296,7 @@ class ChatUxTest {
                                 path.startsWith("/gateway/projects") -> if (projectFixture) """[{"id":"p","name":"动效项目","uri":"file:///test/project"}]""" else "[]"
                                 management && path.contains("/revert/preview") -> """{"cascadeId":"A","stepIndex":0,"targetStepIndex":-1,"hasCodeChanges":${previewFiles > 0},"files":[${(0 until previewFiles).joinToString { """{"fileName":"${if (it == 0) "Agent.md" else "file-$it.kt"}","actionType":"MODIFY","additions":1,"deletions":2}""" }}]}"""
                                 management && path.startsWith("/gateway/cascade/messages") ->
-                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"}}"""
+                                    """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"}}"""
                                 path.startsWith("/api/v1/files/content") -> JSONObject()
                                     .put("uri", "file:///test/plan.md")
                                     .put("filename", "plan.md")

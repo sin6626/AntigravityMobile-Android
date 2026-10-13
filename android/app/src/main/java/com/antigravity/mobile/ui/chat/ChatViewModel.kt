@@ -2,6 +2,7 @@ package com.antigravity.mobile.ui.chat
 
 import android.app.Application
 import android.net.Uri
+import android.util.Base64
 import android.webkit.MimeTypeMap
 import coil.ImageLoader
 import coil.request.ImageRequest
@@ -13,6 +14,7 @@ import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.data.model.PairingInfo
 import com.antigravity.mobile.data.model.PendingInteraction
 import com.antigravity.mobile.data.model.InteractionOption
+import com.antigravity.mobile.data.model.QueuedMessageItem
 import com.antigravity.mobile.data.model.RevertPreviewResponse
 import com.antigravity.mobile.data.model.ProjectItem
 import com.antigravity.mobile.data.model.ChatModel
@@ -61,6 +63,9 @@ data class ChatUiState(
     val pendingInteraction: PendingInteraction? = null,
     val isSubmittingInteraction: Boolean = false,
     val interactionError: String? = null,
+    val queuedMessages: List<QueuedMessageItem> = emptyList(),
+    val busyQueuedMessageIds: Set<String> = emptySet(),
+    val queueError: String? = null,
     val canProceed: Boolean = false,
     val proceedArtifactUri: String? = null,
     val isProceedingArtifact: Boolean = false,
@@ -206,6 +211,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     pendingInteraction = update.pendingInteraction,
                     isSubmittingInteraction = if (interactionChanged) false else previous.isSubmittingInteraction,
                     interactionError = if (interactionChanged || update.pendingInteraction == null) null else previous.interactionError,
+                    queuedMessages = update.queuedMessages ?: previous.queuedMessages,
                     canProceed = update.canProceed,
                     proceedArtifactUri = update.proceedArtifactUri,
                     isProceedingArtifact = if (planChanged) false else previous.isProceedingArtifact,
@@ -352,7 +358,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             messages = emptyList(), outgoing = emptyList(), error = "设备授权已失效，请重新配对",
             isLoadingMessages = false, canProceed = false, proceedArtifactUri = null,
             isProceedingArtifact = false, proceedError = null, isSubmittingInteraction = false,
-            pendingInteraction = null, interactionError = null,
+            pendingInteraction = null, interactionError = null, queuedMessages = emptyList(),
+            busyQueuedMessageIds = emptySet(), queueError = null,
         )
     }
 
@@ -560,6 +567,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
             interactionError = null,
+            queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -600,6 +608,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isRunning = false,
             pendingInteraction = null,
             interactionError = null,
+            queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
             hasMoreMessages = false,
             nextMessageOffset = 0,
@@ -628,13 +637,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val token = prefs.deviceToken
         val visit = conversationVisit
         val clientId = UUID.randomUUID().toString()
+        val wasRunning = _state.value.isRunning
+        if (id != null && wasRunning) {
+            queueCurrentMessage(id, text, images, requestedModel, model?.id, token, visit, clientId)
+            return
+        }
         var targetId = id ?: "local:$clientId"
         val originalDraftKey = draftKey
         val pending = OutgoingMessage(targetId,
             GatewayMessageItem(id = "local:$clientId", text = text, imageDataList = images.map { it.bytes }),
             _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
             _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull())
-        val wasRunning = _state.value.isRunning
         prefs.setDraftText(PENDING_SEND_DRAFT, text)
         prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
         prefs.pendingSendTarget = originalDraftKey
@@ -728,6 +741,269 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             )
             clearSendSnapshot()
         }
+    }
+
+    private fun queueCurrentMessage(
+        id: String,
+        text: String,
+        images: List<PendingImage>,
+        requestedModel: String?,
+        selectedModelId: String?,
+        token: String?,
+        visit: Long,
+        clientId: String,
+    ) {
+        val key = draftKey
+        prefs.setDraftText(PENDING_SEND_DRAFT, text)
+        prefs.saveDraftImages(PENDING_SEND_DRAFT, images.map { File(checkNotNull(it.uri.path)) })
+        prefs.pendingSendTarget = key
+        setDraft("")
+        saveImages(key, emptyList())
+        _state.value = _state.value.copy(
+            draft = "",
+            attachments = emptyList(),
+            isSending = true,
+            queueError = null,
+        )
+        viewModelScope.launch {
+            api.sendMessage(
+                id,
+                text,
+                model = requestedModel,
+                images = images.map { it.bytes to it.mimeType },
+                deliveryStrategy = 2,
+                clientMessageId = clientId,
+            ).fold(
+                onSuccess = {
+                    if (prefs.deviceToken != token) return@fold
+                    if (_state.value.selectedConversationId == id && conversationVisit == visit) {
+                        _state.value = _state.value.copy(
+                            isSending = false,
+                            activeModelId = selectedModelId ?: _state.value.activeModelId,
+                            modelOverrideId = null,
+                        )
+                        loadMessages(id)
+                    }
+                },
+                onFailure = { error ->
+                    if (prefs.deviceToken != token) return@fold
+                    val currentText = if (draftKey == key) _state.value.draft else prefs.getDraftText(key)
+                    val restoredText = listOf(text, currentText).filter { it.isNotBlank() }.joinToString("\n\n")
+                    val currentImages = if (draftKey == key) _state.value.attachments else draftAttachments[key].orEmpty()
+                    val restoredImages = (images + currentImages).distinctBy { it.uri }
+                    prefs.setDraftText(key, restoredText)
+                    saveImages(key, restoredImages)
+                    if (_state.value.selectedConversationId == id && conversationVisit == visit) {
+                        _state.value = _state.value.copy(
+                            draft = restoredText,
+                            attachments = restoredImages,
+                            isSending = false,
+                            queueError = "${error.message ?: "加入队列失败"}（内容已恢复到输入框）",
+                        )
+                    }
+                },
+            )
+            clearSendSnapshot()
+        }
+    }
+
+    fun deleteQueuedMessage(message: QueuedMessageItem) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        if (message.id.isBlank() || message.id in current.busyQueuedMessageIds) return
+        val visit = conversationVisit
+        _state.value = current.copy(
+            busyQueuedMessageIds = current.busyQueuedMessageIds + message.id,
+            queueError = null,
+        )
+        viewModelScope.launch {
+            api.deleteAgentMessage(id, message.id).fold(
+                onSuccess = {
+                    if (conversationVisit == visit && _state.value.selectedConversationId == id) {
+                        _state.value = _state.value.copy(
+                            queuedMessages = _state.value.queuedMessages.filterNot { it.id == message.id },
+                            busyQueuedMessageIds = _state.value.busyQueuedMessageIds - message.id,
+                            queueError = null,
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    if (conversationVisit == visit && _state.value.selectedConversationId == id) {
+                        _state.value = _state.value.copy(
+                            busyQueuedMessageIds = _state.value.busyQueuedMessageIds - message.id,
+                            queueError = error.message ?: "删除排队消息失败",
+                        )
+                    }
+                },
+            )
+        }
+    }
+
+    fun editQueuedMessage(message: QueuedMessageItem) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        if (message.id.isBlank() || message.id in current.busyQueuedMessageIds) return
+        val visit = conversationVisit
+        _state.value = current.copy(
+            busyQueuedMessageIds = current.busyQueuedMessageIds + message.id,
+            queueError = null,
+        )
+        viewModelScope.launch {
+            val stagedFiles = mutableListOf<File>()
+            var keepStagedFiles = false
+            var deletedUpstream = false
+            var staged = emptyList<PendingImage>()
+            try {
+                staged = stageQueuedImages(message, id, stagedFiles)
+                if (conversationVisit != visit || _state.value.selectedConversationId != id) return@launch
+                check(staged.size + _state.value.attachments.size <= 4) { "输入框最多保留 4 张图片，请先发送或移除部分图片" }
+                api.deleteAgentMessage(id, message.id).getOrThrow()
+                deletedUpstream = true
+                val latest = _state.value
+                val targetDraft = if (draftKey == id) latest.draft else prefs.getDraftText(id)
+                val targetImages = if (draftKey == id) latest.attachments else draftAttachments[id].orEmpty()
+                val text = listOf(message.text, targetDraft).filter { it.isNotBlank() }.joinToString("\n\n")
+                val images = (staged + targetImages).distinctBy { it.uri }
+                check(images.size <= 4) { "输入框最多保留 4 张图片" }
+                prefs.setDraftText(id, text)
+                saveImages(id, images)
+                keepStagedFiles = true
+                if (latest.selectedConversationId == id && draftKey == id) {
+                    _state.value = latest.copy(
+                        queuedMessages = latest.queuedMessages.filterNot { it.id == message.id },
+                        busyQueuedMessageIds = latest.busyQueuedMessageIds - message.id,
+                        queueError = null,
+                        draft = text,
+                        attachments = images,
+                    )
+                }
+            } catch (error: Exception) {
+                val latest = _state.value
+                if (deletedUpstream) {
+                    val targetDraft = if (draftKey == id) latest.draft else prefs.getDraftText(id)
+                    val targetImages = if (draftKey == id) latest.attachments else draftAttachments[id].orEmpty()
+                    val text = listOf(message.text, targetDraft).filter { it.isNotBlank() }.joinToString("\n\n")
+                    val restored = (staged + targetImages).distinctBy { it.uri }
+                    prefs.setDraftText(id, text)
+                    saveImages(id, restored)
+                    keepStagedFiles = true
+                    if (latest.selectedConversationId == id && draftKey == id) {
+                        _state.value = latest.copy(
+                            queuedMessages = latest.queuedMessages.filterNot { it.id == message.id },
+                            busyQueuedMessageIds = latest.busyQueuedMessageIds - message.id,
+                            queueError = "${error.message ?: "编辑排队消息失败"}（内容已恢复到输入框）",
+                            draft = text,
+                            attachments = restored,
+                        )
+                    }
+                } else if (conversationVisit == visit && latest.selectedConversationId == id) {
+                    _state.value = latest.copy(
+                        busyQueuedMessageIds = latest.busyQueuedMessageIds - message.id,
+                        queueError = error.message ?: "编辑排队消息失败",
+                    )
+                }
+            } finally {
+                if (!keepStagedFiles) stagedFiles.forEach(prefs::deleteUnusedDraftImage)
+            }
+        }
+    }
+
+    fun sendQueuedMessageNow(message: QueuedMessageItem) {
+        val current = _state.value
+        val id = current.selectedConversationId ?: return
+        if (message.id.isBlank() || message.id in current.busyQueuedMessageIds) return
+        val visit = conversationVisit
+        _state.value = current.copy(
+            busyQueuedMessageIds = current.busyQueuedMessageIds + message.id,
+            queueError = null,
+        )
+        viewModelScope.launch {
+            val stagedFiles = mutableListOf<File>()
+            var keepStagedFiles = false
+            var deletedUpstream = false
+            var staged = emptyList<PendingImage>()
+            try {
+                staged = stageQueuedImages(message, id, stagedFiles)
+                if (conversationVisit != visit || _state.value.selectedConversationId != id) return@launch
+                check(staged.size + _state.value.attachments.size <= 4) { "输入框图片较多，无法在失败时完整恢复；请先发送或移除部分图片" }
+                api.deleteAgentMessage(id, message.id).getOrThrow()
+                deletedUpstream = true
+                api.sendMessage(
+                    id,
+                    message.text,
+                    images = staged.map { it.bytes to it.mimeType },
+                    deliveryStrategy = 1,
+                    clientMessageId = UUID.randomUUID().toString(),
+                ).getOrThrow()
+                val latest = _state.value
+                if (conversationVisit == visit && latest.selectedConversationId == id) {
+                    _state.value = latest.copy(
+                        queuedMessages = latest.queuedMessages.filterNot { it.id == message.id },
+                        busyQueuedMessageIds = latest.busyQueuedMessageIds - message.id,
+                        queueError = null,
+                        isRunning = true,
+                    )
+                    loadMessages(id)
+                }
+            } catch (error: Exception) {
+                val latest = _state.value
+                if (deletedUpstream) {
+                    val targetDraft = if (draftKey == id) latest.draft else prefs.getDraftText(id)
+                    val targetImages = if (draftKey == id) latest.attachments else draftAttachments[id].orEmpty()
+                    val text = listOf(message.text, targetDraft).filter { it.isNotBlank() }.joinToString("\n\n")
+                    val images = (staged + targetImages).distinctBy { it.uri }
+                    prefs.setDraftText(id, text)
+                    saveImages(id, images)
+                    keepStagedFiles = true
+                    if (latest.selectedConversationId == id && draftKey == id) {
+                        _state.value = latest.copy(
+                            queuedMessages = latest.queuedMessages.filterNot { it.id == message.id },
+                            busyQueuedMessageIds = latest.busyQueuedMessageIds - message.id,
+                            queueError = "${error.message ?: "立即发送失败"}（内容已恢复到输入框）",
+                            draft = text,
+                            attachments = images,
+                        )
+                    }
+                } else if (conversationVisit == visit && latest.selectedConversationId == id) {
+                    _state.value = latest.copy(
+                        busyQueuedMessageIds = latest.busyQueuedMessageIds - message.id,
+                        queueError = error.message ?: "立即发送失败",
+                    )
+                }
+            } finally {
+                if (!keepStagedFiles) stagedFiles.forEach(prefs::deleteUnusedDraftImage)
+            }
+        }
+    }
+
+    private suspend fun stageQueuedImages(
+        message: QueuedMessageItem,
+        cascadeId: String,
+        stagedFiles: MutableList<File>,
+    ): List<PendingImage> {
+        val payloads = if (!message.imageUrls.isNullOrEmpty()) {
+            message.imageUrls.distinct().map { api.imageForDraft(it, cascadeId).getOrThrow() }
+        } else {
+            message.media.orEmpty().distinct().map { encoded ->
+                val bytes = Base64.decode(encoded.substringAfter(',', encoded), Base64.DEFAULT)
+                bytes to queuedImageMime(bytes)
+            }
+        }
+        check(payloads.size <= 4) { "排队消息包含超过 4 张图片，请在电脑端处理" }
+        return payloads.map { (bytes, mime) ->
+            withContext(Dispatchers.IO) {
+                val file = prefs.storeDraftImage(bytes, mime).also(stagedFiles::add)
+                PendingImage(Uri.fromFile(file), bytes, mime)
+            }
+        }
+    }
+
+    private fun queuedImageMime(bytes: ByteArray): String = when {
+        bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() -> "image/jpeg"
+        bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(byteArrayOf(0x89.toByte(), 80, 78, 71, 13, 10, 26, 10)) -> "image/png"
+        bytes.size >= 6 && String(bytes, 0, 6, Charsets.US_ASCII).startsWith("GIF8") -> "image/gif"
+        bytes.size >= 12 && String(bytes, 0, 4, Charsets.US_ASCII) == "RIFF" && String(bytes, 8, 4, Charsets.US_ASCII) == "WEBP" -> "image/webp"
+        else -> throw IllegalArgumentException("无法识别排队消息中的图片格式，请在电脑端处理")
     }
 
     private fun mutateConversation(id: String, operation: suspend () -> Result<Unit>, onSuccess: () -> Unit) {
@@ -863,7 +1139,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     stream.disconnect()
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
                         draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
-                        pendingInteraction = null, interactionError = null, canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
+                        pendingInteraction = null, interactionError = null, queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(),
+                        queueError = null, canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
                         proceedError = null, revertMessage = null, revertPreview = null, isReverting = false, isLoadingMessages = true)
                     stream.connect(id); loadMessages(id)
                 } else if (draftKey == id) {
@@ -1002,6 +1279,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             pendingInteraction = incomingInteraction,
                             isSubmittingInteraction = if (interactionChanged) false else current.isSubmittingInteraction,
                             interactionError = if (interactionChanged || incomingInteraction == null) null else current.interactionError,
+                            queuedMessages = if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(),
                             canProceed = if (changed) current.canProceed else payload.canProceed,
                             proceedArtifactUri = incomingPlanUri,
                             isProceedingArtifact = if (planChanged) false else current.isProceedingArtifact,
