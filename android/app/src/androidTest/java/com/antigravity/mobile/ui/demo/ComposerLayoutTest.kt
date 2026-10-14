@@ -5,6 +5,8 @@ import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.width
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
@@ -20,6 +22,44 @@ import org.junit.Test
 
 class ComposerLayoutTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun composerMovesOneSendButtonContinuouslyAndCanReverseMidTransition() {
+        var clearFocus: () -> Unit = {}
+        compose.setContent {
+            val focus = LocalFocusManager.current
+            clearFocus = { focus.clearFocus() }
+            Box(Modifier.fillMaxSize()) {
+                Composer(modifier = Modifier.width(360.dp).testTag("composer"), activeConversation = true,
+                    draft = "", attachments = emptyList(), onDraftChange = {}, onRemoveImage = {},
+                    onSend = {}, isSending = false, onUnsupported = {}, modelBadge = "Gemini 3.8 Flash 高",
+                    workModeLabel = "直接")
+            }
+        }
+        val resting = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInRoot.top
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.onNode(hasSetTextAction()).performClick().assertIsFocused()
+            compose.mainClock.advanceTimeByFrame()
+            val positions = mutableListOf<Float>()
+            repeat(6) {
+                compose.mainClock.advanceTimeBy(16)
+                compose.onAllNodes(hasSetTextAction()).assertCountEquals(1)
+                compose.onAllNodesWithContentDescription("发送消息").assertCountEquals(1)
+                val bounds = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInRoot
+                assertTrue("Send button must remain square: $bounds", kotlin.math.abs(bounds.width - bounds.height) < 2)
+                positions += bounds.top
+            }
+            assertTrue("Opening must have intermediate layout frames: $positions", positions.distinct().size > 2)
+            val partial = positions.last()
+            compose.runOnUiThread { clearFocus() }
+            compose.mainClock.advanceTimeByFrame()
+            val reversed = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInRoot.top
+            assertTrue("Reversal must continue at the current position", kotlin.math.abs(reversed - partial) < 20)
+            compose.mainClock.advanceTimeBy(400)
+            val returned = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInRoot.top
+            assertTrue("Closing must return to its resting position", kotlin.math.abs(returned - resting) < 2)
+        } finally { compose.mainClock.autoAdvance = true }
+    }
 
     @Test fun fullToolbarKeepsFixedActionsAtNarrowWidthsAndLargeFonts() {
         val width = mutableStateOf(360)

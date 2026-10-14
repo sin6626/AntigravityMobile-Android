@@ -18,6 +18,26 @@ class ReducedMotionTest {
     }
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>(effectContext = scale)
 
+    @Test fun composerLayoutRemainsUsableWithMotionDisabled() {
+        var clearFocus: () -> Unit = {}
+        compose.runOnIdle { scale.value.floatValue = 0f }
+        compose.setContent {
+            val focus = androidx.compose.ui.platform.LocalFocusManager.current
+            clearFocus = { focus.clearFocus() }
+            Composer(activeConversation = true, draft = "", attachments = emptyList(), onDraftChange = {},
+                onRemoveImage = {}, onSend = {}, isSending = false, onUnsupported = {},
+                modelBadge = "Gemini 3.8 Flash 高", workModeLabel = "直接")
+        }
+        compose.onNode(hasSetTextAction()).performClick().assertIsFocused()
+        compose.onNodeWithContentDescription("选择模型").assertIsDisplayed()
+        compose.onAllNodesWithContentDescription("发送消息").assertCountEquals(1)
+        val button = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInRoot
+        org.junit.Assert.assertEquals(button.width, button.height, 1f)
+        compose.runOnUiThread { clearFocus() }
+        compose.onNodeWithContentDescription("选择模型").assertDoesNotExist()
+        compose.onAllNodes(hasSetTextAction()).assertCountEquals(1)
+    }
+
     @Test fun imageZoomAndResetRemainUsableWithMotionDisabled() {
         val bitmap = android.graphics.Bitmap.createBitmap(240, 400, android.graphics.Bitmap.Config.ARGB_8888)
         val loader = coil.ImageLoader(compose.activity)

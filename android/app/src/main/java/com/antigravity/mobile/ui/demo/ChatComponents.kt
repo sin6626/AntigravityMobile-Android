@@ -90,6 +90,13 @@ import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateBounds
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.layout.LookaheadScope
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.material3.TextButton
@@ -396,6 +403,7 @@ private fun PlusMenuItem(
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 internal fun Composer(
     modifier: Modifier = Modifier,
@@ -465,13 +473,14 @@ internal fun Composer(
         voiceInput.phase != VoiceInputPhase.IDLE
     val targetHorizontalPadding = if (activeConversation || expanded) 14.dp else 34.dp
     val targetCorner = if (expanded) 30.dp else 36.dp
-    val horizontalPadding by animateDpAsState(
-        targetHorizontalPadding,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer width")
     val corner by animateDpAsState(targetCorner,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = 350f), label = "composer corner")
+        animationSpec = tween(220, easing = FastOutSlowInEasing), label = "composer corner")
+    val settingsAlpha by animateFloatAsState(if (expanded) 1f else 0f, tween(160), label = "composer settings")
+    LookaheadScope {
     Surface(
-        modifier = modifier.fillMaxWidth().padding(horizontal = horizontalPadding)
+        modifier = modifier.animateBounds(this,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = targetHorizontalPadding),
+            boundsTransform = { _, _ -> tween(220, easing = FastOutSlowInEasing) })
             .shadow(8.dp * shadowAlpha, RoundedCornerShape(corner), clip = false,
                 ambientColor = Color.Black.copy(alpha = shadowAlpha), spotColor = Color.Black.copy(alpha = shadowAlpha)),
         shape = RoundedCornerShape(corner),
@@ -519,71 +528,54 @@ internal fun Composer(
                 exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
                 VoiceInputBar(voiceInput, onStopVoice, onCancelVoice, onRetryVoice, onDismissVoiceError)
             }
-            Row(Modifier.fillMaxWidth().animateContentSize(tween(180))
-                .heightIn(min = 58.dp).padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
-                    exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
-                    Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {
-                        Box {
-                            ComposerIcon("add", "添加附件与操作", 32, { plusMenuOpen = true }, enabled = !expanded)
-                            ComposerPlusMenu(
-                                expanded = plusMenuOpen && !expanded,
-                                onDismissRequest = { plusMenuOpen = false },
-                                onTakePhoto = onTakePhoto,
-                                onPickImage = onPickImage,
-                                onPickFile = onPickFile
-                            )
-                        }
-                    }
+            Layout(content = {
+                Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })) {
+                    ComposerIcon("add", "添加附件与操作", 32, { plusMenuOpen = true })
+                    ComposerPlusMenu(plusMenuOpen, { plusMenuOpen = false }, onTakePhoto, onPickImage, onPickFile)
                 }
                 ComposerTextField(draft, onDraftChange, onSend, canSend && !voiceActive,
                     if (activeConversation) "回复 Multigravity" else "询问 Multigravity",
-                    Modifier.weight(1f).padding(vertical = 12.dp)
+                    Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })
+                        .padding(vertical = 12.dp)
                         .then(inputFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                         .onFocusChanged { focused = it.isFocused }, expanded, enabled = !voiceActive)
-                AnimatedVisibility(!expanded, enter = expandHorizontally(tween(180)) + fadeIn(tween(120)),
-                    exit = shrinkHorizontally(tween(180)) + fadeOut(tween(100))) {
-                    Row(if (expanded) Modifier.clearAndSetSemantics {} else Modifier, verticalAlignment = Alignment.CenterVertically) {
-                        ComposerIcon("mic", "语音输入", 26, onStartVoice, enabled = !expanded)
-                        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active = !expanded)
-                    }
+                Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })
+                    .graphicsLayer { alpha = settingsAlpha }) {
+                    if (expanded) ComposerSettings(true, modelBadge, onOpenModelConfig, modelEnabled,
+                        workModeLabel, workModeDescription, onOpenWorkMode, workModeEnabled)
                 }
-            }
-            AnimatedVisibility(expanded, enter = expandVertically(tween(180), expandFrom = Alignment.Top) + fadeIn(tween(120)),
-                exit = shrinkVertically(tween(180), shrinkTowards = Alignment.Top) + fadeOut(tween(100))) {
-                Box((if (!expanded) Modifier.clearAndSetSemantics {} else Modifier).padding(start = 20.dp, end = 12.dp, bottom = 9.dp, top = 3.dp)) {
-                    Box {
-                        ComposerActions(
-                            canSend = canSend,
-                            onSend = onSend,
-                            onOpenPlusMenu = { plusMenuOpen = true },
-                            voiceInput = voiceInput,
-                            onStartVoice = onStartVoice,
-                            isRunning = isRunning,
-                            isSending = isSending,
-                            isStopping = isStopping,
-                            onStop = onStop,
-                            active = expanded,
-                            modelBadge = modelBadge,
-                            onOpenModelConfig = onOpenModelConfig,
-                            modelEnabled = modelEnabled,
-                            workModeLabel = workModeLabel,
-                            workModeDescription = workModeDescription,
-                            onOpenWorkMode = onOpenWorkMode,
-                            workModeEnabled = workModeEnabled,
-                        )
-                        ComposerPlusMenu(
-                            expanded = plusMenuOpen && expanded,
-                            onDismissRequest = { plusMenuOpen = false },
-                            onTakePhoto = onTakePhoto,
-                            onPickImage = onPickImage,
-                            onPickFile = onPickFile
-                        )
-                    }
+                Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })) {
+                    if (voiceInput.phase == VoiceInputPhase.IDLE) ComposerIcon("mic", "语音输入", 27, onStartVoice)
+                }
+                Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })) {
+                    SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
+                }
+            }, modifier = Modifier.fillMaxWidth()) { children, constraints ->
+                val width = constraints.maxWidth
+                val action = 48.dp.roundToPx()
+                val add = children[0].measure(Constraints.fixed(action, action))
+                val sendWidth = if (isRunning && canSend) action * 2 else action
+                val send = children[4].measure(Constraints.fixed(sendWidth, action))
+                val micWidth = if (voiceInput.phase == VoiceInputPhase.IDLE) action else 0
+                val mic = children[3].measure(Constraints.fixed(micWidth, action))
+                val textWidth = (if (expanded) width - 40.dp.roundToPx()
+                    else width - 24.dp.roundToPx() - action - micWidth - sendWidth).coerceAtLeast(0)
+                val field = children[1].measure(Constraints(minWidth = textWidth, maxWidth = textWidth))
+                val settingsWidth = (width - 32.dp.roundToPx() - action - micWidth - sendWidth).coerceAtLeast(0)
+                val settings = children[2].measure(Constraints.fixed(settingsWidth, action))
+                val height = if (expanded) field.height + 60.dp.roundToPx() else maxOf(58.dp.roundToPx(), field.height)
+                layout(width, height) {
+                    val actionY = if (expanded) field.height + 3.dp.roundToPx() else (height - action) / 2
+                    add.placeRelative(if (expanded) 20.dp.roundToPx() else 12.dp.roundToPx(), actionY)
+                    field.placeRelative(if (expanded) 20.dp.roundToPx() else 12.dp.roundToPx() + action,
+                        if (expanded) 0 else (height - field.height) / 2)
+                    settings.placeRelative(20.dp.roundToPx() + action, actionY)
+                    mic.placeRelative(width - 12.dp.roundToPx() - sendWidth - micWidth, actionY)
+                    send.placeRelative(width - 12.dp.roundToPx() - sendWidth, actionY)
                 }
             }
         }
+    }
     }
 }
 
@@ -786,16 +778,7 @@ private fun formatVoiceDuration(elapsedMillis: Long): String {
 }
 
 @Composable
-private fun ComposerActions(
-    canSend: Boolean,
-    onSend: () -> Unit,
-    onOpenPlusMenu: () -> Unit,
-    voiceInput: VoiceInputUiState,
-    onStartVoice: () -> Unit,
-    isRunning: Boolean,
-    isSending: Boolean,
-    isStopping: Boolean,
-    onStop: () -> Unit,
+private fun ComposerSettings(
     active: Boolean,
     modelBadge: String?,
     onOpenModelConfig: () -> Unit,
@@ -805,9 +788,7 @@ private fun ComposerActions(
     onOpenWorkMode: () -> Unit,
     workModeEnabled: Boolean,
 ) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ComposerIcon("add", "添加附件与操作", 32, onOpenPlusMenu, active)
-        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
         if (!workModeLabel.isNullOrBlank()) {
             val modeColor by animateColorAsState(
                 if (workModeLabel == "规划") AccentBlue else SecondaryInk,
@@ -841,11 +822,6 @@ private fun ComposerActions(
             )
             Spacer(Modifier.width(4.dp))
         }
-        }
-        if (voiceInput.phase == VoiceInputPhase.IDLE) {
-            ComposerIcon("mic", "语音输入", 27, onStartVoice, active)
-        }
-        SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, active)
     }
 }
 
