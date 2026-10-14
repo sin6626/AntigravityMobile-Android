@@ -39,6 +39,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.QueuedMessageItem
+import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.ui.demo.MessageImages
 import com.antigravity.mobile.ui.demo.AccentBlue
 import com.antigravity.mobile.ui.demo.Ink
 import com.antigravity.mobile.ui.demo.SecondaryInk
@@ -52,6 +54,7 @@ fun QueuedMessagesPanel(
     onSendNow: (QueuedMessageItem) -> Unit,
     onEdit: (QueuedMessageItem) -> Unit,
     onDelete: (QueuedMessageItem) -> Unit,
+    viewModel: ChatViewModel? = null,
 ) {
     var expanded by remember { mutableStateOf(true) }
     val shape = RoundedCornerShape(22.dp)
@@ -89,10 +92,15 @@ fun QueuedMessagesPanel(
             ) {
                 messages.forEach { message ->
                     val busy = message.id in busyIds
+                    val local = message.id.startsWith("local:")
                     Column(
                         Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(16.dp))
                             .animateContentSize(tween(180)).padding(horizontal = 12.dp, vertical = 10.dp),
                     ) {
+                        viewModel?.let { vm ->
+                            MessageImages(GatewayMessageItem(id = message.id, media = message.media,
+                                imageUrls = message.imageUrls), vm)
+                        }
                         Text(
                             message.text.ifBlank { message.attachments?.firstOrNull()?.displayName ?: "附件消息" },
                             color = Ink,
@@ -111,14 +119,15 @@ fun QueuedMessagesPanel(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                         Spacer(Modifier.height(6.dp))
-                        if (busy) {
+                        if (busy || local) {
                             Row(
                                 Modifier.fillMaxWidth().height(48.dp),
                                 horizontalArrangement = Arrangement.Center,
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                CircularProgressIndicator(Modifier.size(18.dp), color = AccentBlue, strokeWidth = 2.dp)
-                                Text("处理中…", color = SecondaryInk, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
+                                if (busy) CircularProgressIndicator(Modifier.size(18.dp), color = AccentBlue, strokeWidth = 2.dp)
+                                Text(if (local) { if (busy) "正在加入队列…" else "已提交，正在同步队列" } else "处理中…",
+                                    color = SecondaryInk, fontSize = 13.sp, modifier = Modifier.padding(start = 8.dp))
                             }
                         } else {
                             Row(Modifier.fillMaxWidth()) {

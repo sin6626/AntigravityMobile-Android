@@ -676,17 +676,18 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         )
                     }
                     AnimatedVisibility(
-                        visible = state.queuedMessages.isNotEmpty(),
+                        visible = state.queuedMessages.isNotEmpty() || state.queueSubmission != null,
                         enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
                         exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
                     ) {
                         QueuedMessagesPanel(
-                            messages = state.queuedMessages,
-                            busyIds = state.busyQueuedMessageIds,
+                            messages = state.queuedMessages + listOfNotNull(state.queueSubmission),
+                            busyIds = state.busyQueuedMessageIds + listOfNotNull(state.queueSubmission?.id.takeIf { state.isSending }),
                             error = state.queueError,
                             onSendNow = viewModel::sendQueuedMessageNow,
                             onEdit = viewModel::editQueuedMessage,
                             onDelete = viewModel::deleteQueuedMessage,
+                            viewModel = viewModel,
                         )
                     }
                     if (state.activeSubagent != null) {

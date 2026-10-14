@@ -58,10 +58,10 @@ import kotlinx.coroutines.launch
 
 @Composable
 internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel) {
-    val count = maxOf(message.media?.size ?: 0, message.imageUrls?.size ?: 0)
+    val count = maxOf(message.imageDataList.size, message.media?.size ?: 0, message.imageUrls?.size ?: 0)
     if (count == 0) return
     var selected by remember(message.id) { mutableStateOf<Int?>(null) }
-    val thumbnails = remember(message.media) { message.media.orEmpty().map { data ->
+    val thumbnails = remember(message.imageDataList, message.media) { message.imageDataList.takeIf { it.isNotEmpty() } ?: message.media.orEmpty().map { data ->
         try { Base64.decode(data.substringAfter("base64,"), Base64.DEFAULT) } catch (_: IllegalArgumentException) { null }
     } }
     val originals = remember(message.imageUrls, viewModel) { message.imageUrls.orEmpty().map(viewModel::mediaImageRequest) }

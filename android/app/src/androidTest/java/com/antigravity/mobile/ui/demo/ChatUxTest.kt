@@ -2432,6 +2432,41 @@ class ChatUxTest {
         }
     }
 
+    @Test fun queuedImageIsVisibleWhileTheSendRequestIsStillBlocked() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.running = true
+            gateway.queueFixture = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "queue-images"; lastConversationId = "A" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("queue-images", vm) }
+            val requested = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            val file = File(compose.activity.cacheDir, "queue-image.png")
+            val bitmap = android.graphics.Bitmap.createBitmap(16, 16, android.graphics.Bitmap.Config.ARGB_8888)
+            bitmap.eraseColor(android.graphics.Color.BLUE)
+            file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { vm.state.value.models.isNotEmpty() && vm.state.value.isRunning }
+                val uri = androidx.core.content.FileProvider.getUriForFile(compose.activity, "com.antigravity.mobile.fileprovider", file)
+                compose.runOnIdle { vm.addImages(listOf(uri)) }
+                compose.waitUntil(10_000) { vm.state.value.attachments.size == 1 }
+                gateway.block = { path -> if (path.contains("SendUserCascadeMessage")) {
+                    requested.countDown(); release.await(10, TimeUnit.SECONDS)
+                } }
+                compose.runOnIdle { vm.setDraft("排队看这张图"); vm.send() }
+                assertTrue(requested.await(5, TimeUnit.SECONDS))
+                compose.onNodeWithContentDescription("聊天图片，点击放大").assertIsDisplayed()
+                compose.onNodeWithText("正在加入队列…").performScrollTo().assertIsDisplayed()
+                release.countDown()
+                compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.queueSubmission == null }
+            } finally { release.countDown(); compose.runOnIdle { store.clear() }; file.delete() }
+        }
+    }
+
     @Test fun runningTasksShowProgressAndOnlyStopTheSelectedTask() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->

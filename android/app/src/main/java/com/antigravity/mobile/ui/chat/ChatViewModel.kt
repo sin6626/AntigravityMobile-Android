@@ -89,6 +89,7 @@ data class ChatUiState(
     val isSubmittingInteraction: Boolean = false,
     val interactionError: String? = null,
     val queuedMessages: List<QueuedMessageItem> = emptyList(),
+    val queueSubmission: QueuedMessageItem? = null,
     val busyQueuedMessageIds: Set<String> = emptySet(),
     val queueError: String? = null,
     val runningTasks: List<RunningTaskItem> = emptyList(),
@@ -192,11 +193,7 @@ internal fun reconcileOutgoing(
     val remaining = outgoing.mapNotNull { pending ->
         if (pending.conversationId != conversationId) pending else {
             val index = candidates.indexOfFirst {
-                it.id !in pending.knownUserIds && it.effectiveText == pending.message.effectiveText &&
-                    (pending.afterStepIndex == null || (it.stepIndex ?: -1) > pending.afterStepIndex) &&
-                    (!(pending.hasAttachments || pending.message.imageDataList.isNotEmpty()) ||
-                        !it.media.isNullOrEmpty() || !it.imageUrls.isNullOrEmpty() || it.imageDataList.isNotEmpty() ||
-                        !it.attachments.isNullOrEmpty())
+                pending.matches(it)
             }
             if (index >= 0) confirmedIds += candidates.removeAt(index).id
             if (index >= 0) null else pending
@@ -205,6 +202,25 @@ internal fun reconcileOutgoing(
     return remaining.map {
         if (it.conversationId == conversationId) it.copy(knownUserIds = it.knownUserIds + confirmedIds) else it
     }
+}
+
+private fun OutgoingMessage.matches(message: GatewayMessageItem): Boolean =
+    message.isUser && message.id !in knownUserIds && message.effectiveText == this.message.effectiveText &&
+        (afterStepIndex == null || (message.stepIndex ?: -1) > afterStepIndex) &&
+        (!(hasAttachments || this.message.imageDataList.isNotEmpty()) ||
+            !message.media.isNullOrEmpty() || !message.imageUrls.isNullOrEmpty() ||
+            message.imageDataList.isNotEmpty() || !message.attachments.isNullOrEmpty())
+
+internal fun retainLocalImagePreviews(
+    messages: List<GatewayMessageItem>,
+    previous: List<GatewayMessageItem>,
+    outgoing: List<OutgoingMessage>,
+    conversationId: String,
+): List<GatewayMessageItem> = messages.map { message ->
+    if (!message.media.isNullOrEmpty()) return@map message.copy(imageDataList = emptyList())
+    val bytes = previous.firstOrNull { it.id == message.id }?.imageDataList?.takeIf { it.isNotEmpty() }
+        ?: outgoing.firstOrNull { it.conversationId == conversationId && it.matches(message) }?.message?.imageDataList
+    if (!bytes.isNullOrEmpty() && message.imageDataList.isEmpty()) message.copy(imageDataList = bytes) else message
 }
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -292,9 +308,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 messagesRevision++
                 if (update.isFullSnapshot) fullSnapshotRevision = messagesRevision
                 val previous = _state.value
-                val nextMessages = update.messages?.let { incoming ->
+                val nextMessages = retainLocalImagePreviews(update.messages?.let { incoming ->
                     if (update.isFullSnapshot) incoming else mergeMessages(previous.messages, incoming)
-                } ?: previous.messages
+                } ?: previous.messages, previous.messages, previous.outgoing, update.cascadeId)
                 val running = update.status.contains("RUNNING", ignoreCase = true)
                 val latestAgent = nextMessages.lastOrNull { it.type == "agent" }
                 val previousText = previous.messages.firstOrNull { it.id == latestAgent?.id }?.effectiveText.orEmpty()
@@ -1228,7 +1244,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             diffReview = null, isLoadingDiffReview = false, diffReviewError = null,
             diffCommentDraft = DiffCommentDraftState(), isSubmittingDiffComments = false,
             isSubmittingInteraction = false,
-            pendingInteraction = null, interactionError = null, queuedMessages = emptyList(),
+            pendingInteraction = null, interactionError = null, queuedMessages = emptyList(), queueSubmission = null,
             busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
@@ -1475,7 +1491,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isRunning = _state.value.outgoing.any { it.conversationId == id },
             pendingInteraction = null,
             interactionError = null,
-            queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
+            queuedMessages = emptyList(), queueSubmission = null, busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             subagents = emptyList(), activeSubagent = activeSubagent, isLoadingSubagents = true, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
@@ -1561,7 +1577,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             isRunning = false,
             pendingInteraction = null,
             interactionError = null,
-            queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(), queueError = null,
+            queuedMessages = emptyList(), queueSubmission = null, busyQueuedMessageIds = emptySet(), queueError = null,
             runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
             subagents = emptyList(), activeSubagent = null, isLoadingSubagents = false, subagentsError = null,
             canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false, proceedError = null,
@@ -1763,6 +1779,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             slashCommand = null,
             isSending = true,
             queueError = null,
+            queueSubmission = QueuedMessageItem(id = "local:$clientId", text = text,
+                media = images.map { Base64.encodeToString(it.bytes, Base64.NO_WRAP) },
+                attachments = file?.let { listOf(com.antigravity.mobile.data.model.QueuedAttachment(it.mimeType, it.displayName)) }),
         )
         viewModelScope.launch {
             api.sendMessage(
@@ -1784,7 +1803,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             activeModelId = selectedModelId ?: _state.value.activeModelId,
                             modelOverrideId = null,
                         )
-                        loadMessages(id)
+                        loadMessages(id).join()
+                        if (conversationVisit == visit && _state.value.messagesError == null &&
+                            _state.value.queueSubmission?.id == "local:$clientId") {
+                            _state.value = _state.value.copy(queueSubmission = null)
+                        }
                     }
                 },
                 onFailure = { error ->
@@ -1808,6 +1831,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             workspaceContexts = restoredContext.workspaceItems,
                             slashCommand = restoredContext.slashCommand,
                             isSending = false,
+                            queueSubmission = null,
                             queueError = "${error.message ?: "加入队列失败"}（内容已恢复到输入框）",
                         )
                     }
@@ -2245,7 +2269,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     stream.disconnect()
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
                         draft = text, attachments = draftAttachments[id].orEmpty(), isRunning = false, streamingMessageId = null,
-                        pendingInteraction = null, interactionError = null, queuedMessages = emptyList(), busyQueuedMessageIds = emptySet(),
+                        pendingInteraction = null, interactionError = null, queuedMessages = emptyList(), queueSubmission = null, busyQueuedMessageIds = emptySet(),
                         queueError = null, runningTasks = emptyList(), stoppingTaskIds = emptySet(), tasksError = null,
                         canProceed = false, proceedArtifactUri = null, isProceedingArtifact = false,
                         proceedError = null, planCommentDraft = ArtifactCommentDraftState(),
@@ -2377,8 +2401,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         if (fullSnapshotRevision > revision) return@fold
                         val changed = messagesRevision != revision
                         val current = _state.value
-                        val merged = if (changed) mergeMessages(payload.messages.orEmpty(), current.messages)
-                            else mergeMessages(current.messages, payload.messages.orEmpty())
+                        val merged = retainLocalImagePreviews(
+                            if (changed) mergeMessages(payload.messages.orEmpty(), current.messages)
+                            else mergeMessages(current.messages, payload.messages.orEmpty()),
+                            current.messages, current.outgoing, id)
                         val outgoing = reconcileOutgoing(current.outgoing, id, merged)
                         val incomingPlanUri = if (changed) current.proceedArtifactUri else payload.proceedArtifactUri
                         val planChanged = current.proceedArtifactUri != incomingPlanUri
@@ -2396,6 +2422,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             isSubmittingInteraction = if (interactionChanged) false else current.isSubmittingInteraction,
                             interactionError = if (interactionChanged || incomingInteraction == null) null else current.interactionError,
                             queuedMessages = if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(),
+                            queueSubmission = current.queueSubmission.takeIf { current.isSending },
                             runningTasks = if (changed) current.runningTasks else payload.runningTasks.orEmpty(),
                             canProceed = if (changed) current.canProceed else payload.canProceed,
                             proceedArtifactUri = incomingPlanUri,

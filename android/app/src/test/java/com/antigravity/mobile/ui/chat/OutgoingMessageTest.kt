@@ -6,6 +6,25 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OutgoingMessageTest {
+    @Test fun confirmedImagesKeepLocalPreviewAcrossSlowMediaAndRepeatedSnapshots() {
+        val image = byteArrayOf(1, 2, 3)
+        val local = OutgoingMessage("chat", GatewayMessageItem(id = "local:image", text = "same",
+            imageDataList = listOf(image)), setOf("old"), 4, true)
+        val old = GatewayMessageItem(id = "old", text = "same", stepIndex = 4, imageUrls = listOf("/old.png"))
+        val textOnly = GatewayMessageItem(id = "new", text = "same", stepIndex = 5)
+        assertTrue(retainLocalImagePreviews(listOf(old, textOnly), emptyList(), listOf(local), "chat")
+            .all { it.imageDataList.isEmpty() })
+        val confirmed = textOnly.copy(imageUrls = listOf("/not-ready.png"))
+        val rendered = retainLocalImagePreviews(listOf(confirmed), emptyList(), listOf(local), "chat")
+        assertArrayEquals(image, rendered.single().imageDataList.single())
+        assertTrue(reconcileOutgoing(listOf(local), "chat", rendered).isEmpty())
+        assertArrayEquals(image, retainLocalImagePreviews(listOf(confirmed), rendered, emptyList(), "chat")
+            .single().imageDataList.single())
+        assertTrue(retainLocalImagePreviews(listOf(confirmed), emptyList(), listOf(local), "other")
+            .single().imageDataList.isEmpty())
+        assertTrue(retainLocalImagePreviews(listOf(confirmed.copy(media = listOf("thumbnail"))),
+            rendered, emptyList(), "chat").single().imageDataList.isEmpty())
+    }
     @Test fun onlyNewUserStepsConfirmPendingAndRepeatedSnapshotsCannotConsumeTheNextIdenticalSend() {
         val old = GatewayMessageItem(id = "old", text = "same", stepIndex = 4)
         val first = OutgoingMessage("chat", GatewayMessageItem(id = "local:1", text = "same"), setOf("old"), 4)
