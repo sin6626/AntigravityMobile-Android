@@ -807,7 +807,7 @@ private fun ComposerActions(
 ) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         ComposerIcon("add", "添加附件与操作", 32, onOpenPlusMenu, active)
-        Spacer(Modifier.weight(1f))
+        Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
         if (!workModeLabel.isNullOrBlank()) {
             val modeColor by animateColorAsState(
                 if (workModeLabel == "规划") AccentBlue else SecondaryInk,
@@ -833,12 +833,14 @@ private fun ComposerActions(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
+                    .weight(1f, fill = false)
                     .clip(RoundedCornerShape(8.dp))
                     .clickable(enabled = active && modelEnabled, onClick = onOpenModelConfig)
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .semantics { contentDescription = "选择模型" }
             )
             Spacer(Modifier.width(4.dp))
+        }
         }
         if (voiceInput.phase == VoiceInputPhase.IDLE) {
             ComposerIcon("mic", "语音输入", 27, onStartVoice, active)
