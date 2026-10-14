@@ -1,6 +1,6 @@
 # 回复边输出边渲染：排查与实施计划
 
-日期：2026-10-14。代码基线：`32f71a5`。状态：排查与计划完成，业务代码尚未修改。
+日期：2026-10-14。排查代码基线：`32f71a5`。最新状态：用户已授权实施，Android 与网关修改已完成并部署到模拟器/本地网关；真机与实际公网生成时延待验。实施结果见文末，前面的诊断保留修复前事实。
 
 ## 目标与结论
 
@@ -125,4 +125,58 @@ go test -overlay .verification/2026-10-14-streaming/overlay.json ./internal/prox
 
 后续功能完成须同时满足：生成中可见文字和 Markdown、最终原文完全一致、已确认的漏推送用例转绿、阅读位置稳定、长文性能有数据、连接恢复和会话隔离不回退。真机未测时只能标注模拟器验证完成。
 
-本轮仅完成排查和计划，保留上述失败信号。没有新 UI 图形或切图需求；没有新增依赖、改轮询频率或声称打通真正 token 级上游流。下一步从 Android 生成中富文本开始，随后修复网关去重并做整链路验收。
+诊断阶段仅完成排查和计划，保留上述失败信号。没有新 UI 图形或切图需求；没有新增依赖、改轮询频率或声称打通真正 token 级上游流。
+
+## 实施与验收记录（2026-10-14）
+
+### 已实现
+
+- `30cf5e3 feat(android): 支持回复生成中的富文本渲染`：生成中与完成态都使用原生 Markdown 块；后台按实际快照解析，取消过期任务不发布旧结果。以块序号固定 key，单独标记末块控制整条复制；不再把固定 key 从前一块移到最新末块。移除纯文本逐字等待，流式全文前缀不挤占 80 项历史缓存，已有完全相同消息继续复用列表项。
+- 未闭合的围栏通过 CommonMark 已有 `closingFenceLength` 判定，先展示代码，闭合后才生成 Mermaid/公式等内容。继续使用现有代码高亮、图表、公式、图片和文件阅读器；没有新运行时依赖。
+- `0478215 fix(gateway): 避免流式正文更新被去重遗漏`：标准库 JSON+SHA256 对真实内容作签名；原始轨迹不变时复用解析结果，但不再跳过独立队列来源的刷新。推送签名忽略传输事件类型与仅总耗时变化，保留内容/交互/任务等实际状态；签名不可用时不抑制更新。没有改变轮询周期、缓存时限或快照协议。
+
+### 验证结果
+
+Android `:app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest` 成功，35 项 JVM 测试全部通过。新增正式 `StreamingMarkdownTest` 在修复前 4 项中 3 项失败，修复后全通过，覆盖格式化时机、块身份、修正/缩短、引用定义后到、列表/表格/代码与最终解析一致性、围栏闭合和相同快照复用。旧流式纯文本断言和动画单测已随实现替换。
+
+API 37 使用 `adb install -r` 保留模拟器数据。共 12 项不同的聚焦仪器用例最终通过：
+
+- `ChatUxTest.websocketReplyRendersMarkdownBeforeCompletionAndSurvivesReconnect` 通过真实 OkHttp WS→ViewModel→页面验证生成中标题、加粗和代码，并覆盖等长变化、缩短、重连、完成、切会话。
+- 两项既有流式滚动/历史锚点、关闭动画流式、执行过程展开、代码/回复复制、原生 Markdown 阅读器、文件 URI、图片失败展示通过。
+- 新增图表围栏闭合与 2 千/1 万/5 万字长回复测试通过。
+- 真实文件链接用例需要外部参数，本轮按既有 Assume 跳过。长按选区截图首轮发生 Espresso 空闲超时，单独复跑通过；记录为一次不稳定测试，不声称首轮全绿，也未修改选区逻辑。
+
+Go 聚焦命令通过：
+
+```powershell
+go test ./internal/proxy -run 'TestStreamPolling|TestStreaming|TestStreamFingerprint|TestRawTrajectorySignature|TestStreamUpdatePayload' -count=1 -v
+go test ./cmd/gateway -count=1
+```
+
+新增用例验证两道签名的等长修正/非末项增长，真实 `HandleCascadeStream` 的 messages 与 steps 模式、保持 RUNNING 的连续变化、不重复推送、轨迹未变但独立队列改变、结束及重连首帧。微基准 `BenchmarkStreamContentFingerprint` 约为 2 千字 0.012 ms、1 万字 0.054 ms、5 万字 0.268 ms/次，只代表该电脑的推送 payload 签名成本。
+
+扩大 `internal/proxy` 回归（排除直接依赖真实桌面状态的既有用例）存在两项失败：`TestURIHelpers` 假定 Unix 路径分隔符，`TestFetchProjectsFromGeminiConfig` 假定盘符大小写不变。用修改前 `stream.go` 的 overlay 执行同两项，得到相同失败；这两项不属于本次流式修改，未扩大范围修改路径功能。
+
+### 性能证据与限制
+
+每 250 ms 提供快照的本地 WS 测试，8 次“发出快照→格式化语义节点可见”为 `[229,134,67,59,83,56,61,91] ms`，全部满足该用例 500 ms 门槛。截图确认“正在回复…”仍可见时，标题、加粗和代码已格式化。此值不包含模型生成、真实桌面轮询与公网传输，也不是精确屏幕像素呈现时间。
+
+混合标题/正文/代码/表格/公式/Mermaid 的长回复采样：
+
+| 实际字符数 | 后台解析 6 次范围 | UI 更新 5 次范围 | 应用 PSS 前后差 |
+| --- | --- | --- | --- |
+| 2,275 | 5.8～61.4 ms | 冷启动 1,246 ms，后续 176～205 ms | +18,129 KiB |
+| 10,075 | 13.8～24.7 ms | 94～217 ms | +2,750 KiB |
+| 50,050 | 40.7～54.0 ms | 127～319 ms | +1,227 KiB |
+
+PSS 包含字体/图形缓存和整个测试进程，不能据单轮差值判断泄漏。测试驱动期间的短窗口实际绘制帧 P95 为约 101～180 ms，各窗口仅 9～12 帧；说明这组复杂内容仍有慢帧，不能宣称 60 fps 或真机动画性能已验收。首屏图形冷启动也不满足 500 ms 的简单正文门槛；此次完成的是持续富文本更新，复杂图形冷启动和真机性能保持明确限制。没有为追求指标引入自写 Markdown 增量解析器。
+
+证据在项目忽略目录 `.verification/2026-10-14-streaming/`：`build.log`、`go-fixed.log`、`go-regression.log`、`go-baseline.log`、`go-benchmark.log`、`ui-regression.log`、`perf-ui.log`、`timings.log` 和 `streaming-markdown-running.png`。
+
+### 部署与剩余事项
+
+- APK 已覆盖安装模拟器，未卸载应用/清数据，真机没有出现在 ADB 列表。安装文件为 `android/app/build/outputs/apk/debug/app-debug.apk`。
+- 已在项目忽略目录构建网关，并按原进程参数、工作目录和完整环境更新 58900/PID 21328、58901/PID 10436；保留主数据目录与管理实例目录及配对。两份二进制 SHA256 为 `56D087BC0DDFED99FA468A9523E76D4ED0432B8ED4AAB66C2FB5C302C628AA62`。
+- 部署后本地 58900/58901、公网 `/healthz` 均实际验证为 200；新 cloudflared PID 12304 的 metrics 显示 4 条连接。没有向真实会话发送、删除或停止任务。
+- 随后自动审批拒绝包含停止旧 cloudflared PID 51876 的收尾命令，也拒绝后续健康复查/恢复应用的组合命令，工具只给出 `blocked by policy`，未解释原因。没有通过其他方式绕过，旧隧道进程暂留；不能把被拒绝的操作记为执行成功。临时部署 Python 同步退出，没有作为服务留在后台。
+- 真机局域网/公网实际生成过程与帧率尚未验证。当前仍是上游快照经 WS 持续渲染，不能称为已经接入上游 token 级订阅协议。
