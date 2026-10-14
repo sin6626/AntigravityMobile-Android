@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -31,6 +32,68 @@ import kotlin.concurrent.thread
 
 class ChatUxTest {
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
+
+    @Test fun websocketReplyRendersMarkdownBeforeCompletionAndSurvivesReconnect() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.liveStream = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "stream-test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("stream-markdown", vm) }
+            try {
+                compose.runOnIdle { vm.openConversation("A") }
+                compose.setContent {
+                    val state = vm.state.collectAsState().value
+                    ConversationContent(vm, state.messages, state.streamingMessageId, state.isRunning,
+                        state.isLoadingMessages, false, false, {}, Modifier.fillMaxSize())
+                }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages &&
+                    vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                fun emit(text: String, running: Boolean = true, id: String = "A") {
+                    gateway.emit(id, JSONObject().put("type", "update").put("cascadeId", id)
+                        .put("status", if (running) "RUNNING" else "IDLE").put("isFullSnapshot", true)
+                        .put("messages", org.json.JSONArray().put(JSONObject().put("id", "live-reply")
+                            .put("type", "agent").put("text", text))).toString())
+                }
+                val delays = mutableListOf<Long>()
+                repeat(8) { index ->
+                    val text = "## 流式标题\n\n**实时正文 $index**\n\n```kotlin\nval answer = $index\n```"
+                    val started = android.os.SystemClock.elapsedRealtime()
+                    emit(text)
+                    compose.waitUntil(500) { compose.onAllNodesWithText("实时正文 $index").fetchSemanticsNodes().isNotEmpty() }
+                    delays += android.os.SystemClock.elapsedRealtime() - started
+                    compose.onNodeWithText("流式标题").assertIsDisplayed()
+                    compose.onNodeWithText("val answer = $index").assertIsDisplayed()
+                    assertTrue(vm.state.value.isRunning)
+                    compose.onNodeWithContentDescription("复制整条回复").assertDoesNotExist()
+                    Thread.sleep((250L - (android.os.SystemClock.elapsedRealtime() - started)).coerceAtLeast(0))
+                }
+                android.util.Log.i("StreamingVerification", "WS send to formatted semantics ms=$delays")
+                saveScreenshot("streaming-markdown-running.png")
+                emit("## 修正标题\n\n**缩短正文**")
+                compose.waitUntil(500) { compose.onAllNodesWithText("缩短正文").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("实时正文 7").assertDoesNotExist()
+                gateway.dropStreams()
+                compose.waitUntil(10_000) { gateway.requests.count { it.first.startsWith("/gateway/cascade/stream") } >= 2 &&
+                    vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED && !vm.state.value.isLoadingMessages }
+                val final = "## 恢复标题\n\n**恢复正文**"
+                emit(final)
+                compose.waitUntil(1_000) { compose.onAllNodesWithText("恢复正文").fetchSemanticsNodes().isNotEmpty() }
+                emit(final, running = false)
+                compose.waitUntil(1_000) { !vm.state.value.isRunning }
+                compose.onNodeWithText("恢复正文").assertIsDisplayed()
+                compose.onNodeWithContentDescription("复制整条回复").assertIsDisplayed()
+                assertEquals(final, vm.state.value.messages.single().effectiveText)
+                compose.runOnIdle { vm.openConversation("B") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages && vm.state.value.connectionStatus ==
+                    com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                emit("## 旧会话迟到正文")
+                emit("## 新会话标题\n\n**新会话正文**", id = "B")
+                compose.waitUntil(1_000) { compose.onAllNodesWithText("新会话正文").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText("旧会话迟到正文").assertDoesNotExist()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
 
     @Test fun cachedModelsOpenImmediatelyAndStayAvailableWhenRefreshFails() {
         val app = isolatedApplication()

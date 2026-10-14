@@ -66,19 +66,19 @@ class ReducedMotionTest {
         compose.onNodeWithText("文件").assertDoesNotExist()
     }
 
-    @Test fun disablingMotionFinishesPendingStreamWithoutAnotherServerUpdate() {
-        val source = mutableStateOf("开始")
-        compose.setContent { StreamingMessageText("live", source.value) }
-        compose.waitUntil(5_000) { compose.onAllNodesWithText("开始").fetchSemanticsNodes().isNotEmpty() }
-        val full = "开始" + "待显示文字".repeat(350)
-        compose.runOnIdle { source.value = full }
-        compose.waitForIdle()
-        compose.onNodeWithText(full).assertDoesNotExist()
+    @Test fun streamingMarkdownStaysCurrentWhenMotionIsDisabled() {
+        val vm = androidx.lifecycle.ViewModelProvider(compose.activity)[com.antigravity.mobile.ui.chat.ChatViewModel::class.java]
+        val source = mutableStateOf("# 开始\n\n**实时正文**")
+        compose.setContent {
+            ConversationContent(vm, listOf(com.antigravity.mobile.data.model.GatewayMessageItem(
+                id = "live", type = "agent", text = source.value)), "live", true, false, false, false, {})
+        }
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("实时正文").fetchSemanticsNodes().isNotEmpty() }
         compose.runOnIdle { scale.value.floatValue = 0f }
-        compose.waitUntil(1_000) { compose.onAllNodesWithText(full).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText(full).assertExists()
-        compose.runOnIdle { source.value += "。" }
-        compose.onNodeWithText(full + "。").assertExists()
+        compose.runOnIdle { source.value += "\n\n**新增正文**" }
+        compose.waitUntil(1_000) { compose.onAllNodesWithText("新增正文").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("新增正文").assertIsDisplayed()
+        compose.onNodeWithText("正在回复…").assertIsDisplayed()
     }
 
     @Test fun runningTasksRemainUsableWithMotionDisabled() {

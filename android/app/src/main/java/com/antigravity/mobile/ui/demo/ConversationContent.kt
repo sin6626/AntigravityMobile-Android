@@ -48,7 +48,6 @@ import androidx.compose.material.icons.outlined.AttachFile
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.snapshotFlow
-import androidx.compose.ui.MotionDurationScale
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
@@ -257,8 +256,10 @@ internal fun ConversationContent(
                             if (item.processRunning) DisableSelection { ExecutionPanel(item, viewModel, expanded, toggle) }
                             else ExecutionPanel(item, viewModel, expanded, toggle)
                         } else if (item.streaming) DisableSelection {
-                            MessageRow(item.message, viewModel, true, item.node, item.blockIndex == 0, allowRevert)
-                        } else MessageRow(item.message, viewModel, false, item.node, item.blockIndex == 0, allowRevert)
+                            CompositionLocalProvider(LocalStreamingMarkdown provides true) {
+                                MessageRow(item.message, viewModel, item.node, item.blockIndex == 0, allowRevert)
+                            }
+                        } else MessageRow(item.message, viewModel, item.node, item.blockIndex == 0, allowRevert)
                         if (item.canCopy) DisableSelection {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 CopyTextButton(item.message.effectiveText, "复制整条回复")
@@ -314,9 +315,10 @@ internal data class ConversationRenderItem(
     val process: List<GatewayMessageItem> = emptyList(),
     val executionItems: List<ExecutionRenderItem> = emptyList(),
     val processRunning: Boolean = false,
+    val lastBlock: Boolean = true,
 ) {
     val canCopy: Boolean
-        get() = process.isEmpty() && !streaming && key == messageKey && message.isAgent && message.type != "thought" && message.effectiveText.isNotBlank()
+        get() = process.isEmpty() && !streaming && lastBlock && message.isAgent && message.type != "thought" && message.effectiveText.isNotBlank()
 }
 
 @Composable
@@ -357,15 +359,16 @@ internal fun buildConversationRenderItems(
             if (cached?.firstOrNull()?.let { it.process.isEmpty() && it.message == message && it.streaming == streaming } == true) {
                 addAll(cached)
             } else {
-                val blocks = if (message.isAgent && message.type != "thought" && !streaming && message.effectiveText.isNotBlank()) {
+                val blocks = if (message.isAgent && message.type != "thought" && message.effectiveText.isNotBlank()) {
                     // ponytail: top-level blocks are lazy; split individual huge tables/lists only if traces show they remain slow.
-                    generateSequence(markdownCache.getOrParse(message.effectiveText.trim()).firstChild) { it.next }.toList()
+                    generateSequence(markdownCache.getOrParse(message.effectiveText.trim(), cache = !streaming).firstChild) { it.next }.toList()
                 } else emptyList()
                 if (blocks.isEmpty()) add(ConversationRenderItem(message, messageKey, null, 0, streaming, messageKey))
                 else blocks.forEachIndexed { blockIndex, node ->
-                    // Retain the bottom item's identity when a streaming reply becomes Markdown.
-                    val key = if (blockIndex == blocks.lastIndex) messageKey else "$messageKey:markdown:$blockIndex"
-                    add(ConversationRenderItem(message, messageKey, node, blockIndex, false, key))
+                    // Appending a block must not move the previous block's scroll or selection identity.
+                    val key = if (blockIndex == 0) messageKey else "$messageKey:markdown:$blockIndex"
+                    add(ConversationRenderItem(message, messageKey, node, blockIndex, streaming, key,
+                        lastBlock = blockIndex == blocks.lastIndex))
                 }
             }
         }
@@ -396,7 +399,7 @@ internal fun buildConversationRenderItems(
 }
 
 @Composable
-private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, isStreaming: Boolean, markdownNode: Node? = null, showImages: Boolean = true, allowRevert: Boolean = true) {
+private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, markdownNode: Node? = null, showImages: Boolean = true, allowRevert: Boolean = true) {
     val text = message.effectiveText.trim()
     if (message.isUser) {
         Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
@@ -431,7 +434,7 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
             if (showImages) MessageImages(message, viewModel)
             if (markdownNode != null) MarkdownBlock(markdownNode)
             else if (text.isNotBlank()) {
-                if (isStreaming) StreamingMessageText(message.id, text) else MarkdownBody(text)
+                MarkdownBody(text)
             }
         }
     }
@@ -461,25 +464,8 @@ private fun MessageAttachments(message: GatewayMessageItem) {
     }
 }
 
-@Composable
-internal fun StreamingMessageText(id: String, source: String) {
-    var shown by rememberSaveable(id) { mutableStateOf("") }
-    val reveal = remember(id) { StreamingTextReveal(shown) }
-    LaunchedEffect(id, source) {
-        val durationScale = coroutineContext[MotionDurationScale]
-        reveal.receive(source, durationScale?.scaleFactor != 0f, System.nanoTime() / 1_000_000)
-        shown = reveal.shown
-        while (reveal.hasPending) {
-            delay(16)
-            if (durationScale?.scaleFactor == 0f) reveal.finish()
-            else reveal.advance(System.nanoTime() / 1_000_000)
-            shown = reveal.shown
-        }
-    }
-    Text(shown, color = Ink, fontSize = 18.sp, lineHeight = 27.sp)
-}
-
 internal val LocalRichLinkAction = staticCompositionLocalOf<(String) -> Unit> { {} }
+internal val LocalStreamingMarkdown = staticCompositionLocalOf { false }
 
 internal fun parseMarkdownBlocks(source: String): List<Node> =
     generateSequence(markdownCache.getOrParse(source).firstChild) { it.next }.toList()
@@ -501,13 +487,13 @@ private val markdownCache = object {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Node>): Boolean = size > 80
     }
 
-    fun getOrParse(source: String): Node {
+    fun getOrParse(source: String, cache: Boolean = true): Node {
         synchronized(documents) { documents[source]?.let { return it } }
         val parser = Parser.builder().extensions(
             listOf(TablesExtension.create(), StrikethroughExtension.create())
         ).includeSourceSpans(IncludeSourceSpans.BLOCKS).build()
         val parsed = parser.parse(normalizeBlockMath(source))
-        synchronized(documents) { documents[source] = parsed }
+        if (cache) synchronized(documents) { documents[source] = parsed }
         return parsed
     }
 }
@@ -580,7 +566,7 @@ private fun ExecutionPanel(item: ConversationRenderItem, viewModel: ChatViewMode
                             }, color = SecondaryInk, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                                 modifier = Modifier.padding(top = 8.dp))
                         }
-                        entry.node != null -> MessageRow(entry.message, viewModel, false, entry.node, false)
+                        entry.node != null -> MessageRow(entry.message, viewModel, entry.node, false)
                         entry.detail != null -> {
                             val detail = entry.detail
                             Column(Modifier.fillMaxWidth().background(Color.White, RoundedCornerShape(8.dp)).padding(10.dp)) {
@@ -610,7 +596,9 @@ internal fun MarkdownBlock(node: Node) {
                 images.forEach { image -> MarkdownImage(image.destination, image.title) }
             } else MarkdownText(node)
         }
-        is FencedCodeBlock -> when (node.info.trim().lowercase()) {
+        is FencedCodeBlock -> if (LocalStreamingMarkdown.current && node.closingFenceLength == null) {
+            CodeBlock(node.literal, node.info)
+        } else when (node.info.trim().lowercase()) {
             "mermaid" -> MermaidBlock(node.literal)
             "katex" -> MathBlock(node.literal)
             "carousel" -> CarouselBlock(node.literal)
