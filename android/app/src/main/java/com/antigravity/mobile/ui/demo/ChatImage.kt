@@ -1,6 +1,5 @@
 package com.antigravity.mobile.ui.demo
 
-import android.util.Base64
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -50,6 +49,7 @@ import coil.size.Size
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.data.model.decodeImagePreview
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import kotlin.math.max
 import kotlin.math.min
@@ -61,9 +61,12 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
     val count = maxOf(message.imageDataList.size, message.media?.size ?: 0, message.imageUrls?.size ?: 0)
     if (count == 0) return
     var selected by remember(message.id) { mutableStateOf<Int?>(null) }
-    val thumbnails = remember(message.imageDataList, message.media) { message.imageDataList.takeIf { it.isNotEmpty() } ?: message.media.orEmpty().map { data ->
-        try { Base64.decode(data.substringAfter("base64,"), Base64.DEFAULT) } catch (_: IllegalArgumentException) { null }
-    } }
+    val thumbnails = remember(message.imageDataList, message.media) {
+        List(maxOf(message.imageDataList.size, message.media.orEmpty().size)) { index ->
+            val remote = message.media?.getOrNull(index)?.let(::decodeImagePreview)
+            remote ?: message.imageDataList.getOrNull(index)?.takeIf { it.isNotEmpty() }
+        }
+    }
     val originals = remember(message.imageUrls, viewModel) { message.imageUrls.orEmpty().map(viewModel::mediaImageRequest) }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), maxItemsInEachRow = 3) {
         repeat(count) { index ->

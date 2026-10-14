@@ -750,10 +750,13 @@ class ApiClient(
             }
             if (images.isNotEmpty() || file != null) {
                 putJsonArray("media") {
-                    images.forEach { (bytes, mime) ->
+                    images.forEachIndexed { index, (bytes, mime) ->
                         addJsonObject {
                             put("inlineData", Base64.encodeToString(bytes, Base64.NO_WRAP))
                             put("mimeType", mime)
+                            clientMessageId?.takeIf(String::isNotBlank)?.let {
+                                put("displayName", imageAttachmentName(it, index))
+                            }
                         }
                     }
                     file?.let { (bytes, mime, displayName) ->

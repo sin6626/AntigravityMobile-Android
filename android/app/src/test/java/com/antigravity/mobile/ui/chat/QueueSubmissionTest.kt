@@ -7,6 +7,21 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class QueueSubmissionTest {
+    @Test fun attachmentOnlyImagesStayVisibleWhileUriAndThumbnailsCatchUp() {
+        val queued = QueuedMessageItem(id = "local:1", text = "same", media = listOf("full-one", "full-two"),
+            attachments = listOf(QueuedAttachment("image/png", "one"), QueuedAttachment("image/png", "two")))
+        val submission = QueueSubmission(queued, OutgoingMessage("A", GatewayMessageItem(id = queued.id), emptySet()), emptySet())
+        val remote = queued.copy(id = "remote", media = null,
+            attachments = listOf(QueuedAttachment("image/png", "one", uri = "/one"),
+                QueuedAttachment("image/png", "two", thumbnail = "thumb-two")))
+        assertTrue(submission.confirmedBy(listOf(remote), emptyList()))
+        val retained = retainQueuedImagePreviews(listOf(remote), emptyList(), submission).single()
+        assertEquals(listOf("full-one", "thumb-two"), retained.imagePreviewMessage().media)
+        assertEquals(listOf("/one", ""), retained.imagePreviewMessage().imageUrls)
+        val next = remote.copy(attachments = listOf(QueuedAttachment("image/png", "one", thumbnail = "thumb-one"),
+            QueuedAttachment("image/png", "two", inlineData = "full-two")))
+        assertEquals(listOf("thumb-one", "full-two"), retainQueuedImagePreviews(listOf(next), listOf(retained), null).single().media)
+    }
     @Test fun staleAndSameCaptionQueuesDoNotErasePendingImage() {
         val queued = QueuedMessageItem(id = "local:1", text = "same", media = listOf("image-one"))
         val submission = QueueSubmission(queued, OutgoingMessage("A",

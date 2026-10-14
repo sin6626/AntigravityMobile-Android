@@ -39,7 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.antigravity.mobile.data.model.QueuedMessageItem
-import com.antigravity.mobile.data.model.GatewayMessageItem
 import com.antigravity.mobile.ui.demo.MessageImages
 import com.antigravity.mobile.ui.demo.AccentBlue
 import com.antigravity.mobile.ui.demo.Ink
@@ -98,11 +97,10 @@ fun QueuedMessagesPanel(
                             .animateContentSize(tween(180)).padding(horizontal = 12.dp, vertical = 10.dp),
                     ) {
                         viewModel?.let { vm ->
-                            MessageImages(GatewayMessageItem(id = message.id, media = message.media,
-                                imageUrls = message.imageUrls), vm)
+                            MessageImages(message.imagePreviewMessage(), vm)
                         }
                         Text(
-                            message.text.ifBlank { message.attachments?.firstOrNull()?.displayName ?: "附件消息" },
+                            message.displayText,
                             color = Ink,
                             fontSize = 15.sp,
                             lineHeight = 21.sp,
@@ -153,10 +151,14 @@ private fun QueueAction(
 ) {
     Box(
         modifier.heightIn(min = 48.dp)
-            .semantics { contentDescription = "$label ${message.text.ifBlank { message.attachments?.firstOrNull()?.displayName ?: "附件消息" }}" }
+            .semantics { contentDescription = "$label ${message.displayText}" }
             .quietClickable(shape = RoundedCornerShape(12.dp)) { action(message) },
         contentAlignment = Alignment.Center,
     ) {
         Text(label, color = color, fontSize = 14.sp, fontWeight = FontWeight.Medium)
     }
 }
+
+internal val QueuedMessageItem.displayText: String
+    get() = text.ifBlank { attachments?.firstOrNull { !it.mimeType.startsWith("image/") }?.displayName?.takeIf(String::isNotBlank)
+        ?: if (!media.isNullOrEmpty() || !imageUrls.isNullOrEmpty() || attachments.orEmpty().any { it.mimeType.startsWith("image/") }) "图片消息" else "附件消息" }

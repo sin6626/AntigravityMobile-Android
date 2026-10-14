@@ -2538,6 +2538,10 @@ class ChatUxTest {
                 compose.waitUntil(10_000) { !vm.state.value.isRetryingConnection && !vm.state.value.isLoadingMessages }
                 assertNotNull("Stale successful reads must preserve the submitted image", vm.state.value.queueSubmission)
                 compose.onNodeWithContentDescription("聊天图片，点击放大").assertIsDisplayed()
+                val sentImage = JSONObject(gateway.requests.first { it.first.contains("SendUserCascadeMessage") }.second)
+                    .getJSONArray("media").getJSONObject(0)
+                assertTrue(sentImage.getString("displayName").startsWith("multigravity-"))
+                gateway.queuedImagesInAttachmentsOnly = true
                 gateway.deferQueuedSync = false
                 compose.runOnIdle { vm.retryMessages() }
                 compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.queueSubmission == null }
@@ -2894,6 +2898,8 @@ class ChatUxTest {
         @Volatile var queueFixture = false
         @Volatile var queuedDraftText: String? = null
         @Volatile var queuedDraftMedia: List<String> = emptyList()
+        @Volatile var queuedDraftAttachments: String = "[]"
+        @Volatile var queuedImagesInAttachmentsOnly = false
         @Volatile var deferQueuedSync = false
         @Volatile var sentNowText: String? = null
         @Volatile var taskFixture = false
@@ -2911,7 +2917,8 @@ class ChatUxTest {
             if ("q-delete" !in deletedQueueIds) messages += JSONObject()
                 .put("id", "q-delete").put("text", "然后检查动画").put("createdAt", "2026-10-13T08:01:00Z")
             queuedDraftText?.takeIf { "q-new" !in deletedQueueIds && !deferQueuedSync }?.let { messages += JSONObject()
-                .put("id", "q-new").put("text", it).put("media", org.json.JSONArray(queuedDraftMedia))
+                .put("id", "q-new").put("text", it).put("media", if (queuedImagesInAttachmentsOnly) org.json.JSONArray() else org.json.JSONArray(queuedDraftMedia))
+                .put("attachments", org.json.JSONArray(queuedDraftAttachments))
                 .put("createdAt", "2026-10-13T08:02:00Z") }
             return org.json.JSONArray(messages).toString()
         }
@@ -2969,6 +2976,7 @@ class ChatUxTest {
                                 if (queueFixture && request.optInt("deliveryStrategy") == 2) {
                                     val images = request.optJSONArray("images")
                                     queuedDraftMedia = (0 until (images?.length() ?: 0)).map { images!!.getJSONObject(it).getString("base64Data") }
+                                    queuedDraftAttachments = request.optJSONArray("media")?.toString() ?: "[]"
                                     queuedDraftText = request.optString("text")
                                     deletedQueueIds.remove("q-new")
                                 }

@@ -11,6 +11,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.antigravity.mobile.data.model.ConversationItem
 import com.antigravity.mobile.data.model.GatewayMessageItem
+import com.antigravity.mobile.data.model.decodeImagePreview
 import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.data.model.PairingInfo
 import com.antigravity.mobile.data.model.PendingInteraction
@@ -42,6 +43,7 @@ import com.antigravity.mobile.data.service.ConnectionManager
 import com.antigravity.mobile.data.service.PreferencesManager
 import com.antigravity.mobile.data.service.StoredDraftFile
 import com.antigravity.mobile.data.service.safeDownloadedFilename
+import com.antigravity.mobile.data.service.imageAttachmentName
 import com.antigravity.mobile.data.service.StreamWebSocketClient
 import com.antigravity.mobile.data.service.ConnectionStatus
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -193,28 +195,38 @@ internal fun reconcileOutgoing(
     conversationId: String,
     incoming: List<GatewayMessageItem>,
 ): List<OutgoingMessage> {
-    val candidates = incoming.filter { it.isUser }.toMutableList()
+    val remaining = outgoing.toMutableList()
     val confirmedIds = mutableSetOf<String>()
-    val remaining = outgoing.mapNotNull { pending ->
-        if (pending.conversationId != conversationId) pending else {
-            val index = candidates.indexOfFirst {
-                pending.matches(it)
-            }
-            if (index >= 0) confirmedIds += candidates.removeAt(index).id
-            if (index >= 0) null else pending
-        }
+    for (message in incoming.filter { it.isUser }) {
+        val pending = matchingOutgoing(message, remaining.filter { it.conversationId == conversationId }) ?: continue
+        remaining.remove(pending)
+        confirmedIds += message.id
     }
     return remaining.map {
         if (it.conversationId == conversationId) it.copy(knownUserIds = it.knownUserIds + confirmedIds) else it
     }
 }
 
-private fun OutgoingMessage.matches(message: GatewayMessageItem): Boolean =
-    message.isUser && message.id !in knownUserIds && message.effectiveText == this.message.effectiveText &&
+private fun OutgoingMessage.matches(message: GatewayMessageItem): Boolean {
+    val expectedNames = this.message.attachments.orEmpty().filter { it.mimeType.startsWith("image/") }.mapNotNull { it.displayName }
+    val receivedNames = message.attachments.orEmpty().filter { it.mimeType.startsWith("image/") }.mapNotNull { it.displayName }
+    if (expectedNames.isNotEmpty() && receivedNames.isNotEmpty() && expectedNames != receivedNames) return false
+    val hasImages = !message.media.isNullOrEmpty() || !message.imageUrls.isNullOrEmpty() ||
+        message.imageDataList.isNotEmpty() || message.attachments.orEmpty().any { it.mimeType.startsWith("image/") }
+    if (this.message.imageDataList.isNotEmpty() && !hasImages) return false
+    if (!hasAttachments && this.message.imageDataList.isEmpty() && (hasImages || !message.attachments.isNullOrEmpty())) return false
+    return message.isUser && message.id !in knownUserIds && message.effectiveText == this.message.effectiveText &&
         (afterStepIndex == null || (message.stepIndex ?: -1) > afterStepIndex) &&
         (!(hasAttachments || this.message.imageDataList.isNotEmpty()) ||
             !message.media.isNullOrEmpty() || !message.imageUrls.isNullOrEmpty() ||
             message.imageDataList.isNotEmpty() || !message.attachments.isNullOrEmpty())
+}
+
+private fun matchingOutgoing(message: GatewayMessageItem, pending: List<OutgoingMessage>): OutgoingMessage? {
+    val matches = pending.filter { it.matches(message) }
+    // shortcut: Older gateways can omit image names; keep ambiguous images pending until identifiable metadata arrives.
+    return if (matches.any { it.message.imageDataList.isNotEmpty() }) matches.singleOrNull() else matches.firstOrNull()
+}
 
 internal fun retainLocalImagePreviews(
     messages: List<GatewayMessageItem>,
@@ -224,12 +236,14 @@ internal fun retainLocalImagePreviews(
 ): List<GatewayMessageItem> {
     val pending = outgoing.filter { it.conversationId == conversationId }.toMutableList()
     return messages.map { message ->
-        val index = pending.indexOfFirst { it.matches(message) }
-        val source = if (index >= 0) pending.removeAt(index).message else null
-        if (!message.media.isNullOrEmpty()) return@map message.copy(imageDataList = emptyList())
-        val bytes = previous.firstOrNull { it.id == message.id }?.imageDataList?.takeIf { it.isNotEmpty() }
+        val source = matchingOutgoing(message, pending)?.also { pending.remove(it) }?.message
+        val bytes = message.imageDataList.takeIf { it.isNotEmpty() }
+            ?: previous.firstOrNull { it.id == message.id }?.imageDataList?.takeIf { it.isNotEmpty() }
             ?: source?.imageDataList
-        if (!bytes.isNullOrEmpty() && message.imageDataList.isEmpty()) message.copy(imageDataList = bytes) else message
+        val retained = bytes.orEmpty().mapIndexed { index, data ->
+            if (message.media?.getOrNull(index)?.let(::decodeImagePreview) != null) byteArrayOf() else data
+        }.takeIf { previews -> previews.any { it.isNotEmpty() } }.orEmpty()
+        if (bytes != null) message.copy(imageDataList = retained) else message
     }
 }
 
@@ -239,14 +253,40 @@ data class QueueSubmission(
     val knownQueueIds: Set<String>,
 )
 
-internal fun QueueSubmission.confirmedBy(queue: List<QueuedMessageItem>, messages: List<GatewayMessageItem>): Boolean =
-    queue.any { it.id !in knownQueueIds && it.text == queued.text &&
+internal fun QueueSubmission.confirmedBy(queue: List<QueuedMessageItem>, messages: List<GatewayMessageItem>): Boolean {
+    val names = queued.attachments.orEmpty().filter { it.mimeType.startsWith("image/") }.mapNotNull { it.displayName }
+    return queue.any { it.id !in knownQueueIds && it.text == queued.text &&
+        (names.isNotEmpty() && names == it.attachments.orEmpty().filter { a -> a.mimeType.startsWith("image/") }.mapNotNull { a -> a.displayName } ||
         (it.attachments.orEmpty().filter { a -> a.mimeType.startsWith("image/") }
             .mapNotNull { a -> a.inlineData?.takeIf(String::isNotBlank) }
-            .takeIf { images -> images.isNotEmpty() } ?: it.media.orEmpty()) == queued.media.orEmpty() &&
+            .takeIf { images -> images.isNotEmpty() } ?: it.media.orEmpty()) == queued.media.orEmpty()) &&
         it.attachments.orEmpty().filterNot { a -> a.mimeType.startsWith("image/") }.map { a -> a.mimeType to a.displayName } ==
-            queued.attachments.orEmpty().map { a -> a.mimeType to a.displayName } } ||
+            queued.attachments.orEmpty().filterNot { a -> a.mimeType.startsWith("image/") }.map { a -> a.mimeType to a.displayName } } ||
         messages.count { pending.matches(it) } == 1
+}
+
+internal fun QueuedMessageItem.imagePreviewMessage(): GatewayMessageItem {
+    val images = attachments.orEmpty().filter { it.mimeType.startsWith("image/") }
+    return GatewayMessageItem(id = id,
+        media = if (images.isEmpty()) media else images.mapIndexed { index, image ->
+            image.inlineData?.takeIf(String::isNotBlank) ?: image.thumbnail?.takeIf(String::isNotBlank) ?: media?.getOrNull(index).orEmpty()
+        },
+        imageUrls = if (images.isEmpty()) imageUrls else images.mapIndexed { index, image ->
+            image.uri?.takeIf(String::isNotBlank) ?: imageUrls?.getOrNull(index).orEmpty()
+        }.takeIf { urls -> urls.any(String::isNotBlank) })
+}
+
+internal fun retainQueuedImagePreviews(
+    queue: List<QueuedMessageItem>, previous: List<QueuedMessageItem>, submission: QueueSubmission?,
+): List<QueuedMessageItem> = queue.map { message ->
+    val original = previous.firstOrNull { it.id == message.id }?.imagePreviewMessage()?.media
+        ?: submission?.takeIf { it.confirmedBy(listOf(message), emptyList()) }?.queued?.media
+    val native = message.imagePreviewMessage().media.orEmpty()
+    val previews = (0 until maxOf(native.size, original.orEmpty().size)).map { index ->
+        native.getOrNull(index)?.takeIf(String::isNotBlank) ?: original?.getOrNull(index).orEmpty()
+    }
+    if (previews.any(String::isNotBlank)) message.copy(media = previews) else message
+}
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = PreferencesManager(application)
@@ -351,6 +391,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     latestAgent.effectiveText.isNotEmpty() &&
                     latestAgent.effectiveText != previousText && latestAgent.effectiveText.startsWith(previousText)
                 val outgoing = reconcileOutgoing(previous.outgoing, update.cascadeId, nextMessages)
+                val nextQueue = retainQueuedImagePreviews(update.queuedMessages ?: previous.queuedMessages,
+                    previous.queuedMessages, previous.queueSubmission)
                 val planChanged = previous.proceedArtifactUri != update.proceedArtifactUri
                 val nextPlanCommentDraft = if (planChanged) loadPlanCommentDraft(update.cascadeId, update.proceedArtifactUri)
                     else previous.planCommentDraft
@@ -364,9 +406,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     pendingInteraction = update.pendingInteraction,
                     isSubmittingInteraction = if (interactionChanged) false else previous.isSubmittingInteraction,
                     interactionError = if (interactionChanged || update.pendingInteraction == null) null else previous.interactionError,
-                    queuedMessages = update.queuedMessages ?: previous.queuedMessages,
+                    queuedMessages = nextQueue,
                     queueSubmission = previous.queueSubmission?.takeUnless {
-                        it.confirmedBy(update.queuedMessages ?: previous.queuedMessages, nextMessages)
+                        it.confirmedBy(nextQueue, nextMessages)
                     },
                     runningTasks = update.runningTasks.orEmpty(),
                     canProceed = update.canProceed,
@@ -1666,7 +1708,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val originalDraftKey = draftKey
         val pending = OutgoingMessage(targetId,
             GatewayMessageItem(id = "local:$clientId", text = text, imageDataList = images.map { it.bytes },
-                attachments = file?.let { listOf(MessageAttachment(it.mimeType, it.displayName)) }),
+                attachments = images.mapIndexed { index, image -> MessageAttachment(image.mimeType, imageAttachmentName(clientId, index)) } +
+                    listOfNotNull(file?.let { MessageAttachment(it.mimeType, it.displayName) })),
             _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
             _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull(),
             images.isNotEmpty() || file != null)
@@ -1731,6 +1774,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             result.fold(
                 onSuccess = { conversationId ->
                     if (targetId.startsWith("local:")) moveDraft(targetId, conversationId)
+                    clearSendSnapshot()
                     _state.value = _state.value.copy(isSending = false,
                         outgoing = _state.value.outgoing.map {
                             if (it.message.id == pending.message.id) it.copy(conversationId = conversationId) else it
@@ -1766,6 +1810,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         saveFile(restoreKey, restoredFile)
                         saveComposerContext(restoreKey, restoredContext)
                     }
+                    clearSendSnapshot()
                     _state.value = current.copy(
                         outgoing = current.outgoing.filterNot { it.message.id == pending.message.id },
                         selectedConversationId = if (stillHere && targetId.startsWith("local:")) null else current.selectedConversationId,
@@ -1781,7 +1826,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 },
             )
-            clearSendSnapshot()
         }
     }
 
@@ -1818,10 +1862,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             queueError = null,
             queueSubmission = QueueSubmission(QueuedMessageItem(id = "local:$clientId", text = text,
                 media = images.map { Base64.encodeToString(it.bytes, Base64.NO_WRAP) },
-                attachments = file?.let { listOf(com.antigravity.mobile.data.model.QueuedAttachment(it.mimeType, it.displayName)) }),
+                attachments = images.mapIndexed { index, image -> com.antigravity.mobile.data.model.QueuedAttachment(image.mimeType, imageAttachmentName(clientId, index)) } +
+                    listOfNotNull(file?.let { com.antigravity.mobile.data.model.QueuedAttachment(it.mimeType, it.displayName) })),
                 OutgoingMessage(id, GatewayMessageItem(id = "local:$clientId", text = text,
                     imageDataList = images.map { it.bytes },
-                    attachments = file?.let { listOf(MessageAttachment(it.mimeType, it.displayName)) }),
+                    attachments = images.mapIndexed { index, image -> MessageAttachment(image.mimeType, imageAttachmentName(clientId, index)) } +
+                        listOfNotNull(file?.let { MessageAttachment(it.mimeType, it.displayName) })),
                     _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
                     _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull(), images.isNotEmpty() || file != null),
                 _state.value.queuedMessages.map { it.id }.toSet()),
@@ -2448,6 +2494,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             else mergeMessages(current.messages, payload.messages.orEmpty()),
                             current.messages, current.outgoing + listOfNotNull(current.queueSubmission?.pending), id)
                         val outgoing = reconcileOutgoing(current.outgoing, id, merged)
+                        val mergedQueue = retainQueuedImagePreviews(if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(),
+                            current.queuedMessages, current.queueSubmission)
                         val incomingPlanUri = if (changed) current.proceedArtifactUri else payload.proceedArtifactUri
                         val planChanged = current.proceedArtifactUri != incomingPlanUri
                         val incomingPlanCommentDraft = if (planChanged) loadPlanCommentDraft(id, incomingPlanUri)
@@ -2463,9 +2511,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             pendingInteraction = incomingInteraction,
                             isSubmittingInteraction = if (interactionChanged) false else current.isSubmittingInteraction,
                             interactionError = if (interactionChanged || incomingInteraction == null) null else current.interactionError,
-                            queuedMessages = if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(),
+                            queuedMessages = mergedQueue,
                             queueSubmission = current.queueSubmission?.takeUnless {
-                                it.confirmedBy(if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(), merged)
+                                it.confirmedBy(mergedQueue, merged)
                             },
                             runningTasks = if (changed) current.runningTasks else payload.runningTasks.orEmpty(),
                             canProceed = if (changed) current.canProceed else payload.canProceed,

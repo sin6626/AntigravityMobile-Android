@@ -439,7 +439,7 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, is
 
 @Composable
 private fun MessageAttachments(message: GatewayMessageItem) {
-    message.attachments.orEmpty().forEach { attachment ->
+    message.attachments.orEmpty().filterNot { it.mimeType.startsWith("image/") }.forEach { attachment ->
         val name = attachment.displayName?.takeIf { it.isNotBlank() } ?: "附件"
         val status = if (message.id.startsWith("local:")) "发送中" else "已发送"
         Row(

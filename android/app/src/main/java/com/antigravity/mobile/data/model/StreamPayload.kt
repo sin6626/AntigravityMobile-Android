@@ -4,6 +4,11 @@ import android.util.Base64
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+internal fun decodeImagePreview(data: String): ByteArray? = try {
+    java.util.Base64.getDecoder().decode(data.substringAfter("base64,").filterNot(Char::isWhitespace))
+        .takeIf { it.isNotEmpty() }
+} catch (_: IllegalArgumentException) { null }
+
 @Serializable
 data class ToolCallItem(
     val id: String = "",
