@@ -692,8 +692,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
                     ) {
                         QueuedMessagesPanel(
-                            messages = state.queuedMessages + listOfNotNull(state.queueSubmission),
-                            busyIds = state.busyQueuedMessageIds + listOfNotNull(state.queueSubmission?.id.takeIf { state.isSending }),
+                            messages = state.queuedMessages + listOfNotNull(state.queueSubmission?.queued),
+                            busyIds = state.busyQueuedMessageIds + listOfNotNull(state.queueSubmission?.queued?.id.takeIf { state.isSending }),
                             error = state.queueError,
                             onSendNow = viewModel::sendQueuedMessageNow,
                             onEdit = viewModel::editQueuedMessage,

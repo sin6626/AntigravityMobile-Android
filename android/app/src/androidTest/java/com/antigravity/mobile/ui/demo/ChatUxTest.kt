@@ -2497,9 +2497,53 @@ class ChatUxTest {
                 assertTrue(requested.await(5, TimeUnit.SECONDS))
                 compose.onNodeWithContentDescription("聊天图片，点击放大").assertIsDisplayed()
                 compose.onNodeWithText("正在加入队列…").performScrollTo().assertIsDisplayed()
+                gateway.deferQueuedSync = true
                 release.countDown()
+                compose.waitUntil(10_000) { !vm.state.value.isSending }
+                compose.runOnIdle { vm.retryMessages() }
+                compose.waitUntil(10_000) { !vm.state.value.isRetryingConnection && !vm.state.value.isLoadingMessages }
+                assertNotNull("Stale successful reads must preserve the submitted image", vm.state.value.queueSubmission)
+                compose.onNodeWithContentDescription("聊天图片，点击放大").assertIsDisplayed()
+                gateway.deferQueuedSync = false
+                compose.runOnIdle { vm.retryMessages() }
                 compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.queueSubmission == null }
+                assertEquals(1, compose.onAllNodesWithContentDescription("聊天图片，点击放大").fetchSemanticsNodes().size)
+                compose.runOnIdle { vm.addImages(listOf(uri)) }
+                compose.waitUntil(10_000) { vm.state.value.attachments.size == 1 }
+                gateway.failurePath = "SendUserCascadeMessage"
+                compose.runOnIdle { vm.setDraft("失败后保留图片"); vm.send() }
+                compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.queueError != null }
+                assertEquals("失败后保留图片", vm.state.value.draft)
+                assertEquals(1, vm.state.value.attachments.size)
+                assertTrue("Restoring references must happen before snapshot files are cleared",
+                    PreferencesManager(app).loadDraftImages("A").single().isFile)
             } finally { release.countDown(); compose.runOnIdle { store.clear() }; file.delete() }
+        }
+    }
+
+    @Test fun switchingConversationDuringQueueSubmissionDoesNotLeaveSendingStuck() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true; gateway.running = true; gateway.queueFixture = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token"; lastConversationId = "A" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("queue-switch", vm) }
+            val requested = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            try {
+                compose.waitUntil(10_000) { vm.state.value.isRunning && vm.state.value.models.isNotEmpty() }
+                gateway.block = { path -> if (path.contains("SendUserCascadeMessage")) {
+                    requested.countDown(); release.await(5, TimeUnit.SECONDS)
+                } }
+                compose.runOnIdle { vm.setDraft("A 的排队消息"); vm.send() }
+                assertTrue(requested.await(5, TimeUnit.SECONDS))
+                compose.runOnIdle { vm.openConversation("B"); vm.setDraft("B 的草稿") }
+                release.countDown()
+                compose.waitUntil(10_000) { !vm.state.value.isSending }
+                assertEquals("B", vm.state.value.selectedConversationId)
+                assertEquals("B 的草稿", vm.state.value.draft)
+                assertNull(PreferencesManager(app).pendingSendTarget)
+            } finally { release.countDown(); compose.runOnIdle { store.clear() } }
         }
     }
 
@@ -2815,6 +2859,8 @@ class ChatUxTest {
         @Volatile var interactionSubmitted = false
         @Volatile var queueFixture = false
         @Volatile var queuedDraftText: String? = null
+        @Volatile var queuedDraftMedia: List<String> = emptyList()
+        @Volatile var deferQueuedSync = false
         @Volatile var sentNowText: String? = null
         @Volatile var taskFixture = false
         @Volatile var subagentFixture = false
@@ -2830,8 +2876,9 @@ class ChatUxTest {
                 .put("id", "q-edit").put("text", "先补充单元测试").put("createdAt", "2026-10-13T08:00:00Z")
             if ("q-delete" !in deletedQueueIds) messages += JSONObject()
                 .put("id", "q-delete").put("text", "然后检查动画").put("createdAt", "2026-10-13T08:01:00Z")
-            queuedDraftText?.takeIf { "q-new" !in deletedQueueIds }?.let { messages += JSONObject()
-                .put("id", "q-new").put("text", it).put("createdAt", "2026-10-13T08:02:00Z") }
+            queuedDraftText?.takeIf { "q-new" !in deletedQueueIds && !deferQueuedSync }?.let { messages += JSONObject()
+                .put("id", "q-new").put("text", it).put("media", org.json.JSONArray(queuedDraftMedia))
+                .put("createdAt", "2026-10-13T08:02:00Z") }
             return org.json.JSONArray(messages).toString()
         }
         private fun runningTasksJson(): String {
@@ -2886,6 +2933,8 @@ class ChatUxTest {
                                 if (path == "/gateway/cascade/new" && request.optString("projectId") == "p") createdProject = true
                                 if ((request.optJSONArray("artifactComments")?.length() ?: 0) > 0) planProceeded = true
                                 if (queueFixture && request.optInt("deliveryStrategy") == 2) {
+                                    val images = request.optJSONArray("images")
+                                    queuedDraftMedia = (0 until (images?.length() ?: 0)).map { images!!.getJSONObject(it).getString("base64Data") }
                                     queuedDraftText = request.optString("text")
                                     deletedQueueIds.remove("q-new")
                                 }

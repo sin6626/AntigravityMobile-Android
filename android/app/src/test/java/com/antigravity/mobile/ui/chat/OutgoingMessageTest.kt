@@ -6,6 +6,20 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class OutgoingMessageTest {
+    @Test fun identicalCaptionsConsumeEachLocalImageOnlyOnce() {
+        val first = OutgoingMessage("chat", GatewayMessageItem(id = "local:1", text = "same",
+            imageDataList = listOf(byteArrayOf(1))), emptySet(), 4, true)
+        val second = first.copy(message = first.message.copy(id = "local:2", imageDataList = listOf(byteArrayOf(2))))
+        val incoming = listOf(GatewayMessageItem(id = "first", text = "same", stepIndex = 5, imageUrls = listOf("/1")),
+            GatewayMessageItem(id = "second", text = "same", stepIndex = 6, imageUrls = listOf("/2")))
+        val merged = retainLocalImagePreviews(incoming, emptyList(), listOf(first, second), "chat")
+        assertArrayEquals(byteArrayOf(1), merged[0].imageDataList.single())
+        assertArrayEquals(byteArrayOf(2), merged[1].imageDataList.single())
+        val withThumbnail = retainLocalImagePreviews(listOf(incoming[0].copy(media = listOf("thumb")), incoming[1]),
+            emptyList(), listOf(first, second), "chat")
+        assertTrue(withThumbnail[0].imageDataList.isEmpty())
+        assertArrayEquals(byteArrayOf(2), withThumbnail[1].imageDataList.single())
+    }
     @Test fun confirmedImagesKeepLocalPreviewAcrossSlowMediaAndRepeatedSnapshots() {
         val image = byteArrayOf(1, 2, 3)
         val local = OutgoingMessage("chat", GatewayMessageItem(id = "local:image", text = "same",

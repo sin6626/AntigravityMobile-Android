@@ -89,7 +89,7 @@ data class ChatUiState(
     val isSubmittingInteraction: Boolean = false,
     val interactionError: String? = null,
     val queuedMessages: List<QueuedMessageItem> = emptyList(),
-    val queueSubmission: QueuedMessageItem? = null,
+    val queueSubmission: QueueSubmission? = null,
     val busyQueuedMessageIds: Set<String> = emptySet(),
     val queueError: String? = null,
     val runningTasks: List<RunningTaskItem> = emptyList(),
@@ -218,12 +218,32 @@ internal fun retainLocalImagePreviews(
     previous: List<GatewayMessageItem>,
     outgoing: List<OutgoingMessage>,
     conversationId: String,
-): List<GatewayMessageItem> = messages.map { message ->
-    if (!message.media.isNullOrEmpty()) return@map message.copy(imageDataList = emptyList())
-    val bytes = previous.firstOrNull { it.id == message.id }?.imageDataList?.takeIf { it.isNotEmpty() }
-        ?: outgoing.firstOrNull { it.conversationId == conversationId && it.matches(message) }?.message?.imageDataList
-    if (!bytes.isNullOrEmpty() && message.imageDataList.isEmpty()) message.copy(imageDataList = bytes) else message
+): List<GatewayMessageItem> {
+    val pending = outgoing.filter { it.conversationId == conversationId }.toMutableList()
+    return messages.map { message ->
+        val index = pending.indexOfFirst { it.matches(message) }
+        val source = if (index >= 0) pending.removeAt(index).message else null
+        if (!message.media.isNullOrEmpty()) return@map message.copy(imageDataList = emptyList())
+        val bytes = previous.firstOrNull { it.id == message.id }?.imageDataList?.takeIf { it.isNotEmpty() }
+            ?: source?.imageDataList
+        if (!bytes.isNullOrEmpty() && message.imageDataList.isEmpty()) message.copy(imageDataList = bytes) else message
+    }
 }
+
+data class QueueSubmission(
+    val queued: QueuedMessageItem,
+    val pending: OutgoingMessage,
+    val knownQueueIds: Set<String>,
+)
+
+internal fun QueueSubmission.confirmedBy(queue: List<QueuedMessageItem>, messages: List<GatewayMessageItem>): Boolean =
+    queue.any { it.id !in knownQueueIds && it.text == queued.text &&
+        (it.attachments.orEmpty().filter { a -> a.mimeType.startsWith("image/") }
+            .mapNotNull { a -> a.inlineData?.takeIf(String::isNotBlank) }
+            .takeIf { images -> images.isNotEmpty() } ?: it.media.orEmpty()) == queued.media.orEmpty() &&
+        it.attachments.orEmpty().filterNot { a -> a.mimeType.startsWith("image/") }.map { a -> a.mimeType to a.displayName } ==
+            queued.attachments.orEmpty().map { a -> a.mimeType to a.displayName } } ||
+        messages.count { pending.matches(it) } == 1
 
 class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val prefs = PreferencesManager(application)
@@ -319,7 +339,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 val previous = _state.value
                 val nextMessages = retainLocalImagePreviews(update.messages?.let { incoming ->
                     if (update.isFullSnapshot) incoming else mergeMessages(previous.messages, incoming)
-                } ?: previous.messages, previous.messages, previous.outgoing, update.cascadeId)
+                } ?: previous.messages, previous.messages,
+                    previous.outgoing + listOfNotNull(previous.queueSubmission?.pending), update.cascadeId)
                 val running = update.status.contains("RUNNING", ignoreCase = true)
                 val latestAgent = nextMessages.lastOrNull { it.type == "agent" }
                 val previousText = previous.messages.firstOrNull { it.id == latestAgent?.id }?.effectiveText.orEmpty()
@@ -341,6 +362,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     isSubmittingInteraction = if (interactionChanged) false else previous.isSubmittingInteraction,
                     interactionError = if (interactionChanged || update.pendingInteraction == null) null else previous.interactionError,
                     queuedMessages = update.queuedMessages ?: previous.queuedMessages,
+                    queueSubmission = previous.queueSubmission?.takeUnless {
+                        it.confirmedBy(update.queuedMessages ?: previous.queuedMessages, nextMessages)
+                    },
                     runningTasks = update.runningTasks.orEmpty(),
                     canProceed = update.canProceed,
                     proceedArtifactUri = update.proceedArtifactUri,
@@ -1788,9 +1812,15 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             slashCommand = null,
             isSending = true,
             queueError = null,
-            queueSubmission = QueuedMessageItem(id = "local:$clientId", text = text,
+            queueSubmission = QueueSubmission(QueuedMessageItem(id = "local:$clientId", text = text,
                 media = images.map { Base64.encodeToString(it.bytes, Base64.NO_WRAP) },
                 attachments = file?.let { listOf(com.antigravity.mobile.data.model.QueuedAttachment(it.mimeType, it.displayName)) }),
+                OutgoingMessage(id, GatewayMessageItem(id = "local:$clientId", text = text,
+                    imageDataList = images.map { it.bytes },
+                    attachments = file?.let { listOf(MessageAttachment(it.mimeType, it.displayName)) }),
+                    _state.value.messages.filter { it.isUser }.map { it.id }.toSet(),
+                    _state.value.messages.mapNotNull { it.stepIndex }.maxOrNull(), images.isNotEmpty() || file != null),
+                _state.value.queuedMessages.map { it.id }.toSet()),
         )
         viewModelScope.launch {
             api.sendMessage(
@@ -1806,6 +1836,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             ).fold(
                 onSuccess = {
                     if (prefs.deviceToken != token) return@fold
+                    clearSendSnapshot()
+                    _state.value = _state.value.copy(isSending = false)
                     if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         _state.value = _state.value.copy(
                             isSending = false,
@@ -1813,10 +1845,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             modelOverrideId = null,
                         )
                         loadMessages(id).join()
-                        if (conversationVisit == visit && _state.value.messagesError == null &&
-                            _state.value.queueSubmission?.id == "local:$clientId") {
-                            _state.value = _state.value.copy(queueSubmission = null)
-                        }
                     }
                 },
                 onFailure = { error ->
@@ -1832,6 +1860,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     saveImages(key, restoredImages)
                     saveFile(key, restoredFile)
                     saveComposerContext(key, restoredContext)
+                    clearSendSnapshot()
+                    _state.value = _state.value.copy(isSending = false)
                     if (_state.value.selectedConversationId == id && conversationVisit == visit) {
                         _state.value = _state.value.copy(
                             draft = restoredText,
@@ -1846,7 +1876,6 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 },
             )
-            clearSendSnapshot()
         }
     }
 
@@ -2413,7 +2442,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         val merged = retainLocalImagePreviews(
                             if (changed) mergeMessages(payload.messages.orEmpty(), current.messages)
                             else mergeMessages(current.messages, payload.messages.orEmpty()),
-                            current.messages, current.outgoing, id)
+                            current.messages, current.outgoing + listOfNotNull(current.queueSubmission?.pending), id)
                         val outgoing = reconcileOutgoing(current.outgoing, id, merged)
                         val incomingPlanUri = if (changed) current.proceedArtifactUri else payload.proceedArtifactUri
                         val planChanged = current.proceedArtifactUri != incomingPlanUri
@@ -2431,7 +2460,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             isSubmittingInteraction = if (interactionChanged) false else current.isSubmittingInteraction,
                             interactionError = if (interactionChanged || incomingInteraction == null) null else current.interactionError,
                             queuedMessages = if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(),
-                            queueSubmission = current.queueSubmission.takeIf { current.isSending },
+                            queueSubmission = current.queueSubmission?.takeUnless {
+                                it.confirmedBy(if (changed) current.queuedMessages else payload.queuedMessages.orEmpty(), merged)
+                            },
                             runningTasks = if (changed) current.runningTasks else payload.runningTasks.orEmpty(),
                             canProceed = if (changed) current.canProceed else payload.canProceed,
                             proceedArtifactUri = incomingPlanUri,
