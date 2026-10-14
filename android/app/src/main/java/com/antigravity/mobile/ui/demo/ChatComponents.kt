@@ -477,6 +477,8 @@ internal fun Composer(
     val corner by animateDpAsState(targetCorner,
         animationSpec = tween(220, easing = FastOutSlowInEasing), label = "composer corner")
     val settingsAlpha by animateFloatAsState(if (expanded) 1f else 0f, tween(160), label = "composer settings")
+    val stopVisibility = remember { MutableTransitionState(false) }
+    stopVisibility.targetState = isRunning && canSend && !isSending && !isStopping
     LookaheadScope {
     Surface(
         modifier = modifier.animateBounds(this,
@@ -541,21 +543,22 @@ internal fun Composer(
                         .then(inputFocusRequester?.let { Modifier.focusRequester(it) } ?: Modifier)
                         .onFocusChanged { focused = it.isFocused }, expanded, enabled = !voiceActive)
                 Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })
-                    .graphicsLayer { alpha = settingsAlpha }) {
-                    if (expanded) ComposerSettings(true, modelBadge, onOpenModelConfig, modelEnabled,
+                    .graphicsLayer { alpha = settingsAlpha }
+                    .then(if (!expanded) Modifier.clearAndSetSemantics {} else Modifier)) {
+                    if (expanded || settingsAlpha > 0f) ComposerSettings(expanded, modelBadge, onOpenModelConfig, modelEnabled,
                         workModeLabel, workModeDescription, onOpenWorkMode, workModeEnabled)
                 }
                 Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })) {
                     if (voiceInput.phase == VoiceInputPhase.IDLE) ComposerIcon("mic", "语音输入", 27, onStartVoice)
                 }
                 Box(Modifier.animateBounds(this@LookaheadScope, boundsTransform = { _, _ -> tween(220) })) {
-                    SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop)
+                    SendAction(canSend, onSend, isRunning, isSending, isStopping, onStop, stopVisibility)
                 }
             }, modifier = Modifier.fillMaxWidth()) { children, constraints ->
                 val width = constraints.maxWidth
                 val action = 48.dp.roundToPx()
                 val add = children[0].measure(Constraints.fixed(action, action))
-                val sendWidth = if (isRunning && canSend) action * 2 else action
+                val sendWidth = if (stopVisibility.currentState || stopVisibility.targetState || !stopVisibility.isIdle) action * 2 else action
                 val send = children[4].measure(Constraints.fixed(sendWidth, action))
                 val micWidth = if (voiceInput.phase == VoiceInputPhase.IDLE) action else 0
                 val mic = children[3].measure(Constraints.fixed(micWidth, action))
@@ -797,7 +800,7 @@ private fun ComposerSettings(
             )
             Box(
                 Modifier.heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp))
-                    .clickable(enabled = active && workModeEnabled, onClick = onOpenWorkMode)
+                    .then(if (active) Modifier.clickable(enabled = workModeEnabled, onClick = onOpenWorkMode) else Modifier)
                     .semantics { contentDescription = workModeDescription }
                     .padding(horizontal = 8.dp),
                 contentAlignment = Alignment.Center,
@@ -817,7 +820,7 @@ private fun ComposerSettings(
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(enabled = active && modelEnabled, onClick = onOpenModelConfig)
+                    .then(if (active) Modifier.clickable(enabled = modelEnabled, onClick = onOpenModelConfig) else Modifier)
                     .padding(horizontal = 8.dp, vertical = 6.dp)
                     .semantics { contentDescription = "选择模型" }
             )
@@ -849,26 +852,28 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
 
 @Composable
 private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean, isSending: Boolean,
-    isStopping: Boolean, onStop: () -> Unit, active: Boolean = true) {
+    isStopping: Boolean, onStop: () -> Unit, stopVisibility: MutableTransitionState<Boolean>) {
     val queueing = isRunning && canSend
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        AnimatedVisibility(
-            queueing && !isSending && !isStopping,
-            enter = expandHorizontally(tween(160), expandFrom = Alignment.End) + fadeIn(tween(120)),
-            exit = shrinkHorizontally(tween(140), shrinkTowards = Alignment.End) + fadeOut(tween(100)),
-        ) {
-            Box(
-                Modifier.size(48.dp).semantics { contentDescription = "停止生成" }
-                    .quietClickable(CircleShape, enabled = active, onClick = onStop),
-                contentAlignment = Alignment.Center,
+    Layout(content = {
+        Box(Modifier.then(if (!stopVisibility.targetState) Modifier.clearAndSetSemantics {} else Modifier)) {
+            AnimatedVisibility(
+                visibleState = stopVisibility,
+                enter = fadeIn(tween(120)),
+                exit = fadeOut(tween(100)),
             ) {
-                Box(Modifier.size(40.dp).background(AccentBlue, CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp))
+                Box(
+                    Modifier.size(48.dp).semantics { contentDescription = "停止生成" }
+                        .quietClickable(CircleShape, enabled = stopVisibility.targetState, onClick = onStop),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(Modifier.size(40.dp).background(AccentBlue, CircleShape), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Close, contentDescription = null, tint = Color.White, modifier = Modifier.size(21.dp))
+                    }
                 }
             }
         }
         val stopsGeneration = isRunning && !queueing && !isSending
-        val enabled = active && !isStopping && if (stopsGeneration) true else canSend
+        val enabled = !isStopping && if (stopsGeneration) true else canSend
         Box(
             modifier = Modifier.size(48.dp)
                 .quietClickable(CircleShape, enabled = enabled, onClick = if (stopsGeneration) onStop else onSend)
@@ -892,6 +897,14 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean,
                     }
                 }
             }
+        }
+    }, modifier = Modifier.fillMaxWidth()) { children, constraints ->
+        val action = 48.dp.roundToPx()
+        val stop = children[0].measure(Constraints.fixed(action, action))
+        val send = children[1].measure(Constraints.fixed(action, action))
+        layout(constraints.maxWidth, action) {
+            stop.placeRelative(constraints.maxWidth - action * 2, 0)
+            send.placeRelative(constraints.maxWidth - action, 0)
         }
     }
 }

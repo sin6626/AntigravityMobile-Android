@@ -91,4 +91,35 @@ class ComposerLayoutTest {
             }
         }
     }
+
+    @Test fun queueActionStaysSquareWhileTheStopSlotClosesAndReverses() {
+        val draft = mutableStateOf("排队消息")
+        val density = compose.activity.resources.displayMetrics.density
+        compose.setContent {
+            Box(Modifier.fillMaxSize()) {
+                Composer(modifier = Modifier.width(320.dp), activeConversation = true,
+                    draft = draft.value, attachments = emptyList(), onDraftChange = { draft.value = it },
+                    onRemoveImage = {}, onSend = {}, isSending = false, onUnsupported = {}, isRunning = true,
+                    modelBadge = "Gemini 3.8 Flash 高", workModeLabel = "直接")
+            }
+        }
+        compose.onNodeWithContentDescription("排队发送消息").assertIsDisplayed()
+        compose.mainClock.autoAdvance = false
+        try {
+            compose.runOnUiThread { draft.value = "" }
+            repeat(14) {
+                compose.mainClock.advanceTimeByFrame()
+                val bounds = compose.onNodeWithContentDescription("停止生成").fetchSemanticsNode().boundsInRoot
+                assertTrue("Closing must keep one full square action: $bounds",
+                    kotlin.math.abs(bounds.width - bounds.height) < 2 && bounds.width >= 48 * density - 1)
+                compose.onAllNodesWithContentDescription("停止生成").assertCountEquals(1)
+                if (it == 2) compose.runOnUiThread { draft.value = "重新排队" }
+                if (it == 6) compose.runOnUiThread { draft.value = "" }
+                if (it in 3..5) {
+                    val send = compose.onNodeWithContentDescription("排队发送消息").fetchSemanticsNode().boundsInRoot
+                    assertTrue("Reversal must retain a square send button: $send", kotlin.math.abs(send.width - send.height) < 2)
+                }
+            }
+        } finally { compose.mainClock.autoAdvance = true }
+    }
 }
