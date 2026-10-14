@@ -162,7 +162,10 @@ data class ChatUiState(
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
     val networkAvailable: Boolean = true,
     val isRetryingConnection: Boolean = false,
-)
+) {
+    val canSendOverConnection: Boolean
+        get() = networkAvailable && if (selectedConversationId == null) conversationsError == null else messagesError == null
+}
 
 enum class VoiceInputPhase { IDLE, RECORDING, FINALIZING, ERROR }
 
@@ -1256,7 +1259,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun expirePairing() {
         if (!_state.value.isPaired) return
-        conversationVisit++
+        advanceConversationVisit()
         messagesJob?.cancel(); messagesJob = null
         subagentsJob?.cancel(); subagentsJob = null
         subagentTrail.clear()
@@ -1504,7 +1507,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun openConversationTarget(id: String, activeSubagent: SubagentItem?, workspaceUri: String? = null) {
-        conversationVisit++
+        advanceConversationVisit()
         messagesJob?.cancel(); messagesJob = null
         subagentsJob?.cancel(); subagentsJob = null
         switchDraft(id)
@@ -1589,7 +1592,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closeConversation() {
-        conversationVisit++
+        advanceConversationVisit()
         messagesJob?.cancel(); messagesJob = null
         subagentsJob?.cancel(); subagentsJob = null
         subagentTrail.clear()
@@ -1626,6 +1629,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun send() {
+        if (!_state.value.canSendOverConnection) return
         if (_state.value.activeSubagent != null) return
         if (_state.value.isRestoringDraft) return
         val text = _state.value.draft.trim()
@@ -1678,7 +1682,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(attachments = emptyList(), fileAttachment = null,
             workspaceContexts = emptyList(), slashCommand = null)
         if (id == null) moveDraft(originalDraftKey, targetId)
-        if (id == null) conversationVisit++
+        if (id == null) advanceConversationVisit()
         _state.value = _state.value.copy(
             selectedConversationId = targetId, outgoing = _state.value.outgoing + pending,
             draft = "", attachments = emptyList(), fileAttachment = null, workspaceContexts = emptyList(), slashCommand = null,
@@ -2302,7 +2306,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.setDraftText(id, text)
                 saveImages(id, (images + if (draftKey == id) _state.value.attachments else draftAttachments[id].orEmpty()).distinctBy { it.uri })
                 if (conversationVisit == visit) {
-                    conversationVisit++
+                    advanceConversationVisit()
                     messagesJob?.cancel(); messagesJob = null
                     stream.disconnect()
                     _state.value = _state.value.copy(messages = emptyList(), outgoing = _state.value.outgoing.filterNot { it.conversationId == id },
@@ -2499,6 +2503,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         resumeConnection()
     }
 
+    private fun advanceConversationVisit() {
+        conversationVisit++
+        recoveryJob?.cancel()
+        recoveryJob = null
+        _state.value = _state.value.copy(isRetryingConnection = false)
+    }
+
     /** Sync after background/lock or manual retry while keeping the current page and draft. */
     fun resumeConnection() {
         if (!_state.value.isPaired || recoveryJob?.isActive == true) return
@@ -2520,7 +2531,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 refreshConversations()
                 refreshProjects()
             } finally {
-                _state.value = _state.value.copy(isRetryingConnection = false)
+                if (conversationVisit == visit) _state.value = _state.value.copy(isRetryingConnection = false)
             }
         }
     }

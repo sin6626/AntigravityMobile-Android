@@ -2189,6 +2189,10 @@ class ChatUxTest {
                 compose.onNodeWithText("聊天暂未同步，请重试").assertIsDisplayed()
                 compose.onNodeWithText("HTTP 530", substring = true).assertDoesNotExist()
                 compose.onNodeWithContentDescription("聊天内容尚未同步").assertDoesNotExist()
+                compose.onNodeWithContentDescription("发送消息").assertIsNotEnabled()
+                compose.runOnIdle { vm.send() }
+                assertTrue(vm.state.value.outgoing.isEmpty())
+                assertEquals("断连也保留的草稿", vm.state.value.draft)
                 saveScreenshot("phone-ux-cached-disconnected.png")
                 gateway.failurePath = null
                 gateway.block = { path -> if (path.startsWith("/gateway/cascade/messages")) release.await(5, TimeUnit.SECONDS) }
@@ -2200,6 +2204,36 @@ class ChatUxTest {
                 compose.waitUntil(10_000) { !vm.state.value.isRetryingConnection && vm.state.value.messagesError == null }
                 assertEquals("断连也保留的草稿", vm.state.value.draft)
                 assertFalse(gateway.requests.any { it.first.contains("SendUserCascadeMessage") })
+            } finally { release.countDown(); compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun changingConversationDuringRecoveryLetsTheNewPageRetry() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("recovery-switch", vm) }
+            val requested = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            try {
+                compose.runOnIdle { vm.openConversation("A") }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages }
+                gateway.failurePath = "/gateway/cascade/messages"
+                compose.runOnIdle { vm.retryMessages() }
+                compose.waitUntil(10_000) { vm.state.value.messagesError != null && !vm.state.value.isRetryingConnection }
+                gateway.block = { path -> if (path == "/healthz") { requested.countDown(); release.await(5, TimeUnit.SECONDS) } }
+                compose.runOnIdle { vm.retryMessages() }
+                assertTrue(requested.await(5, TimeUnit.SECONDS))
+                compose.runOnIdle { vm.openConversation("B"); vm.setDraft("B 的重连草稿") }
+                compose.waitUntil(10_000) { vm.state.value.messagesError != null && !vm.state.value.isLoadingMessages }
+                compose.runOnIdle { vm.retryMessages() }
+                assertTrue("The new visit must start its own retry", vm.state.value.isRetryingConnection)
+                gateway.failurePath = null; gateway.block = {}; release.countDown()
+                compose.waitUntil(10_000) { !vm.state.value.isRetryingConnection && vm.state.value.messagesError == null }
+                assertEquals("B", vm.state.value.selectedConversationId)
+                assertEquals("B 的重连草稿", vm.state.value.draft)
             } finally { release.countDown(); compose.runOnIdle { store.clear() } }
         }
     }

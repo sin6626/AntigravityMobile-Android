@@ -757,7 +757,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onDismissSuggestions = viewModel::clearComposerSuggestions,
                             onSend = viewModel::send,
                             isSending = state.isSending,
-                            sendBlocked = !state.networkAvailable || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
+                            sendBlocked = !state.canSendOverConnection || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
                                 state.busyQueuedMessageIds.isNotEmpty() || state.selectedConversationId in state.busyConversations,
                             isRunning = state.isRunning,
                             isStopping = state.isStopping,
