@@ -433,6 +433,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                 topSpace = topBarHeight,
                                 bottomPadding = conversationPadding,
                                 waitingForConnection = state.messagesError != null || !state.networkAvailable,
+                                isStopping = state.isStopping,
+                                waitingForInteraction = state.pendingInteraction != null || state.canProceed,
                                 modifier = Modifier.fillMaxSize().imePadding().pointerInput(Unit) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)

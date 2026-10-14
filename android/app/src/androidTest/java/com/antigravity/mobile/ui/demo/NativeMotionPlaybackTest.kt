@@ -24,6 +24,83 @@ import androidx.compose.ui.unit.dp
 
 /** Optional recording fixture: uses the Android frame clock, not Compose's virtual test clock. */
 class NativeMotionPlaybackTest {
+    @Test fun replyWaitUsesPlatformFramesAndSettlesAfterTheFirstBody() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val user = com.antigravity.mobile.data.model.GatewayMessageItem(id = "native-user", text = "等待动画实测")
+        val messages = mutableStateOf(listOf(user))
+        val running = mutableStateOf(true)
+        fun find(node: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
+            if (node == null || !node.isVisibleToUser) return null
+            if (node.text?.contains(text) == true) return node
+            for (i in 0 until node.childCount) find(node.getChild(i), text)?.let { return it }
+            return null
+        }
+        fun awaitText(text: String): AccessibilityNodeInfo {
+            repeat(50) {
+                find(automation.rootInActiveWindow, text)?.let { return it }
+                Thread.sleep(100)
+            }
+            error("未显示：$text")
+        }
+        fun statusBounds(): android.graphics.Rect {
+            val bounds = android.graphics.Rect()
+            awaitText("正在回复").getBoundsInScreen(bounds)
+            // Accessibility omits the decorative spinner; include its 16 dp slot and 8 dp gap.
+            bounds.left = (bounds.left - 24 * instrumentation.targetContext.resources.displayMetrics.density).toInt().coerceAtLeast(0)
+            return bounds
+        }
+        fun capture(bounds: android.graphics.Rect, name: String? = null): IntArray {
+            val bitmap = checkNotNull(automation.takeScreenshot())
+            try {
+                if (name != null) java.io.File(instrumentation.targetContext.getExternalFilesDir(null), name)
+                    .outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+                return IntArray(bounds.width() * bounds.height()).also {
+                    bitmap.getPixels(it, 0, bounds.width(), bounds.left, bounds.top, bounds.width(), bounds.height())
+                }
+            } finally { bitmap.recycle() }
+        }
+        ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                val vm = androidx.lifecycle.ViewModelProvider(activity)[com.antigravity.mobile.ui.chat.ChatViewModel::class.java]
+                activity.setContent {
+                    Box(Modifier.fillMaxSize().background(Color.White)) {
+                        ConversationContent(vm, messages.value, null, running.value, false, false, false, {}, Modifier.fillMaxSize())
+                    }
+                }
+            }
+            var bounds = statusBounds()
+            Thread.sleep(300)
+            val first = capture(bounds, "reply-wait-native-0.png")
+            val differences = (1..5).map { index ->
+                Thread.sleep(160)
+                val next = capture(bounds, if (index == 5) "reply-wait-native-1.png" else null)
+                first.indices.count { first[it] != next[it] }
+            }
+            assertTrue("实际时钟下等待行应变化：$differences", differences.any { it > 20 })
+            android.util.Log.i("ReplyWaitVerification", "Platform waiting row changed pixels=$differences")
+            scenario.onActivity { messages.value += com.antigravity.mobile.data.model.GatewayMessageItem(
+                id = "native-reply", type = "agent", text = "**正文即时显示**") }
+            awaitText("正文即时显示")
+            Thread.sleep(300)
+            bounds = statusBounds()
+            val settled = capture(bounds, "reply-wait-native-body.png")
+            assertTrue("首段衔接结束后不应残留蓝色进度圈", settled.none {
+                android.graphics.Color.blue(it) > 180 && android.graphics.Color.red(it) < 80
+            })
+            Thread.sleep(200)
+            assertTrue("生成正文期间状态行应保持静止", settled.contentEquals(capture(bounds)))
+            scenario.onActivity { running.value = false }
+            val removed = (1..20).any {
+                Thread.sleep(100)
+                find(automation.rootInActiveWindow, "正在回复") == null
+            }
+            capture(bounds, "reply-wait-native-finished.png")
+            assertTrue("回复结束后等待状态应移除", removed)
+            assertNotNull(find(automation.rootInActiveWindow, "正文即时显示"))
+        }
+    }
+
     @Test fun recordComposerAndMenuAtPlatformSpeed() {
         assumeTrue(InstrumentationRegistry.getArguments().getString("motionPlayback") == "true")
         val instrumentation = InstrumentationRegistry.getInstrumentation()

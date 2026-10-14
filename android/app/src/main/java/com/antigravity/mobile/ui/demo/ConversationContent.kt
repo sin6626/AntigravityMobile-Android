@@ -27,6 +27,8 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -106,6 +108,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.clearAndSetSemantics
 
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
@@ -127,6 +130,8 @@ internal fun ConversationContent(
     topSpace: androidx.compose.ui.unit.Dp = 0.dp,
     bottomPadding: PaddingValues = PaddingValues(bottom = bottomSpace),
     waitingForConnection: Boolean = false,
+    isStopping: Boolean = false,
+    waitingForInteraction: Boolean = false,
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -135,6 +140,25 @@ internal fun ConversationContent(
     var positioned by remember { mutableStateOf(false) }
     var expandedProcesses by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
+    val replyTurnId = messages.lastOrNull { it.isUser }?.id
+    var replyBodyShown by rememberSaveable(replyTurnId) {
+        // Loading the missing user boundary of an already visible reply is not a new turn.
+        val currentIds = messages.asReversed().takeWhile { !it.isUser }.map { it.id }.toSet()
+        mutableStateOf(hasPreparedReplyBody(renderItems.filter { it.message.id in currentIds }))
+    }
+    val showReplyProgress = isRunning && !waitingForConnection && (isStopping || !waitingForInteraction)
+    val replyOnScreen by remember {
+        derivedStateOf {
+            listState.layoutInfo.let { layout ->
+                layout.visibleItemsInfo.any { it.key == "reply-progress" &&
+                    it.offset < layout.viewportEndOffset && it.offset + it.size > layout.viewportStartOffset }
+            }
+        }
+    }
+    // An off-screen lazy item cannot finish an exit transition; discard it immediately instead.
+    val replyVisibility = remember(showReplyProgress || replyOnScreen) { MutableTransitionState(showReplyProgress) }
+    replyVisibility.targetState = showReplyProgress
+    val hasReplyProgress = showReplyProgress || replyVisibility.currentState || !replyVisibility.isIdle
     val newestLocalId = messages.lastOrNull { it.id.startsWith("local:") }?.id
     var lastScrolledLocalId by remember { mutableStateOf<String?>(null) }
     var historyAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
@@ -183,6 +207,7 @@ internal fun ConversationContent(
             }
         }
         renderItems = prepared
+        if (hasPreparedReplyBody(prepared)) replyBodyShown = true
     }
     if (((isLoading || waitingForConnection) && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         ConversationSkeleton(
@@ -192,11 +217,11 @@ internal fun ConversationContent(
         )
         return
     }
-    LaunchedEffect(renderItems, isRunning) {
+    LaunchedEffect(renderItems, hasReplyProgress) {
         val newLocal = newestLocalId != null && newestLocalId != lastScrolledLocalId &&
             renderItems.any { it.message.id == newestLocalId }
         if (renderItems.isNotEmpty() && (!positioned || followLatest || newLocal)) {
-            val lastIndex = (if (hasMore) 1 else 0) + renderItems.lastIndex + (if (isRunning) 1 else 0)
+            val lastIndex = (if (hasMore) 1 else 0) + renderItems.lastIndex + (if (hasReplyProgress) 1 else 0)
             listState.scrollToItem(lastIndex)
             listState.layoutInfo.visibleItemsInfo.lastOrNull()?.let { listState.scrollBy(it.size.toFloat()) }
             positioned = true
@@ -267,10 +292,14 @@ internal fun ConversationContent(
                         }
                     }
                 }
-                if (isRunning) item(key = "reply-progress", contentType = "reply-progress") {
+                if (hasReplyProgress) item(key = "reply-progress", contentType = "reply-progress") {
                     DisableSelection {
-                        Text("正在回复…", color = SecondaryInk, fontSize = 14.sp,
-                            modifier = Modifier.padding(top = 12.dp))
+                        AnimatedVisibility(replyVisibility, enter = EnterTransition.None,
+                            exit = fadeOut(tween(120)) + shrinkVertically(tween(120), shrinkTowards = Alignment.Top)) {
+                            ReplyProgress(waiting = !replyBodyShown && !isStopping,
+                                stopping = isStopping, animate = replyOnScreen && showReplyProgress && !isStopping,
+                                modifier = if (showReplyProgress) Modifier else Modifier.clearAndSetSemantics {})
+                        }
                     }
                 }
             }
@@ -304,6 +333,14 @@ internal fun ConversationContent(
         linkedFileUri?.let { uri -> LinkedFilePreview(uri, viewModel) { linkedFileUri = null } }
     }
 }
+
+internal fun hasPreparedReplyBody(items: List<ConversationRenderItem>): Boolean =
+    items.asReversed().takeWhile { !it.message.isUser }.any {
+        it.process.isEmpty() && it.message.isAgent && it.message.type != "thought" &&
+            (it.node != null || it.message.effectiveText.isNotBlank() ||
+                !it.message.media.isNullOrEmpty() || !it.message.imageUrls.isNullOrEmpty() ||
+                it.message.imageDataList.any { bytes -> bytes.isNotEmpty() })
+    }
 
 internal data class ConversationRenderItem(
     val message: GatewayMessageItem,

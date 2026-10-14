@@ -31,6 +31,68 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 class ChatUxTest {
+    @Test fun replyWaitFollowsRealSendApprovalFailureAndConversationState() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.liveStream = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "reply-wait-test" }
+            gateway.management = true
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("reply-wait", vm) }
+            try {
+                compose.runOnIdle { vm.openConversation("A") }
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages &&
+                    vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                compose.runOnIdle { vm.setDraft("等待回复的测试问题"); vm.send() }
+                compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.outgoing.isNotEmpty() }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                saveScreenshot("reply-wait-sending.png")
+                fun emit(body: String = "", approval: Boolean = false, running: Boolean = true) {
+                    val messages = org.json.JSONArray().put(JSONObject().put("id", "confirmed-user").put("type", "user")
+                        .put("stepIndex", 1).put("text", "等待回复的测试问题"))
+                    if (body.isNotEmpty()) messages.put(JSONObject().put("id", "reply").put("type", "agent").put("text", body))
+                    gateway.emit("A", JSONObject().put("type", "update").put("cascadeId", "A")
+                        .put("status", if (running) "RUNNING" else "IDLE").put("isFullSnapshot", true)
+                        .put("messages", messages).put("canProceed", approval)
+                        .put("proceedArtifactUri", if (approval) "file:///test/plan.md" else JSONObject.NULL).toString())
+                }
+                emit()
+                compose.waitUntil(5_000) { vm.state.value.outgoing.isEmpty() }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                emit(approval = true)
+                compose.waitUntil(5_000) { vm.state.value.canProceed }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertDoesNotExist()
+                emit()
+                compose.waitUntil(5_000) { !vm.state.value.canProceed }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                gateway.failurePath = "CancelCascadeInvocation"
+                compose.runOnIdle { vm.stopGeneration() }
+                compose.waitUntil(5_000) { !vm.state.value.isStopping && vm.state.value.error != null }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                gateway.failurePath = null
+                emit("**即时显示的正文**")
+                compose.waitUntil(5_000) { compose.onAllNodesWithText("即时显示的正文").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertDoesNotExist()
+                saveScreenshot("reply-wait-first-body.png")
+                emit("**即时显示的正文**", running = false)
+                compose.waitUntil(5_000) { !vm.state.value.isRunning }
+                compose.onNodeWithText("正在回复…").assertDoesNotExist()
+                gateway.failurePath = "SendUserCascadeMessage"
+                compose.runOnIdle { vm.setDraft("发送失败应恢复"); vm.send() }
+                compose.waitUntil(5_000) { !vm.state.value.isSending && vm.state.value.outgoing.isEmpty() }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertDoesNotExist()
+                assertTrue(vm.state.value.draft.contains("发送失败应恢复"))
+                gateway.failurePath = null
+                gateway.running = true
+                compose.runOnIdle { vm.openConversation("B") }
+                compose.waitUntil(5_000) { !vm.state.value.isLoadingMessages && vm.state.value.selectedConversationId == "B" }
+                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithText("即时显示的正文").assertDoesNotExist()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     @Test fun websocketReplyRendersMarkdownBeforeCompletionAndSurvivesReconnect() {
