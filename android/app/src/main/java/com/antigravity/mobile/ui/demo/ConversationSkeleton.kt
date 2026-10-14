@@ -27,14 +27,18 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 
 @Composable
 internal fun ConversationSkeleton(
     modifier: Modifier = Modifier,
     bottomPadding: androidx.compose.foundation.layout.PaddingValues = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp),
+    animated: Boolean = true,
 ) {
-    val transition = rememberInfiniteTransition(label = "skeleton_shimmer")
-    val translateAnim by transition.animateFloat(
+    val translateAnim = if (animated) {
+        val transition = rememberInfiniteTransition(label = "skeleton_shimmer")
+        val offset by transition.animateFloat(
         initialValue = -300f,
         targetValue = 1300f,
         animationSpec = infiniteRepeatable(
@@ -42,7 +46,9 @@ internal fun ConversationSkeleton(
             repeatMode = RepeatMode.Restart,
         ),
         label = "shimmer_offset",
-    )
+        )
+        offset
+    } else 0f
 
     val neutralShimmer = Brush.linearGradient(
         colors = listOf(
@@ -66,6 +72,7 @@ internal fun ConversationSkeleton(
 
     Column(
         modifier = modifier
+            .semantics { contentDescription = if (animated) "正在加载聊天" else "聊天内容尚未同步" }
             .fillMaxSize()
             .verticalScroll(rememberScrollState(), enabled = false)
             .padding(start = 18.dp, end = 18.dp, top = 22.dp).padding(bottomPadding),

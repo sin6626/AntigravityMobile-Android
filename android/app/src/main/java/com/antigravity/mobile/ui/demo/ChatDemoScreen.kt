@@ -112,6 +112,7 @@ import kotlin.math.abs
 @Composable
 fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val connectionIssue = chatConnectionIssue(state)
     val activeConversations = state.conversations.filterNot { it.isArchived }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -431,6 +432,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                 allowRevert = !state.isSending && !state.isReverting && state.selectedConversationId !in state.busyConversations,
                                 topSpace = topBarHeight,
                                 bottomPadding = conversationPadding,
+                                waitingForConnection = state.messagesError != null || !state.networkAvailable,
                                 modifier = Modifier.fillMaxSize().imePadding().pointerInput(Unit) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -622,6 +624,15 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                     modifier = Modifier.onSizeChanged { composerInsets.insets = WindowInsets(bottom = it.height) },
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    AnimatedVisibility(connectionIssue != null,
+                        enter = expandVertically(tween(180)) + fadeIn(tween(120)),
+                        exit = shrinkVertically(tween(160)) + fadeOut(tween(100))) {
+                        connectionIssue?.let { title ->
+                            ChatConnectionNotice(title, state.isRetryingConnection) {
+                                if (state.selectedConversationId != null) viewModel.retryMessages() else viewModel.resumeConnection()
+                            }
+                        }
+                    }
                     AnimatedVisibility(
                         visible = state.canProceed && !state.proceedArtifactUri.isNullOrBlank(),
                         enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
@@ -651,14 +662,14 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                         )
                     }
                     AnimatedVisibility(
-                        visible = state.subagents.isNotEmpty() || state.subagentsError != null,
+                        visible = state.subagents.isNotEmpty(),
                         enter = expandVertically(tween(180), expandFrom = Alignment.Bottom) + fadeIn(tween(120)),
                         exit = shrinkVertically(tween(160), shrinkTowards = Alignment.Bottom) + fadeOut(tween(100)),
                     ) {
                         SubagentsPanel(
                             subagents = state.subagents,
                             isLoading = state.isLoadingSubagents,
-                            error = state.subagentsError,
+                            error = state.subagentsError.takeIf { connectionIssue == null },
                             onOpen = viewModel::openSubagent,
                             onRetry = viewModel::refreshSubagents,
                         )
@@ -745,7 +756,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                             onRemoveSlashCommand = viewModel::removeSlashCommand,
                             onDismissSuggestions = viewModel::clearComposerSuggestions,
                             onSend = viewModel::send,
-                            isSending = state.isSending || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
+                            isSending = state.isSending,
+                            sendBlocked = !state.networkAvailable || state.isRestoringDraft || state.isLoadingMessages || state.isReverting ||
                                 state.busyQueuedMessageIds.isNotEmpty() || state.selectedConversationId in state.busyConversations,
                             isRunning = state.isRunning,
                             isStopping = state.isStopping,

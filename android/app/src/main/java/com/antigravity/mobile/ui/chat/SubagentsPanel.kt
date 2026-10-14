@@ -58,7 +58,7 @@ fun SubagentsPanel(
             .background(Color(0xFFF4F7FB), shape)
             .animateContentSize(tween(180))
             .padding(horizontal = 16.dp, vertical = 12.dp)
-            .semantics { stateDescription = "${subagents.size} 个直属子代理" },
+            .semantics { stateDescription = if (error != null && subagents.isEmpty()) "子代理状态尚未同步" else "${subagents.size} 个直属子代理" },
     ) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -68,14 +68,14 @@ fun SubagentsPanel(
         ) {
             Column(Modifier.weight(1f)) {
                 Text("子代理", color = Ink, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
-                Text("${subagents.size} 个直属子代理", color = SecondaryInk, fontSize = 13.sp)
+                Text(if (error != null && subagents.isEmpty()) "状态尚未同步" else "${subagents.size} 个直属子代理", color = SecondaryInk, fontSize = 13.sp)
             }
             if (isLoading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = AccentBlue)
             else Text(if (expanded) "收起" else "展开", color = AccentBlue, fontSize = 14.sp)
         }
         error?.let {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(it, Modifier.weight(1f), color = Color(0xFFB3261E), fontSize = 13.sp)
+                Text("子代理状态暂未更新", Modifier.weight(1f), color = SecondaryInk, fontSize = 13.sp)
                 Text(
                     "重试",
                     Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp)

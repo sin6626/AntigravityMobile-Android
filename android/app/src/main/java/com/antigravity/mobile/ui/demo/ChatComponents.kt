@@ -435,6 +435,7 @@ internal fun Composer(
     onDismissSuggestions: () -> Unit = {},
     onSend: () -> Unit,
     isSending: Boolean,
+    sendBlocked: Boolean = false,
     onUnsupported: () -> Unit,
     voiceInput: VoiceInputUiState = VoiceInputUiState(),
     onStartVoice: () -> Unit = onUnsupported,
@@ -465,7 +466,7 @@ internal fun Composer(
     }
     val voiceActive = voiceInput.phase in setOf(VoiceInputPhase.RECORDING, VoiceInputPhase.FINALIZING)
     val canSend = (draft.isNotBlank() || attachments.isNotEmpty() || fileAttachment != null ||
-        workspaceContexts.isNotEmpty() || slashCommand != null) && !isSending && !isStopping && !voiceActive
+        workspaceContexts.isNotEmpty() || slashCommand != null) && !isSending && !sendBlocked && !isStopping && !voiceActive
     var focused by remember { mutableStateOf(false) }
     var plusMenuOpen by remember { mutableStateOf(false) }
     val expanded = focused || attachments.isNotEmpty() || fileAttachment != null ||

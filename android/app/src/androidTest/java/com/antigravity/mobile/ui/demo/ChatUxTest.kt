@@ -2031,7 +2031,7 @@ class ChatUxTest {
         }
     }
 
-    @Test fun conversationPullRetriesWithoutStatusTextAndActionsStayOutsideBubble() {
+    @Test fun conversationRetryKeepsSkeletonDraftAndActionsOutsideBubble() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
             gateway.management = true
@@ -2052,11 +2052,12 @@ class ChatUxTest {
                 compose.onNodeWithText("original message").assertDoesNotExist()
                 gateway.block = {}; finishRead.countDown()
                 compose.waitUntil(10_000) { vm.state.value.messagesError != null && !vm.state.value.isLoadingMessages }
-                listOf("正在连接，生成状态待同步…", "连接已断开，正在自动重连…", "重试", "重试中…").forEach { compose.onNodeWithText(it).assertDoesNotExist() }
+                compose.onNodeWithText("聊天暂未同步，请重试").assertIsDisplayed()
+                compose.onNodeWithContentDescription("聊天内容尚未同步").assertIsDisplayed()
+                compose.onNodeWithContentDescription("重试连接").assertIsDisplayed()
+                compose.onNodeWithText("HTTP 500", substring = true).assertDoesNotExist()
                 gateway.failurePath = null
-                val height = compose.onRoot().fetchSemanticsNode().size.height.toFloat()
-                compose.onRoot().performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width / 2f, height * .25f),
-                    androidx.compose.ui.geometry.Offset(width / 2f, height * .70f), 700) }
+                compose.onNodeWithContentDescription("重试连接").performClick()
                 compose.waitUntil(10_000) { vm.state.value.messagesError == null && !vm.state.value.isLoadingMessages }
                 compose.onNodeWithText("original message").assertIsDisplayed()
                 assertEquals("preserved draft", vm.state.value.draft)
@@ -2166,6 +2167,41 @@ class ChatUxTest {
         compose.onNodeWithContentDescription("发送消息").assertIsNotEnabled()
             .assert(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.StateDescription, "正在发送"))
         assertEquals(1, submitted)
+    }
+
+    @Test fun gatewayFailureKeepsLoadedHistoryAndRetryDoesNotSendTheDraft() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("cached-offline", vm) }
+            val release = CountDownLatch(1)
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.runOnIdle { vm.openConversation("A"); vm.setDraft("断连也保留的草稿") }
+                compose.waitUntil(10_000) { vm.state.value.messages.isNotEmpty() }
+                gateway.failureCode = 530
+                gateway.failurePath = "/gateway/cascade/messages"
+                compose.runOnIdle { vm.retryMessages() }
+                compose.waitUntil(10_000) { vm.state.value.messagesError != null && !vm.state.value.isRetryingConnection }
+                compose.onNodeWithText("original message").assertIsDisplayed()
+                compose.onNodeWithText("聊天暂未同步，请重试").assertIsDisplayed()
+                compose.onNodeWithText("HTTP 530", substring = true).assertDoesNotExist()
+                compose.onNodeWithContentDescription("聊天内容尚未同步").assertDoesNotExist()
+                saveScreenshot("phone-ux-cached-disconnected.png")
+                gateway.failurePath = null
+                gateway.block = { path -> if (path.startsWith("/gateway/cascade/messages")) release.await(5, TimeUnit.SECONDS) }
+                compose.onNodeWithContentDescription("重试连接").performClick()
+                compose.waitUntil(10_000) { vm.state.value.isRetryingConnection }
+                compose.onNodeWithContentDescription("重试连接").assertIsNotEnabled()
+                assertFalse(vm.state.value.isSending)
+                release.countDown()
+                compose.waitUntil(10_000) { !vm.state.value.isRetryingConnection && vm.state.value.messagesError == null }
+                assertEquals("断连也保留的草稿", vm.state.value.draft)
+                assertFalse(gateway.requests.any { it.first.contains("SendUserCascadeMessage") })
+            } finally { release.countDown(); compose.runOnIdle { store.clear() } }
+        }
     }
 
     @Test fun pendingPlanCanBeReadRetriedAndProceeded() {
@@ -2566,13 +2602,16 @@ class ChatUxTest {
                 compose.onNode(hasSetTextAction()).assertDoesNotExist()
                 compose.onNodeWithContentDescription("返回父会话").performClick()
                 compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "A" && vm.state.value.activeSubagent == null }
+                compose.waitUntil(10_000) { vm.state.value.subagents.size == 2 }
 
                 gateway.failurePath = "/gateway/subagents"
                 compose.runOnIdle { vm.refreshSubagents() }
                 compose.waitUntil(10_000) { vm.state.value.subagentsError != null }
-                compose.onNodeWithContentDescription("重试加载子代理").assertIsDisplayed()
+                compose.waitUntil(10_000) { vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.FAILED }
+                compose.onNodeWithContentDescription("重试连接").assertIsDisplayed()
+                compose.onNodeWithContentDescription("重试加载子代理").assertDoesNotExist()
                 gateway.failurePath = null
-                compose.onNodeWithContentDescription("重试加载子代理").performClick()
+                compose.onNodeWithContentDescription("重试连接").performClick()
                 compose.waitUntil(10_000) { vm.state.value.subagentsError == null }
                 assertTrue(gateway.requests.any { it.first == "/gateway/subagents?parentId=A" })
             } finally {

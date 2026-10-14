@@ -127,6 +127,7 @@ internal fun ConversationContent(
     allowRevert: Boolean = true,
     topSpace: androidx.compose.ui.unit.Dp = 0.dp,
     bottomPadding: PaddingValues = PaddingValues(bottom = bottomSpace),
+    waitingForConnection: Boolean = false,
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -184,10 +185,11 @@ internal fun ConversationContent(
         }
         renderItems = prepared
     }
-    if ((isLoading && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
+    if (((isLoading || waitingForConnection) && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         ConversationSkeleton(
             modifier = modifier.padding(top = topSpace),
             bottomPadding = bottomPadding,
+            animated = !waitingForConnection,
         )
         return
     }

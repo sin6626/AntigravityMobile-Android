@@ -68,6 +68,8 @@ class ConnectionManager(private val context: Context) {
 
     private val _endpointStatuses = MutableStateFlow<Map<String, EndpointHealthStatus>>(emptyMap())
     val endpointStatuses: StateFlow<Map<String, EndpointHealthStatus>> = _endpointStatuses.asStateFlow()
+    private val _networkAvailable = MutableStateFlow(isConnectedToNetwork)
+    val networkAvailable: StateFlow<Boolean> = _networkAvailable.asStateFlow()
 
     private val _isProbing = MutableStateFlow(false)
     val isProbing: StateFlow<Boolean> = _isProbing.asStateFlow()
@@ -130,6 +132,7 @@ class ConnectionManager(private val context: Context) {
             }
 
             override fun onAvailable(network: Network) {
+                _networkAvailable.value = true
                 val cellular = isCellular
                 Log.d("ConnectionManager", "Network available: cellular=$cellular, probing...")
                 lastWasCellular = cellular
@@ -142,6 +145,7 @@ class ConnectionManager(private val context: Context) {
                 Log.d("ConnectionManager", "Network lost, waiting for new interface...")
                 scope.launch {
                     delay(300)
+                    _networkAvailable.value = isConnectedToNetwork
                     probeEndpoints(prefs)
                 }
             }

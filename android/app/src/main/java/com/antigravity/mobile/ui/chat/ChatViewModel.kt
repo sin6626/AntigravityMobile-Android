@@ -160,6 +160,8 @@ data class ChatUiState(
     val conversationsError: String? = null,
     val projectsError: String? = null,
     val connectionStatus: ConnectionStatus = ConnectionStatus.DISCONNECTED,
+    val networkAvailable: Boolean = true,
+    val isRetryingConnection: Boolean = false,
 )
 
 enum class VoiceInputPhase { IDLE, RECORDING, FINALIZING, ERROR }
@@ -290,6 +292,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             refreshConversations()
             refreshProjects()
             refreshModels()
+        }
+        viewModelScope.launch {
+            connectionManager.networkAvailable.collect { available ->
+                val recovered = available && !_state.value.networkAvailable
+                _state.value = _state.value.copy(networkAvailable = available)
+                if (recovered) resumeConnection()
+            }
         }
         viewModelScope.launch {
             stream.connectionStatus.collect { status ->
@@ -1512,10 +1521,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startSubagentPolling(parentId: String, visit: Long) {
         subagentsJob = viewModelScope.launch {
-            loadSubagents(parentId, visit, showLoading = true)
+            if (_state.value.networkAvailable) loadSubagents(parentId, visit, showLoading = true)
             while (isActive) {
-                delay(3_000)
-                loadSubagents(parentId, visit, showLoading = false)
+                delay(if (_state.value.subagentsError != null || !_state.value.networkAvailable) 24_000 else 3_000)
+                if (_state.value.networkAvailable) loadSubagents(parentId, visit, showLoading = false)
             }
         }
     }
@@ -2454,9 +2463,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun retryMessages() {
-        val id = _state.value.selectedConversationId ?: return
+        if (_state.value.selectedConversationId == null) return
         if (messagesJob?.isActive == true) return
-        _state.value = _state.value.copy(isLoadingMessages = true, messagesError = null)
         resumeConnection()
     }
 
@@ -2464,16 +2472,25 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     fun resumeConnection() {
         if (!_state.value.isPaired || recoveryJob?.isActive == true) return
         val visit = conversationVisit
+        _state.value = _state.value.copy(isRetryingConnection = !_state.value.networkAvailable ||
+            _state.value.messagesError != null || _state.value.conversationsError != null ||
+            _state.value.subagentsError != null || _state.value.connectionStatus == ConnectionStatus.FAILED)
         recoveryJob = viewModelScope.launch {
-            connectionManager.probeEndpoints(prefs)
-            if (conversationVisit == visit && !_state.value.isSending && !_state.value.isReverting && !_state.value.isStopping) {
-                _state.value.selectedConversationId?.takeUnless { it.startsWith("local:") }?.let { id ->
-                    stream.reconnect()
-                    loadMessages(id)
+            try {
+                connectionManager.probeEndpoints(prefs)
+                if (conversationVisit == visit && !_state.value.isSending && !_state.value.isReverting && !_state.value.isStopping) {
+                    _state.value.selectedConversationId?.takeUnless { it.startsWith("local:") }?.let { id ->
+                        stream.reconnect()
+                        _state.value = _state.value.copy(isLoadingMessages = true)
+                        loadMessages(id).join()
+                        loadSubagents(id, visit, showLoading = false)
+                    }
                 }
+                refreshConversations()
+                refreshProjects()
+            } finally {
+                _state.value = _state.value.copy(isRetryingConnection = false)
             }
-            refreshConversations()
-            refreshProjects()
         }
     }
 
