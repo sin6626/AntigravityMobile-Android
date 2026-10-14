@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -39,99 +41,30 @@ type StreamUpdatePayload struct {
 	ModelDisplayName   string               `json:"modelDisplayName,omitempty"`
 }
 
-// Fingerprint computes a fast signature to detect changes and prevent redundant pushes.
+// Fingerprint compares visible state, excluding transport type and elapsed time alone.
 func (p *StreamUpdatePayload) Fingerprint() string {
-	piKey := "none"
-	if p.PendingInteraction != nil {
-		piKey = fmt.Sprintf("%s:%d:%s", p.PendingInteraction.Type, p.PendingInteraction.StepIndex, p.PendingInteraction.DefaultOptionID)
-	}
-	queuedKey := fmt.Sprintf("%d", len(p.QueuedMessages))
-	if len(p.QueuedMessages) > 0 {
-		var qb strings.Builder
-		qb.WriteString(queuedKey)
-		for _, qm := range p.QueuedMessages {
-			qb.WriteString(";")
-			qb.WriteString(qm.ID)
-			qb.WriteString(":")
-			qb.WriteString(fmt.Sprintf("%d:%d:%d", len(qm.Text), len(qm.Media), len(qm.Attachments)))
-			for _, attachment := range qm.Attachments {
-				qb.WriteString(":" + attachment.MimeType + ":" + attachment.DisplayName)
-			}
-		}
-		queuedKey = qb.String()
-	}
-	tasksKey := fmt.Sprintf("%d", len(p.RunningTasks))
-	if len(p.RunningTasks) > 0 {
-		lastTask := p.RunningTasks[len(p.RunningTasks)-1]
-		tasksKey = fmt.Sprintf("%d:%s:%d", len(p.RunningTasks), lastTask.ID, lastTask.StepIndex)
-	}
-	msgsKey := fmt.Sprintf("%d", p.TotalMessages)
-	if len(p.Messages) > 0 {
-		lastMsg := p.Messages[len(p.Messages)-1]
-		msgsKey = fmt.Sprintf("%d:%s:%d", p.TotalMessages, lastMsg.ID, len(lastMsg.Text))
-	}
-	if len(p.Steps) == 0 {
-		return fmt.Sprintf("%s:%t:%s:%t:%s:%s:%s:%s:%s", p.Status, p.HasError, msgsKey, p.CanProceed, piKey, queuedKey, tasksKey, p.ActiveModel, p.Title)
-	}
-	last := p.Steps[len(p.Steps)-1]
-	lastLen := 0
-	if last.PlannerResponse != nil {
-		lastLen += len(last.PlannerResponse.Response) + len(last.PlannerResponse.Thinking)
-	}
-	if last.Content != "" {
-		lastLen += len(last.Content)
-	}
-	if last.ToolCall != nil {
-		lastLen += len(last.ToolCall.Name) + len(last.ToolCall.ToolSummary) + len(last.ToolCall.ArgumentsJson)
-	}
-	if last.ErrorMessage != nil {
-		lastLen += len(last.ErrorMessage.Error.ShortError) + len(last.ErrorMessage.Error.UserErrorMessage)
-	}
-	return fmt.Sprintf("%s:%t:%d:%d:%s:%s:%d:%s:%t:%s:%s:%s:%s:%s", p.Status, p.HasError, p.TotalSteps, p.TotalTools, last.Type, last.Status, lastLen, msgsKey, p.CanProceed, piKey, queuedKey, tasksKey, p.ActiveModel, p.Title)
+	state := *p
+	state.Type = ""
+	state.Duration = ""
+	return streamContentSignature(state)
 }
 
-// rawTrajectorySignature computes an O(1) lightweight fingerprint of the raw upstream response
-// to skip expensive ParseTrajectoryDetails and regex scans during 250ms stream polling when unchanged.
+// Compare all steps: earlier updates and equal-length corrections are also changes.
 func rawTrajectorySignature(raw *upstreamTrajectoryResp) string {
 	if raw == nil {
 		return ""
 	}
-	steps := raw.Trajectory.Steps
-	n := len(steps)
-	title := ""
-	if raw.Trajectory.Annotations != nil {
-		title = raw.Trajectory.Annotations.Title
-	} else {
-		title = raw.Trajectory.Summary
-	}
-	pamCount := len(raw.PendingAgentMessages)
-	lastPamID := ""
-	lastPamLen := 0
-	if pamCount > 0 {
-		lastPam := raw.PendingAgentMessages[pamCount-1]
-		lastPamID = lastPam.ID
-		lastPamLen = len(lastPam.Content)
-	}
+	return streamContentSignature(raw)
+}
 
-	if n == 0 {
-		return fmt.Sprintf("%s:%d:%s:%d:%s:%d", raw.Status, n, title, pamCount, lastPamID, lastPamLen)
+func streamContentSignature(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		// An unavailable signature must never suppress an update.
+		log.Printf("[Stream] Cannot fingerprint state: %v", err)
+		return ""
 	}
-
-	last := steps[n-1]
-	lastContentLen := len(last.Content)
-	if last.PlannerResponse != nil {
-		lastContentLen += len(last.PlannerResponse.Response) + len(last.PlannerResponse.Thinking)
-	}
-	if last.ToolCall != nil {
-		lastContentLen += len(last.ToolCall.Name) + len(last.ToolCall.ArgumentsJson)
-	}
-	if last.TaskDetails != nil {
-		lastContentLen += len(last.TaskDetails.Description)
-	}
-	hasPI := (last.RequestedInteraction != nil)
-
-	return fmt.Sprintf("%s:%d:%s:%s:%d:%t:%s:%d:%s:%d",
-		raw.Status, n, last.Type, last.Status, lastContentLen, hasPI, title, pamCount, lastPamID, lastPamLen)
+	return fmt.Sprintf("%x", sha256.Sum256(data))
 }
 
 // HandleCascadeStream serves a WebSocket connection for continuous real-time trajectory updates.
@@ -241,20 +174,12 @@ func (p *Proxy) HandleCascadeStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		rawSig := rawTrajectorySignature(rawResp)
-		if !firstPush && rawSig == lastRawSig && (time.Since(lastTitleLookupTime) < 2*time.Second || cachedStreamTitle != "") {
-			// Fast path: Upstream trajectory has not changed at all.
-			// Skip full steps scan, regex image extraction, and payload construction.
-			if lastDetails.Status == "CASCADE_RUN_STATUS_RUNNING" || len(lastDetails.QueuedMessages) > 0 {
-				ticker.Reset(250 * time.Millisecond)
-			} else {
-				ticker.Reset(1200 * time.Millisecond)
-			}
-			return true
+		if firstPush || rawSig == "" || rawSig != lastRawSig {
+			lastDetails = p.ParseTrajectoryDetails(rawResp)
+			lastRawSig = rawSig
 		}
-		lastRawSig = rawSig
-
-		details := p.ParseTrajectoryDetails(rawResp)
-		lastDetails = details
+		// Pending messages have their own source/cache and can change without trajectory changes.
+		details := lastDetails
 		if details.Title != "" && details.Title != "未命名会话" {
 			cachedStreamTitle = details.Title
 		} else if cachedStreamTitle != "" && cachedStreamTitle != "未命名会话" && cachedStreamTitle != "当前会话" {
@@ -272,6 +197,7 @@ func (p *Proxy) HandleCascadeStream(w http.ResponseWriter, r *http.Request) {
 			details.QueuedMessages = []QueuedMessageItem{}
 		}
 		details.QueuedMessages = p.FilterQueuedMessagesAgainstTrajectory(cascadeID, details.QueuedMessages, rawResp.Trajectory.Steps, details.AllMessages)
+		lastDetails = details
 
 		if sink := p.NotificationSink(); sink != nil {
 			sink.OnTrajectoryUpdate(&details)
@@ -320,7 +246,7 @@ func (p *Proxy) HandleCascadeStream(w http.ResponseWriter, r *http.Request) {
 		}
 
 		fp := payload.Fingerprint()
-		if firstPush || fp != lastFingerprint {
+		if firstPush || fp == "" || fp != lastFingerprint {
 			lastFingerprint = fp
 			firstPush = false
 			if err := writeJSON(payload); err != nil {
