@@ -2542,10 +2542,12 @@ internal fun voiceDraftWithTranscript(original: String, transcript: String): Str
     return original + (if (original.last().isWhitespace()) "" else " ") + transcript.trim()
 }
 
-private fun voiceErrorMessage(error: Throwable): String = when {
-    error.message.orEmpty().contains("insufficient authentication scopes", ignoreCase = true) ||
-        error.message.orEmpty().contains("PermissionDenied", ignoreCase = true) ->
+internal fun voiceErrorMessage(error: Throwable): String = when {
+    error.message.orEmpty().contains("insufficient authentication scopes", ignoreCase = true) ->
         "当前电脑账号未开放语音转写"
+    error.message.orEmpty().contains("PermissionDenied", ignoreCase = true) ->
+        "电脑语音服务拒绝访问，请检查授权"
+    error is java.net.SocketTimeoutException -> "语音连接超时，请重试"
     else -> "语音转写失败，请检查电脑端连接后重试"
 }
 
