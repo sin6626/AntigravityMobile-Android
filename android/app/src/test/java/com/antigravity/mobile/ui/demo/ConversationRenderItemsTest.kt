@@ -7,24 +7,6 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationRenderItemsTest {
-    @Test fun replyReadinessOnlyUsesVisibleBodyInTheLatestTurn() {
-        val user = GatewayMessageItem(id = "u", text = "question")
-        val answer = GatewayMessageItem(id = "a", type = "agent", text = "**answer**")
-        fun ready(vararg messages: GatewayMessageItem) =
-            hasPreparedReplyBody(buildConversationRenderItems(messages.toList(), null, isRunning = true))
-        assertTrue(ready(user, answer))
-        assertTrue(ready(answer)) // Reconnected partial history can start with the active answer.
-        val next = user.copy(id = "local:next")
-        assertFalse(ready(user, answer, next))
-        assertFalse(ready(user, answer, next, answer.copy(id = "blank", text = "  ")))
-        assertFalse(ready(next, answer.copy(type = "thought")))
-        assertFalse(ready(next, answer.copy(type = "tools")))
-        assertFalse(ready(next, answer.copy(type = "error")))
-        assertFalse(ready(next, answer, answer.copy(id = "tool", type = "tools")))
-        assertTrue(ready(next.copy(id = "confirmed"), answer))
-        assertTrue(ready(next, answer.copy(text = "", imageUrls = listOf("/image.png"))))
-    }
-
     @Test fun blocksKeepOrderIdentityAndReuseAcrossHistoryAndStreamingUpdates() {
         val user = GatewayMessageItem(id = "user", text = "question")
         val thought = GatewayMessageItem(id = "thought", type = "thought", text = "thinking")

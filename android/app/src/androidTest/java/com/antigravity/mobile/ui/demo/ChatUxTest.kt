@@ -73,7 +73,7 @@ class ChatUxTest {
                 gateway.failurePath = null
                 emit("**即时显示的正文**")
                 compose.waitUntil(5_000) { compose.onAllNodesWithText("即时显示的正文").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertIsDisplayed()
                 saveScreenshot("reply-wait-first-body.png")
                 emit("**即时显示的正文**", running = false)
                 compose.waitUntil(5_000) { !vm.state.value.isRunning }

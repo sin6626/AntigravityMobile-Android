@@ -24,10 +24,10 @@ import androidx.compose.ui.unit.dp
 
 /** Optional recording fixture: uses the Android frame clock, not Compose's virtual test clock. */
 class NativeMotionPlaybackTest {
-    @Test fun replyWaitUsesPlatformFramesAndSettlesAfterTheFirstBody() {
+    @Test fun replyIndicatorUsesPlatformFramesThroughoutStreaming() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val automation = instrumentation.uiAutomation
-        val user = com.antigravity.mobile.data.model.GatewayMessageItem(id = "native-user", text = "等待动画实测")
+        val user = com.antigravity.mobile.data.model.GatewayMessageItem(id = "native-user", text = "帮我打磨一下回复动画")
         val messages = mutableStateOf(listOf(user))
         val running = mutableStateOf(true)
         fun find(node: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
@@ -96,7 +96,11 @@ class NativeMotionPlaybackTest {
             Thread.sleep(400)
             bounds = statusBounds()
             val settled = capture(bounds, "reply-wait-native-body.png")
-            assertTrue("首段衔接结束后不应残留光带", settled.none {
+            val ribbonBounds = android.graphics.Rect(bounds).apply {
+                right = left + (32 * instrumentation.targetContext.resources.displayMetrics.density).toInt()
+            }
+            val ribbon = capture(ribbonBounds)
+            assertTrue("正文输出时左侧光带必须保留", ribbon.any {
                 android.graphics.Color.blue(it) > 180 && android.graphics.Color.red(it) < 80
             })
             val bodyDifferences = (1..5).map {
@@ -105,6 +109,13 @@ class NativeMotionPlaybackTest {
                 settled.indices.count { settled[it] != next[it] }
             }
             assertTrue("生成正文期间文字应继续流光：$bodyDifferences", bodyDifferences.any { it > 20 })
+            assertTrue("正文输出时光带必须继续运动", !ribbon.contentEquals(capture(ribbonBounds)))
+            for (chunk in listOf("左侧光带持续流动。", "文字高光与三个点共享节奏。", "全部输出完成后，整组柔和退场。")) {
+                scenario.onActivity { messages.value = messages.value.dropLast(1) +
+                    messages.value.last().copy(text = messages.value.last().text + "\n\n" + chunk) }
+                awaitText(chunk)
+                Thread.sleep(900)
+            }
             scenario.onActivity { running.value = false }
             val removed = (1..20).any {
                 Thread.sleep(100)

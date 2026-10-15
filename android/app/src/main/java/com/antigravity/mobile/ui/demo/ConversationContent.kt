@@ -140,12 +140,6 @@ internal fun ConversationContent(
     var positioned by remember { mutableStateOf(false) }
     var expandedProcesses by rememberSaveable { mutableStateOf(emptyList<String>()) }
     var renderItems by remember { mutableStateOf<List<ConversationRenderItem>>(emptyList()) }
-    val replyTurnId = messages.lastOrNull { it.isUser }?.id
-    var replyBodyShown by rememberSaveable(replyTurnId) {
-        // Loading the missing user boundary of an already visible reply is not a new turn.
-        val currentIds = messages.asReversed().takeWhile { !it.isUser }.map { it.id }.toSet()
-        mutableStateOf(hasPreparedReplyBody(renderItems.filter { it.message.id in currentIds }))
-    }
     val showReplyProgress = isRunning && !waitingForConnection && (isStopping || !waitingForInteraction)
     val replyOnScreen by remember {
         derivedStateOf {
@@ -207,7 +201,6 @@ internal fun ConversationContent(
             }
         }
         renderItems = prepared
-        if (hasPreparedReplyBody(prepared)) replyBodyShown = true
     }
     if (((isLoading || waitingForConnection) && messages.isEmpty()) || (messages.isNotEmpty() && renderItems.isEmpty())) {
         ConversationSkeleton(
@@ -295,9 +288,8 @@ internal fun ConversationContent(
                 if (hasReplyProgress) item(key = "reply-progress", contentType = "reply-progress") {
                     DisableSelection {
                         AnimatedVisibility(replyVisibility, enter = EnterTransition.None,
-                            exit = fadeOut(tween(120)) + shrinkVertically(tween(120), shrinkTowards = Alignment.Top)) {
-                            ReplyProgress(waiting = !replyBodyShown && !isStopping,
-                                stopping = isStopping, animate = replyOnScreen && showReplyProgress && !isStopping,
+                            exit = fadeOut(tween(180)) + shrinkVertically(tween(180), shrinkTowards = Alignment.Top)) {
+                            ReplyProgress(stopping = isStopping, animate = replyOnScreen,
                                 modifier = if (showReplyProgress) Modifier else Modifier.clearAndSetSemantics {})
                         }
                     }
@@ -333,14 +325,6 @@ internal fun ConversationContent(
         linkedFileUri?.let { uri -> LinkedFilePreview(uri, viewModel) { linkedFileUri = null } }
     }
 }
-
-internal fun hasPreparedReplyBody(items: List<ConversationRenderItem>): Boolean =
-    items.asReversed().takeWhile { !it.message.isUser }.any {
-        it.process.isEmpty() && it.message.isAgent && it.message.type != "thought" &&
-            (it.node != null || it.message.effectiveText.isNotBlank() ||
-                !it.message.media.isNullOrEmpty() || !it.message.imageUrls.isNullOrEmpty() ||
-                it.message.imageDataList.any { bytes -> bytes.isNotEmpty() })
-    }
 
 internal data class ConversationRenderItem(
     val message: GatewayMessageItem,
