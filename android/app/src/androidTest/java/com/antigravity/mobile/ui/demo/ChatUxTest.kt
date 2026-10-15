@@ -46,7 +46,7 @@ class ChatUxTest {
                     vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
                 compose.runOnIdle { vm.setDraft("等待回复的测试问题"); vm.send() }
                 compose.waitUntil(10_000) { !vm.state.value.isSending && vm.state.value.outgoing.isNotEmpty() }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertIsDisplayed()
                 saveScreenshot("reply-wait-sending.png")
                 fun emit(body: String = "", approval: Boolean = false, running: Boolean = true) {
                     val messages = org.json.JSONArray().put(JSONObject().put("id", "confirmed-user").put("type", "user")
@@ -59,21 +59,21 @@ class ChatUxTest {
                 }
                 emit()
                 compose.waitUntil(5_000) { vm.state.value.outgoing.isEmpty() }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertIsDisplayed()
                 emit(approval = true)
                 compose.waitUntil(5_000) { vm.state.value.canProceed }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertDoesNotExist()
                 emit()
                 compose.waitUntil(5_000) { !vm.state.value.canProceed }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertIsDisplayed()
                 gateway.failurePath = "CancelCascadeInvocation"
                 compose.runOnIdle { vm.stopGeneration() }
                 compose.waitUntil(5_000) { !vm.state.value.isStopping && vm.state.value.error != null }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertIsDisplayed()
                 gateway.failurePath = null
                 emit("**即时显示的正文**")
                 compose.waitUntil(5_000) { compose.onAllNodesWithText("即时显示的正文").fetchSemanticsNodes().isNotEmpty() }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertDoesNotExist()
                 saveScreenshot("reply-wait-first-body.png")
                 emit("**即时显示的正文**", running = false)
                 compose.waitUntil(5_000) { !vm.state.value.isRunning }
@@ -81,13 +81,13 @@ class ChatUxTest {
                 gateway.failurePath = "SendUserCascadeMessage"
                 compose.runOnIdle { vm.setDraft("发送失败应恢复"); vm.send() }
                 compose.waitUntil(5_000) { !vm.state.value.isSending && vm.state.value.outgoing.isEmpty() }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertDoesNotExist()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertDoesNotExist()
                 assertTrue(vm.state.value.draft.contains("发送失败应恢复"))
                 gateway.failurePath = null
                 gateway.running = true
                 compose.runOnIdle { vm.openConversation("B") }
                 compose.waitUntil(5_000) { !vm.state.value.isLoadingMessages && vm.state.value.selectedConversationId == "B" }
-                compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true).assertIsDisplayed()
+                compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true).assertIsDisplayed()
                 compose.onNodeWithText("即时显示的正文").assertDoesNotExist()
             } finally { compose.runOnIdle { store.clear() } }
         }

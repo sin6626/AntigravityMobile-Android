@@ -55,7 +55,7 @@ class ReplyWaitAnimationTest {
         compose.waitForIdle()
     }
 
-    private fun spinner() = compose.onNodeWithTag("reply-wait-spinner", useUnmergedTree = true)
+    private fun spinner() = compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true)
     private fun pixels(image: ImageBitmap) = IntArray(image.width * image.height).also { image.readPixels(it) }
     private fun frame() = pixels(spinner().captureToImage())
 
@@ -87,7 +87,7 @@ class ReplyWaitAnimationTest {
             compose.onNodeWithText("第一段正文").assertIsDisplayed()
             spinner().assertExists()
             assertEquals(label.left, compose.onNodeWithText("正在回复…", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot.left, 1f)
-            compose.mainClock.advanceTimeBy(160)
+            compose.mainClock.advanceTimeBy(320)
             spinner().assertDoesNotExist()
             compose.runOnUiThread { messages = listOf(user, answer.copy(text = "**后续正文**")) }
             compose.mainClock.autoAdvance = true

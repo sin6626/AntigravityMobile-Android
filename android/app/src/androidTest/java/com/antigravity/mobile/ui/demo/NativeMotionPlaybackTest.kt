@@ -46,8 +46,8 @@ class NativeMotionPlaybackTest {
         fun statusBounds(): android.graphics.Rect {
             val bounds = android.graphics.Rect()
             awaitText("正在回复").getBoundsInScreen(bounds)
-            // Accessibility omits the decorative spinner; include its 16 dp slot and 8 dp gap.
-            bounds.left = (bounds.left - 24 * instrumentation.targetContext.resources.displayMetrics.density).toInt().coerceAtLeast(0)
+            // Accessibility omits the ribbon; include its 32 dp slot and 10 dp gap.
+            bounds.left = (bounds.left - 42 * instrumentation.targetContext.resources.displayMetrics.density).toInt().coerceAtLeast(0)
             return bounds
         }
         fun capture(bounds: android.graphics.Rect, name: String? = null): IntArray {
@@ -61,7 +61,12 @@ class NativeMotionPlaybackTest {
             } finally { bitmap.recycle() }
         }
         ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
+            val frames = java.util.Collections.synchronizedList(mutableListOf<Long>())
+            val listener = android.view.Window.OnFrameMetricsAvailableListener { _, metrics, _ ->
+                frames.add(metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION))
+            }
             scenario.onActivity { activity ->
+                activity.window.addOnFrameMetricsAvailableListener(listener, android.os.Handler(android.os.Looper.getMainLooper()))
                 val vm = androidx.lifecycle.ViewModelProvider(activity)[com.antigravity.mobile.ui.chat.ChatViewModel::class.java]
                 activity.setContent {
                     Box(Modifier.fillMaxSize().background(Color.White)) {
@@ -71,6 +76,12 @@ class NativeMotionPlaybackTest {
             }
             var bounds = statusBounds()
             Thread.sleep(300)
+            frames.clear()
+            Thread.sleep(6000)
+            val sampled = synchronized(frames) { frames.sorted() }
+            android.util.Log.i("ReplyWaitVerification", "Platform ribbon frames=${sampled.size} " +
+                "p95Ms=${sampled.getOrNull(((sampled.size - 1) * .95).toInt())?.div(1_000_000.0)} " +
+                "over32ms=${sampled.count { it > 32_000_000 }}")
             val first = capture(bounds, "reply-wait-native-0.png")
             val differences = (1..5).map { index ->
                 Thread.sleep(160)
@@ -82,10 +93,10 @@ class NativeMotionPlaybackTest {
             scenario.onActivity { messages.value += com.antigravity.mobile.data.model.GatewayMessageItem(
                 id = "native-reply", type = "agent", text = "**正文即时显示**") }
             awaitText("正文即时显示")
-            Thread.sleep(300)
+            Thread.sleep(400)
             bounds = statusBounds()
             val settled = capture(bounds, "reply-wait-native-body.png")
-            assertTrue("首段衔接结束后不应残留蓝色进度圈", settled.none {
+            assertTrue("首段衔接结束后不应残留光带", settled.none {
                 android.graphics.Color.blue(it) > 180 && android.graphics.Color.red(it) < 80
             })
             Thread.sleep(200)
@@ -98,6 +109,7 @@ class NativeMotionPlaybackTest {
             capture(bounds, "reply-wait-native-finished.png")
             assertTrue("回复结束后等待状态应移除", removed)
             assertNotNull(find(automation.rootInActiveWindow, "正文即时显示"))
+            scenario.onActivity { it.window.removeOnFrameMetricsAvailableListener(listener) }
         }
     }
 
