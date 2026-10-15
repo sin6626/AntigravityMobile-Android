@@ -99,8 +99,12 @@ class NativeMotionPlaybackTest {
             assertTrue("首段衔接结束后不应残留光带", settled.none {
                 android.graphics.Color.blue(it) > 180 && android.graphics.Color.red(it) < 80
             })
-            Thread.sleep(200)
-            assertTrue("生成正文期间状态行应保持静止", settled.contentEquals(capture(bounds)))
+            val bodyDifferences = (1..5).map {
+                Thread.sleep(160)
+                val next = capture(bounds)
+                settled.indices.count { settled[it] != next[it] }
+            }
+            assertTrue("生成正文期间文字应继续流光：$bodyDifferences", bodyDifferences.any { it > 20 })
             scenario.onActivity { running.value = false }
             val removed = (1..20).any {
                 Thread.sleep(100)

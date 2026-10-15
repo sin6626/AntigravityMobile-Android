@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -36,8 +37,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
@@ -45,6 +50,8 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.text.font.FontWeight
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -52,6 +59,11 @@ import kotlin.math.sin
 internal fun ReplyProgress(waiting: Boolean, stopping: Boolean, animate: Boolean, modifier: Modifier = Modifier) {
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     val motionScale = rememberCoroutineScope().coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f
+    val moving = animate && !stopping && lifecycle.isAtLeast(Lifecycle.State.RESUMED) && motionScale > 0f
+    val phase: State<Float> = if (moving) {
+        rememberInfiniteTransition(label = "reply progress").animateFloat(0f, 1f,
+            infiniteRepeatable(tween(2800, easing = LinearEasing)), label = "reply phase")
+    } else remember { mutableFloatStateOf(0f) }
     Row(modifier.padding(top = 12.dp).semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
         horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         // Keep the slot after the first body arrives so the status text never shifts sideways.
@@ -59,22 +71,33 @@ internal fun ReplyProgress(waiting: Boolean, stopping: Boolean, animate: Boolean
             androidx.compose.animation.AnimatedVisibility(waiting, enter = EnterTransition.None,
                 exit = fadeOut(tween(260, easing = FastOutSlowInEasing)) +
                     scaleOut(tween(260, easing = FastOutSlowInEasing), targetScale = .72f)) {
-                val moving = animate && lifecycle.isAtLeast(Lifecycle.State.RESUMED) && motionScale > 0f
                 Box(Modifier.testTag("reply-wait-ribbon")) {
-                    ReplyRibbon(moving)
+                    ReplyRibbon(moving, phase)
                 }
             }
         }
-        Text(if (stopping) "正在停止…" else "正在回复…", color = SecondaryInk, fontSize = 14.sp)
+        Text(if (stopping) "正在停止…" else "正在回复…", color = SecondaryInk,
+            fontSize = 14.sp, fontWeight = FontWeight.Medium, letterSpacing = .2.sp,
+            modifier = Modifier.graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithCache {
+                    val bandWidth = size.width * .9f
+                    val sheen = Brush.linearGradient(
+                        0f to Color.Transparent, .28f to Color(0xFF537DAE),
+                        .5f to Color(0xFF9CAAC2), .72f to Color(0xFF8974B0), 1f to Color.Transparent,
+                        start = Offset.Zero, end = Offset(bandWidth, size.height * .35f))
+                    onDrawWithContent {
+                        drawContent()
+                        // Tint only the glyphs; sharing the ribbon clock keeps layout and semantics still.
+                        if (moving) translate(left = phase.value * (size.width + bandWidth) - bandWidth) {
+                            drawRect(sheen, size = Size(bandWidth, size.height), blendMode = BlendMode.SrcAtop)
+                        }
+                    }
+                })
     }
 }
 
 @Composable
-private fun ReplyRibbon(moving: Boolean) {
-    val phase: State<Float> = if (moving) {
-        rememberInfiniteTransition(label = "reply ribbon").animateFloat(0f, 1f,
-            infiniteRepeatable(tween(2800, easing = LinearEasing)), label = "ribbon phase")
-    } else remember { mutableFloatStateOf(0f) }
+private fun ReplyRibbon(moving: Boolean, phase: State<Float>) {
     val path = remember { Path() }
     val highlight = remember { Path() }
     val measure = remember { PathMeasure() }

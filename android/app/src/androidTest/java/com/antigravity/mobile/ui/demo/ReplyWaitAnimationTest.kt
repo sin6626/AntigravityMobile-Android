@@ -58,6 +58,36 @@ class ReplyWaitAnimationTest {
     private fun spinner() = compose.onNodeWithTag("reply-wait-ribbon", useUnmergedTree = true)
     private fun pixels(image: ImageBitmap) = IntArray(image.width * image.height).also { image.readPixels(it) }
     private fun frame() = pixels(spinner().captureToImage())
+    private fun labelFrame() = pixels(compose.onNodeWithText("正在回复…", useUnmergedTree = true).captureToImage())
+
+    @Test fun textShimmersDuringWaitingAndOutputButStopsWhenStopping() {
+        compose.mainClock.autoAdvance = false
+        var waiting by mutableStateOf(true)
+        try {
+            compose.setContent { ReplyProgress(waiting, stopping, true) }
+            compose.mainClock.advanceTimeBy(32)
+            val label = compose.onNodeWithText("正在回复…", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+            for (beforeBody in listOf(true, false)) {
+                compose.runOnUiThread { waiting = beforeBody }
+                compose.mainClock.advanceTimeBy(320)
+                val first = labelFrame()
+                val differences = (1..8).map {
+                    compose.mainClock.advanceTimeBy(160)
+                    val next = labelFrame()
+                    first.indices.count { first[it] != next[it] }
+                }
+                assertTrue("文字自身必须有流光，等待=$beforeBody: $differences", differences.any { it > 20 })
+                assertEquals(label, compose.onNodeWithText("正在回复…", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot)
+            }
+            spinner().assertDoesNotExist()
+            compose.runOnUiThread { stopping = true }
+            compose.mainClock.advanceTimeBy(320)
+            val stopped = compose.onNodeWithText("正在停止…", useUnmergedTree = true)
+            val first = pixels(stopped.captureToImage())
+            compose.mainClock.advanceTimeBy(640)
+            assertArrayEquals(first, pixels(stopped.captureToImage()))
+        } finally { compose.mainClock.autoAdvance = true }
+    }
 
     @Test fun waitingMovesButFirstBodyNeverWaitsForTheFade() {
         // The test policy cancels infinite animations started while autoAdvance is enabled.
@@ -176,8 +206,10 @@ class ReplyWaitAnimationTest {
         try {
             compose.mainClock.advanceTimeBy(200)
             val still = frame()
+            val stillText = labelFrame()
             compose.mainClock.advanceTimeBy(320)
             assertArrayEquals(still, frame())
+            assertArrayEquals(stillText, labelFrame())
         } finally { compose.mainClock.autoAdvance = true }
         compose.runOnIdle { messages += answer }
         compose.waitUntil(5_000) { compose.onAllNodesWithText("第一段正文").fetchSemanticsNodes().isNotEmpty() }
@@ -207,14 +239,18 @@ class ReplyWaitAnimationTest {
                 }
                 compose.mainClock.advanceTimeBy(200)
                 val still = frame()
+                val stillText = labelFrame()
                 compose.mainClock.advanceTimeBy(320)
                 assertArrayEquals(still, frame())
+                assertArrayEquals(stillText, labelFrame())
             }
             compose.runOnUiThread { visible = true }
             compose.mainClock.advanceTimeBy(200)
             val resumed = frame()
+            val resumedText = labelFrame()
             compose.mainClock.advanceTimeBy(160)
             assertFalse(resumed.contentEquals(frame()))
+            assertFalse(resumedText.contentEquals(labelFrame()))
         } finally { compose.mainClock.autoAdvance = true }
     }
 
