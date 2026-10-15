@@ -25,6 +25,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -110,7 +111,7 @@ import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
+fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConversation: Boolean = false) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val connectionIssue = chatConnectionIssue(state)
     val activeConversations = state.conversations.filterNot { it.isArchived }
@@ -417,7 +418,11 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit) {
                                     isRefreshing = state.isLoadingMessages && state.messages.isNotEmpty(),
                                     modifier = Modifier.align(Alignment.TopCenter).padding(top = topBarHeight))
                             }) {
-                            ConversationContent(
+                            // Defer expensive history composition until the system splash has finished animating.
+                            if (deferConversation) Box(Modifier.fillMaxSize().clearAndSetSemantics {}) {
+                                ConversationSkeleton(Modifier.padding(top = topBarHeight),
+                                    bottomPadding = conversationPadding, animated = false)
+                            } else ConversationContent(
                                 viewModel = viewModel,
                                 messages = state.messages + state.outgoing.filter { it.conversationId == state.selectedConversationId }.map { it.message },
                                 streamingMessageId = state.streamingMessageId,

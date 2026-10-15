@@ -5,13 +5,22 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-15 App 图标与系统开屏
+
+- 用户确认影片名《能用之后》及原项目归属，同时要求实际生图制作 App 图标、认真打磨开屏。原图标从初始化提交沿用，原 MainActivity 未设置定制开屏。
+- 已用内置 imagegen 生成青蓝紫连续立体光带，透明源图 `android/app/src/main/res/drawable-nodpi/multigravity_mark.png`，1254×1254。普通/圆形 Adaptive Icon、Android 13+ monochrome 与启动屏共用该素材；应用名仍 Multigravity。原始提示词、资源策略和验收在 `android/design/branding/README.md`。
+- 增加 AndroidX core-splashscreen 1.2.0 兼容层，接续实际系统图标；760 ms 内浮起 8 dp、最多放大 4.5%、扫光并与背景淡出，不添加第二个 Splash Activity。不等待网络；页面重建、深链接、关闭系统动画时跳过，自后台返回不重播，后台中断取消并清理快照。
+- 实际长历史启动中发现主线程时间轴从约 0.42 跳至 0.99，单独组件测试不能证明实际流畅。现在只在开屏期间延后历史富文本组合，使用静态骨架承接，ViewModel 同步和草稿保留；真实录屏复查退出透明度连续。最终无诊断日志。
+- Debug/AndroidTest 构建及 4 项不同聚焦检查通过（图标过渡/清理、系统关闭动画、延后历史仍同步并保草稿、原回复流光回归）。系统动画测试恢复了原配置；真实 HTTP 200、WebSocket 101，页面无连接错误。证据 `.verification/2026-10-15-brand-launch/`；`launch-smooth.mp4` 是最终实际冷启动，`launch-preview.gif` 为局部等速预览。
+- 最新 APK 已保数据安装 API 37 模拟器，SHA256 `0C13B2A9E3886EB7EED77EC6D903084A743E43BFE3CD299F8AAA399260024DF9`。录屏下 Debug 冷启动 TotalTime 3436 ms，不等于 760 ms 动画时长。Android 26～30 实机、真机性能、真实配对深链接未验；没有改配对或重启网关。
+
 ### 2026-10-15 项目成长短片（进行中，故事方向待审）
 
 - 用户要求安装 `EverMind-AI/Raven/skills/git-story-film` 并为当前项目制作视频；已明确受众为个人作品集，突出开发过程。默认中文、约 2 分钟、16:9，最终目标 4K/60fps，字幕与合成配乐。
 - skill 已安装到 `C:/Users/F/.codex/skills/git-story-film`，上游修订 `74614a4f14448e4178b7391042c9e4e74023719a`，36 个文件与源文件逐一 SHA256 比较通过。使用 skill-installer 的项目内副本，仅取消递归清理并保留项目内安装缓存，未批量删除文件。
 - 按用户临时文件规则，制作项目放在 `.verification/git-story-film/`，独立 Git 管理，保留上游引擎 MIT 许可证。已安装 puppeteer-core，下载 OFL 中文/英文字体并验证 Chrome 启动关闭；尚未运行影片渲染。上游渲染器的递归删除需在执行前适配，现有 Fingerling ffmpeg 缺 libx264，正式导出前需准备兼容二进制。
 - 产品历史固定为 `add1c8a`，共 128 次提交、14 个活跃日期，2026-09-26～2026-10-15；10 月 13 日最多 28 次，52 个 feat/perf 前缀提交。无标签、无 GitHub Release、无 revert 前缀提交；首提交是导入已有 Android 代码，不能包装成整个系统从零诞生。
-- 已完成并按用户纠正修订第 1 步 `OUTLINE.md`：放弃《把桌面装进口袋》，当前建议《能用之后》，副标题“基于 antigravity-mobile 的前端重做与功能扩展”。大纲、timeline.json、source-facts.json 与制作 Agent.md 均在制作目录。skill 明确要求每步批准后才能继续，目前等待故事方向确认，未制作角色表/分镜/完整动画/MP4，不得宣称视频任务完成，也不调用完成提醒。
+- 用户已确认第 1 步《能用之后》及“基于 antigravity-mobile 的前端重做与功能扩展”定位，要求明确九哥贡献。已完成第 2 步角色表：`.verification/git-story-film/cast-sheet.html`、`after-cast.js` 和 `out/cast/0s.png`；8 种表情、4 组各 4 个动作关键姿态、3 种材质与 1×/2×/3× 检查。已验证页面无错误及各姿态不同，当前等待角色形象确认。skill 明确每步批准后才能继续，作品集完整分镜/动画/MP4 尚未制作，不能把 App 开屏录像当作品集影片完成，也不调用总任务完成提醒。
 - 用户明确来源为九哥（GHSaiMo）的 `antigravity-mobile` 1.0.3；用户与作者同群，关于 Remote 体验不佳和创作动机的背景由用户提供。已通过 GitHub 插件核实上游 v1.0.3 Release（2026-09-25）及 README 中 Go 网关、ConnectRPC/WebSocket、language_server 架构。开场与片尾应说明上游贡献，不能声称底层远程方案由本项目首创。
 - 用户补充：后端也有修改。已核实 `23ba926` 多选协议、`fb44ac1` 文件附件转发、`0d66384` 工作区查询、`229a822` diff 审阅后端、`4a82714` MCP/权限查询和 `0478215` 流式去重修复。准确定位为“以前端重做和体验打磨为重点、同时包含配套网关扩展与修复”，不是后端完全未改；不泛化为上游最新版本也没有这些能力。
 

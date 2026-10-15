@@ -31,6 +31,29 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 class ChatUxTest {
+    @Test fun launchDefersHistoryDrawingButKeepsSyncAndDraftIntact() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.messageText = "开屏结束后显示的历史"
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "launch-test" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("launch", vm) }
+            val deferred = mutableStateOf(true)
+            try {
+                compose.runOnIdle { vm.openConversation("A"); vm.setDraft("原有草稿") }
+                compose.setContent { ChatDemoScreen(vm, {}, deferConversation = deferred.value) }
+                compose.waitUntil(10_000) { vm.state.value.messages.any { it.effectiveText == gateway.messageText } }
+                compose.onNodeWithText(gateway.messageText).assertDoesNotExist()
+                assertEquals("原有草稿", vm.state.value.draft)
+                compose.runOnIdle { deferred.value = false }
+                compose.waitUntil(5_000) { compose.onAllNodesWithText(gateway.messageText).fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithText(gateway.messageText).assertIsDisplayed()
+                assertEquals("原有草稿", vm.state.value.draft)
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun replyWaitFollowsRealSendApprovalFailureAndConversationState() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
