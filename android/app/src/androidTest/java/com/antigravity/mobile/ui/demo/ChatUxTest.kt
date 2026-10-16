@@ -1892,6 +1892,38 @@ class ChatUxTest {
         }
     }
 
+    @Test fun replyFooterLoadsChangesAndOpensExistingReviewWithoutMixingConversations() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.diffFixture = true
+            gateway.liveStream = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token"; lastConversationId = "A" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("reply-diff-summary", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingMessages &&
+                    vm.state.value.connectionStatus == com.antigravity.mobile.data.service.ConnectionStatus.CONNECTED }
+                gateway.emit("A", """{"type":"update","cascadeId":"A","status":"IDLE","isFullSnapshot":true,"messages":[
+                    {"id":"step-0","type":"user","text":"把文件阅读体验再打磨一下","stepIndex":0,"imageUrls":["${gateway.url}/image.png"]},
+                    {"id":"reply","type":"agent","text":"已优化文件阅读体验。\n\n代码现在支持自动换行，长行也能完整阅读。"}]}""")
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("审阅当前会话变更：1 个文件，新增 1 行，删除 1 行").fetchSemanticsNodes().isNotEmpty() }
+                val footer = compose.onNodeWithContentDescription("审阅当前会话变更：1 个文件，新增 1 行，删除 1 行")
+                assertTrue(footer.fetchSemanticsNode().boundsInRoot.top >=
+                    compose.onNodeWithText("代码现在支持自动换行，长行也能完整阅读。").fetchSemanticsNode().boundsInRoot.bottom)
+                saveScreenshot("reply-images-and-changes-footer.png")
+                footer.performClick()
+                compose.onNodeWithText("Agent.md").assertIsDisplayed()
+                compose.onNodeWithText("new line").assertIsDisplayed()
+                compose.onNodeWithContentDescription("关闭变更审阅").performClick()
+                compose.runOnIdle { vm.openConversation("B") }
+                compose.waitUntil(5_000) { vm.state.value.selectedConversationId == "B" && !vm.state.value.isLoadingMessages }
+                compose.onNodeWithContentDescription("审阅当前会话变更：1 个文件，新增 1 行，删除 1 行").assertDoesNotExist()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun currentChangesKeepPositionedCommentsAndSubmitDesktopShape() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->

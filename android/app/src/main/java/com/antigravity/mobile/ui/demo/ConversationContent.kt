@@ -132,6 +132,8 @@ internal fun ConversationContent(
     waitingForConnection: Boolean = false,
     isStopping: Boolean = false,
     waitingForInteraction: Boolean = false,
+    diffSummary: ConversationDiffSummary? = null,
+    onReviewChanges: () -> Unit = {},
 ) {
     val listState = rememberLazyListState(cacheWindow = remember {
         LazyLayoutCacheWindow(aheadFraction = 1f, behindFraction = 0.5f)
@@ -210,7 +212,7 @@ internal fun ConversationContent(
         )
         return
     }
-    LaunchedEffect(renderItems, hasReplyProgress) {
+    LaunchedEffect(renderItems, hasReplyProgress, diffSummary) {
         val newLocal = newestLocalId != null && newestLocalId != lastScrolledLocalId &&
             renderItems.any { it.message.id == newestLocalId }
         if (renderItems.isNotEmpty() && (!positioned || followLatest || newLocal)) {
@@ -278,6 +280,9 @@ internal fun ConversationContent(
                                 MessageRow(item.message, viewModel, item.node, item.blockIndex == 0, allowRevert)
                             }
                         } else MessageRow(item.message, viewModel, item.node, item.blockIndex == 0, allowRevert)
+                        if (item.canCopy && index == renderItems.lastIndex && !isRunning && diffSummary != null) DisableSelection {
+                            ConversationChangesBar(diffSummary, onReviewChanges)
+                        }
                         if (item.canCopy) DisableSelection {
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                                 CopyTextButton(item.message.effectiveText, "复制整条回复")

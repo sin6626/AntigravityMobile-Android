@@ -107,6 +107,8 @@ import com.antigravity.mobile.ui.chat.RunningTasksPanel
 import com.antigravity.mobile.ui.chat.SubagentsPanel
 import com.antigravity.mobile.ui.chat.SubagentReadOnlyBar
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -142,6 +144,18 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
     val projectListState = rememberLazyListState()
     var planPreviewOpen by rememberSaveable(state.selectedConversationId, state.proceedArtifactUri) { mutableStateOf(false) }
     var diffReviewOpen by rememberSaveable(state.selectedConversationId) { mutableStateOf(false) }
+    var diffSummary by remember(state.selectedConversationId) { mutableStateOf<ConversationDiffSummary?>(null) }
+    val lastMessage = state.messages.lastOrNull()
+    LaunchedEffect(state.selectedConversationId, state.isRunning, state.isLoadingMessages, lastMessage?.id,
+        state.networkAvailable, state.messagesError, state.activeSubagent) {
+        if (!state.isRunning && !state.isLoadingMessages && state.messagesError == null && state.networkAvailable &&
+            state.activeSubagent == null && lastMessage?.isAgent == true) viewModel.loadDiffReview()
+    }
+    LaunchedEffect(state.diffReview) {
+        diffSummary = state.diffReview?.takeIf { it.cascadeId == state.selectedConversationId }?.let {
+            withContext(Dispatchers.Default) { summarizeConversationDiff(it) }
+        }
+    }
     val planPreviewListState = rememberSaveable(
         state.selectedConversationId,
         state.proceedArtifactUri,
@@ -440,6 +454,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
                                 waitingForConnection = state.messagesError != null || !state.networkAvailable,
                                 isStopping = state.isStopping,
                                 waitingForInteraction = state.pendingInteraction != null || state.canProceed,
+                                diffSummary = diffSummary.takeIf { !state.isLoadingDiffReview && state.diffReviewError == null && state.activeSubagent == null },
+                                onReviewChanges = { diffReviewOpen = true },
                                 modifier = Modifier.fillMaxSize().imePadding().pointerInput(Unit) {
                                     awaitEachGesture {
                                         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
