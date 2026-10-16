@@ -5,6 +5,29 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-16 真机样式美化与文件/图片打通查看全链路修复
+
+- **用户反馈**：
+  1. 真机上文件/文档预览弹窗样式差，底部按钮排版难看（底部出现孤零零的右对齐纯文本【关闭】按钮，界面不协调）。
+  2. 真机上传完图片后无法打开看大图；别的文件（PDF、TXT、DOC、代码等）也需要确保能打开看。
+- **视觉与排版重构 (`LinkedFilePreview.kt`)**：
+  - 顶部 Header 重构：增加类型图标徽章（根据扩展名/类型分别展示代码、Markdown、图片、音频、视频、压缩包、PDF、文本不同色彩与矢量图标）、文件名加粗标题、文件类型副标题（如 "Markdown 文档"、"Kotlin 源码"、"PDF 文档" 等）、复制按钮及右上角显式浅灰圆形【✕ 关闭】按钮（36dp CircleShape，单手极易触达）。
+  - 底部按钮排版彻底优化：彻底移除孤零零的右对齐“关闭”文字行，保留整齐匀称的 `LinkedFileActions` 胶囊操作按钮（【保存】、【分享】、【打开/播放】）；若是方案审阅，评论编辑器与提交反馈合理收纳。
+  - 外部打开全面打通：`showOpen` 设为 `true`，用户对任何文本、代码、PDF、音视频或图片均可一键调用系统外部应用（如 WPS、相册、播放器）打开查看。
+- **图片全链路查看打通 (`ChatImage.kt` / `ApiClient.kt` / `ChatComponents.kt`)**：
+  - `ApiClient` 网络鉴权强化：`mediaImageLoader` 复用带自动选路容灾与鉴权的基础 client，同 host 或 `/api/v1/files/raw` 请求注入 `Authorization: Bearer <token>`。
+  - `ImageViewer` 大图预览交互：增加右上角悬浮深色半透明圆形【✕】关闭按钮，任何时候点击均可退出看大图。
+  - `ZoomableImage` 缩略图底图降级：引入 `thumbnailModel`，在原图加载中或失败时将已有的内存字节/缩略图直接垫底显示，彻底消除白屏或打不开的情况。
+  - 图片来源兼容性：`MessageImages` 同时提取 `imageDataList`、`media`、`imageUrls` 以及 `attachments` 中的图片附件，杜绝网关格式差异导致图片丢失。
+  - 待发送图片预览：`AttachmentTray` 待发送图片缩略图点击绑定 `ImageViewer` 大图预览，用户在发送前即可放大确认。
+- **文件全链路查看打通 (`ConversationContent.kt` / `ChatComponents.kt`)**：
+  - 聊天气泡附件点击激活：`MessageAttachments` 绑定 `quietClickable`，点击直接调用 `richLinkAction` 调起 `LinkedFilePreview`，在弹窗中原生预览文本/代码，或调用系统兼容应用打开 PDF、Office 文档、音视频。
+  - 链接协议扩展：`richLinkAction` 兼容所有本地/文件链接，统一唤起文件预览弹窗。
+  - 待发送文件预览：输入框上方 `FileAttachmentChip` 点击可通过系统 `Intent.ACTION_VIEW` 调用外部应用打开预览。
+- **质量验证**：
+  - `testDebugUnitTest` 54 个单元测试任务全数通过（BUILD SUCCESSFUL in 6s）。
+  - `assembleDebug` 成功打包生成最新 Debug APK（36MB，`android/app/build/outputs/apk/debug/app-debug.apk`）。
+
 ### 2026-10-15 App 图标与系统开屏
 
 - 用户确认影片名《能用之后》及原项目归属，同时要求实际生图制作 App 图标、认真打磨开屏。原图标从初始化提交沿用，原 MainActivity 未设置定制开屏。

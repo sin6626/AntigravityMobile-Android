@@ -1,7 +1,11 @@
 package com.antigravity.mobile.ui.demo
 
+import android.content.Intent
 import android.net.Uri
 import coil.compose.AsyncImage
+import coil.imageLoader
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.ui.platform.LocalContext
 import com.antigravity.mobile.ui.chat.PendingImage
 import com.antigravity.mobile.ui.chat.PendingFile
 import com.antigravity.mobile.ui.chat.VoiceInputPhase
@@ -831,14 +835,16 @@ private fun ComposerSettings(
 
 @Composable
 private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) {
+    var previewIndex by remember { mutableStateOf<Int?>(null) }
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-        items(images, key = { it.uri.toString() }) { image ->
+        itemsIndexed(images, key = { _, img -> img.uri.toString() }) { index, image ->
             Box(Modifier.animateItem(fadeInSpec = tween(120), placementSpec = tween(180), fadeOutSpec = null)) {
                 AsyncImage(
                     model = image.bytes,
-                    contentDescription = "待发送图片",
+                    contentDescription = "待发送图片，点击查看大图",
                     contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(58.dp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)),
+                    modifier = Modifier.size(58.dp).background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp))
+                        .quietClickable(RoundedCornerShape(10.dp)) { previewIndex = index },
                 )
                 Box(Modifier.size(48.dp).align(Alignment.TopEnd)
                     .semantics { contentDescription = "移除待发送图片" }
@@ -847,6 +853,19 @@ private fun AttachmentTray(images: List<PendingImage>, onRemove: (Uri) -> Unit) 
                 }
             }
         }
+    }
+    previewIndex?.let { idx ->
+        ImageViewer(
+            model = images.getOrNull(idx)?.bytes,
+            loader = LocalContext.current.imageLoader,
+            title = "待发送图片",
+            onClose = { previewIndex = null },
+            index = idx,
+            count = images.size,
+            onSelect = { previewIndex = it },
+            modelAt = { images.getOrNull(it)?.bytes },
+            thumbnailAt = { images.getOrNull(it)?.bytes },
+        )
     }
 }
 
@@ -911,24 +930,39 @@ private fun SendAction(canSend: Boolean, onSend: () -> Unit, isRunning: Boolean,
 
 @Composable
 private fun FileAttachmentChip(file: PendingFile, onRemove: () -> Unit) {
+    val context = LocalContext.current
+    fun openFile() {
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(file.uri, file.mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching {
+            context.startActivity(Intent.createChooser(intent, "打开待发送文件"))
+        }
+    }
     Surface(
         color = Color(0xFFF4F5F7),
         shape = RoundedCornerShape(14.dp),
         modifier = Modifier.fillMaxWidth().semantics {
-            contentDescription = "待发送文件，${file.displayName}，${formatFileSize(file.size)}，${file.mimeType}"
+            contentDescription = "待发送文件，${file.displayName}，${formatFileSize(file.size)}，${file.mimeType}，点击可打开预览"
         },
     ) {
         Row(Modifier.heightIn(min = 58.dp).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(40.dp).background(AccentBlue.copy(alpha = .10f), RoundedCornerShape(11.dp)),
-                contentAlignment = Alignment.Center) {
-                Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(21.dp))
-            }
-            Spacer(Modifier.width(10.dp))
-            Column(Modifier.weight(1f)) {
-                Text(file.displayName, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("待发送 · ${formatFileSize(file.size)} · ${file.mimeType}", color = SecondaryInk, fontSize = 12.sp,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(
+                Modifier.weight(1f).quietClickable(RoundedCornerShape(10.dp), onClick = ::openFile),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(40.dp).background(AccentBlue.copy(alpha = .10f), RoundedCornerShape(11.dp)),
+                    contentAlignment = Alignment.Center) {
+                    Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(21.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(file.displayName, color = Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("待发送 · ${formatFileSize(file.size)} · ${file.mimeType}", color = SecondaryInk, fontSize = 12.sp,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
             Box(Modifier.size(48.dp).semantics { contentDescription = "移除文件 ${file.displayName}" }
                 .quietClickable(CircleShape, onClick = onRemove), contentAlignment = Alignment.Center) {

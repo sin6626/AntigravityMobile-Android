@@ -99,7 +99,7 @@ class ApiClient(
     val mediaImageLoader: ImageLoader by lazy {
         ImageLoader.Builder(context.applicationContext)
             .components { add(SvgDecoder.Factory()) }
-            .okHttpClient(OkHttpClient.Builder().addInterceptor(ApiTraceInterceptor()).build())
+            .okHttpClient(client)
             .build()
     }
 
@@ -108,9 +108,8 @@ class ApiClient(
         val builder = ImageRequest.Builder(context.applicationContext).data(url)
         val gateway = currentBaseUrl?.toHttpUrlOrNull()
         val media = url.toHttpUrlOrNull()
-        if (gateway != null && media != null && gateway.scheme == media.scheme &&
-            gateway.host == media.host && gateway.port == media.port
-        ) {
+        val isGateway = (gateway != null && media != null && gateway.host.equals(media.host, ignoreCase = true)) || (media?.encodedPath?.startsWith("/api/v1/files/raw") == true)
+        if (isGateway) {
             prefs.deviceToken?.takeIf { it.isNotBlank() }?.let { builder.addHeader("Authorization", "Bearer $it") }
         }
         return builder.build()

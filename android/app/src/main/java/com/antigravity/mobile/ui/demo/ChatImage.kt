@@ -12,6 +12,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -19,6 +20,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
@@ -34,6 +37,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
@@ -54,11 +58,18 @@ import com.antigravity.mobile.ui.chat.ChatViewModel
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.abs
-import kotlinx.coroutines.launch
 
 @Composable
 internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel) {
-    val count = maxOf(message.imageDataList.size, message.media?.size ?: 0, message.imageUrls?.size ?: 0)
+    val attachmentImages = remember(message.attachments) {
+        message.attachments.orEmpty().filter { it.mimeType.startsWith("image/") }
+    }
+    val count = maxOf(
+        message.imageDataList.size,
+        message.media?.size ?: 0,
+        message.imageUrls?.size ?: 0,
+        attachmentImages.size
+    )
     if (count == 0) return
     var selected by remember(message.id) { mutableStateOf<Int?>(null) }
     val thumbnails = remember(message.imageDataList, message.media) {
@@ -67,7 +78,16 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
             remote ?: message.imageDataList.getOrNull(index)?.takeIf { it.isNotEmpty() }
         }
     }
-    val originals = remember(message.imageUrls, viewModel) { message.imageUrls.orEmpty().map(viewModel::mediaImageRequest) }
+    val originals = remember(message.imageUrls, attachmentImages, viewModel) {
+        List(count) { index ->
+            val fromUrl = message.imageUrls?.getOrNull(index)?.let(viewModel::mediaImageRequest)
+            if (fromUrl != null) fromUrl
+            else {
+                val attUri = attachmentImages.getOrNull(index)?.uri
+                if (!attUri.isNullOrBlank()) viewModel.linkedImageRequest(attUri) else null
+            }
+        }
+    }
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp), maxItemsInEachRow = 3) {
         repeat(count) { index ->
             val thumbnail = thumbnails.getOrNull(index)
@@ -77,7 +97,7 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
             var loading by remember(attempt) { mutableStateOf(true) }
             var failed by remember(attempt) { mutableStateOf(false) }
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(Modifier.size(84.dp).clip(RoundedCornerShape(10.dp)).background(androidx.compose.ui.graphics.Color(0xFFF3F3F3)),
+                Box(Modifier.size(84.dp).clip(RoundedCornerShape(10.dp)).background(Color(0xFFF3F3F3)),
                     contentAlignment = Alignment.Center) {
                     key(attempt, useFull) {
                         AsyncImage(model = if (useFull) original ?: thumbnail else thumbnail, imageLoader = viewModel.mediaImageLoader,
@@ -94,45 +114,97 @@ internal fun MessageImages(message: GatewayMessageItem, viewModel: ChatViewModel
         }
     }
     selected?.let { index ->
-        ImageViewer(originals.getOrNull(index) ?: thumbnails.getOrNull(index), viewModel.mediaImageLoader,
-            "聊天图片", { selected = null }, index, count, { selected = it },
-            modelAt = { originals.getOrNull(it) ?: thumbnails.getOrNull(it) })
+        ImageViewer(
+            model = originals.getOrNull(index) ?: thumbnails.getOrNull(index),
+            loader = viewModel.mediaImageLoader,
+            title = "聊天图片",
+            onClose = { selected = null },
+            index = index,
+            count = count,
+            onSelect = { selected = it },
+            modelAt = { originals.getOrNull(it) ?: thumbnails.getOrNull(it) },
+            thumbnailAt = { thumbnails.getOrNull(it) },
+        )
     }
 }
 
 @Composable
-internal fun ImageViewer(model: Any?, loader: ImageLoader, title: String, onClose: () -> Unit,
-    index: Int = 0, count: Int = 1, onSelect: (Int) -> Unit = {}, modelAt: (Int) -> Any? = { model }) {
+internal fun ImageViewer(
+    model: Any?,
+    loader: ImageLoader,
+    title: String,
+    onClose: () -> Unit,
+    index: Int = 0,
+    count: Int = 1,
+    onSelect: (Int) -> Unit = {},
+    modelAt: (Int) -> Any? = { model },
+    thumbnailAt: (Int) -> Any? = { null },
+) {
     val pager = rememberPagerState(initialPage = index, pageCount = { count })
     val scope = rememberCoroutineScope()
     var zoomed by remember { mutableStateOf(false) }
-    val height = LocalConfiguration.current.screenHeightDp.dp * 0.8f
+    val height = LocalConfiguration.current.screenHeightDp.dp * 0.85f
     fun select(page: Int) {
         if (page in 0 until count) scope.launch { pager.animateScrollToPage(page) }
     }
     LaunchedEffect(pager.settledPage) { zoomed = false; onSelect(pager.settledPage) }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        HorizontalPager(pager, userScrollEnabled = !zoomed, modifier = Modifier.fillMaxWidth()
-            .padding(horizontal = 16.dp).height(height).clip(RoundedCornerShape(20.dp))
-            .background(androidx.compose.ui.graphics.Color.White).semantics {
-                customActions = buildList {
-                    add(CustomAccessibilityAction("关闭图片") { onClose(); true })
-                    if (pager.currentPage > 0) add(CustomAccessibilityAction("上一张图片") { select(pager.currentPage - 1); true })
-                    if (pager.currentPage + 1 < count) add(CustomAccessibilityAction("下一张图片") { select(pager.currentPage + 1); true })
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(height)
+                .clip(RoundedCornerShape(20.dp)).background(Color.White)
+        ) {
+            HorizontalPager(
+                pager,
+                userScrollEnabled = !zoomed,
+                modifier = Modifier.fillMaxSize().semantics {
+                    customActions = buildList {
+                        add(CustomAccessibilityAction("关闭图片") { onClose(); true })
+                        if (pager.currentPage > 0) add(CustomAccessibilityAction("上一张图片") { select(pager.currentPage - 1); true })
+                        if (pager.currentPage + 1 < count) add(CustomAccessibilityAction("下一张图片") { select(pager.currentPage + 1); true })
+                    }
                 }
-            }) { page ->
-            key(page, page == pager.settledPage) {
-                ZoomableImage(modelAt(page), loader, if (count == 1) title else "$title ${page + 1}/$count", Modifier.fillMaxSize(),
-                    onZoom = { if (page == pager.currentPage) zoomed = it },
-                    onEdgeSwipe = { direction -> select(page + direction) })
+            ) { page ->
+                key(page, page == pager.settledPage) {
+                    ZoomableImage(
+                        model = modelAt(page),
+                        loader = loader,
+                        description = if (count == 1) title else "$title ${page + 1}/$count",
+                        modifier = Modifier.fillMaxSize(),
+                        thumbnailModel = thumbnailAt(page),
+                        onZoom = { if (page == pager.currentPage) zoomed = it },
+                        onEdgeSwipe = { direction -> select(page + direction) }
+                    )
+                }
+            }
+            // 右上角半透明关闭按钮
+            Box(
+                modifier = Modifier.padding(12.dp).align(Alignment.TopEnd).size(36.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), CircleShape)
+                    .semantics { contentDescription = "关闭图片" }
+                    .quietClickable(CircleShape, onClick = onClose),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp),
+                )
             }
         }
     }
 }
 
 @Composable
-internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String, modifier: Modifier = Modifier,
-    onZoom: (Boolean) -> Unit = {}, onEdgeSwipe: (Int) -> Unit = {}) {
+internal fun ZoomableImage(
+    model: Any?,
+    loader: ImageLoader,
+    description: String,
+    modifier: Modifier = Modifier,
+    thumbnailModel: Any? = null,
+    onZoom: (Boolean) -> Unit = {},
+    onEdgeSwipe: (Int) -> Unit = {},
+) {
     val context = LocalContext.current
     val fullSizeRequest = remember(model, context) {
         (if (model is ImageRequest) model.newBuilder() else ImageRequest.Builder(context).data(model))
@@ -166,7 +238,8 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
             }
         }
     }
-        Box(modifier.clipToBounds().onSizeChanged { viewport = it }
+    Box(
+        modifier = modifier.clipToBounds().onSizeChanged { viewport = it }
             .pointerInput(model, attempt) {
                 detectTapGestures(onDoubleTap = { point ->
                     if (!loading && !failed) animateZoom(if (scale > 1.01f) 1f else 2.5f,
@@ -204,23 +277,44 @@ internal fun ZoomableImage(model: Any?, loader: ImageLoader, description: String
                     if (!multiple && abs(edgeDrag) > max(viewConfiguration.touchSlop * 4, viewport.width * 0.15f))
                         onEdgeSwipe(if (edgeDrag < 0) 1 else -1)
                 }
-            }, contentAlignment = Alignment.Center) {
-            key(model, attempt) {
-                AsyncImage(model = fullSizeRequest, imageLoader = loader, contentDescription = description, contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
-                        .semantics {
-                            stateDescription = if (failed) "加载失败" else if (loading) "加载中" else "已加载，缩放 ${(scale * 100).toInt()}%"
-                            customActions = listOf(CustomAccessibilityAction("放大图片") { animateZoom(scale * 2); true },
-                                CustomAccessibilityAction("恢复图片大小") { animateZoom(1f); true })
-                        },
-                    onLoading = { loading = true; failed = false }, onSuccess = {
-                        loading = false; failed = false
-                        imageSize = IntSize(it.result.drawable.intrinsicWidth.coerceAtLeast(1), it.result.drawable.intrinsicHeight.coerceAtLeast(1))
-                    }, onError = { loading = false; failed = true })
-            }
-            if (loading) CircularProgressIndicator(Modifier.size(28.dp), color = AccentBlue, strokeWidth = 2.dp)
-            if (failed) IconButton(onClick = { zoomJob?.cancel(); transform(1f / scale); attempt++ }) {
-                Icon(Icons.Default.Refresh, contentDescription = "重试加载图片", tint = AccentBlue)
-            }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        // 缩略图底图降级（当原图正在加载或失败时垫底展示）
+        if (thumbnailModel != null && (loading || failed)) {
+            AsyncImage(
+                model = thumbnailModel,
+                imageLoader = loader,
+                contentDescription = null,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
+            )
         }
+        key(model, attempt) {
+            AsyncImage(
+                model = fullSizeRequest,
+                imageLoader = loader,
+                contentDescription = description,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; translationX = offset.x; translationY = offset.y }
+                    .semantics {
+                        stateDescription = if (failed) "加载失败" else if (loading) "加载中" else "已加载，缩放 ${(scale * 100).toInt()}%"
+                        customActions = listOf(
+                            CustomAccessibilityAction("放大图片") { animateZoom(scale * 2); true },
+                            CustomAccessibilityAction("恢复图片大小") { animateZoom(1f); true }
+                        )
+                    },
+                onLoading = { loading = true; failed = false },
+                onSuccess = {
+                    loading = false; failed = false
+                    imageSize = IntSize(it.result.drawable.intrinsicWidth.coerceAtLeast(1), it.result.drawable.intrinsicHeight.coerceAtLeast(1))
+                },
+                onError = { loading = false; failed = true }
+            )
+        }
+        if (loading && thumbnailModel == null) CircularProgressIndicator(Modifier.size(28.dp), color = AccentBlue, strokeWidth = 2.dp)
+        if (failed && thumbnailModel == null) IconButton(onClick = { zoomJob?.cancel(); transform(1f / scale); attempt++ }) {
+            Icon(Icons.Default.Refresh, contentDescription = "重试加载图片", tint = AccentBlue)
+        }
+    }
 }

@@ -181,7 +181,7 @@ internal fun ConversationContent(
                     linkedFileUri = null
                     url.removePrefix("conversation://").substringBefore('/').takeIf(String::isNotBlank)?.let(viewModel::openConversation)
                 }
-                url.startsWith("file://") -> linkedFileUri = url
+                url.startsWith("file://") || url.startsWith("artifact://") || url.startsWith("content://") || !url.contains("://") -> linkedFileUri = url
             }
         }
     }
@@ -463,18 +463,24 @@ private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, ma
 
 @Composable
 private fun MessageAttachments(message: GatewayMessageItem) {
+    val richLinkAction = LocalRichLinkAction.current
     message.attachments.orEmpty().filterNot { it.mimeType.startsWith("image/") }.forEach { attachment ->
         val name = attachment.displayName?.takeIf { it.isNotBlank() } ?: "附件"
         val status = if (message.id.startsWith("local:")) "发送中" else "已发送"
+        val targetUri = attachment.uri?.takeIf { it.isNotBlank() } ?: "file:///$name"
         Row(
-            Modifier.widthIn(max = 280.dp).background(Color.White.copy(alpha = .72f), RoundedCornerShape(14.dp))
+            Modifier.widthIn(max = 280.dp)
+                .background(Color.White.copy(alpha = .88f), RoundedCornerShape(14.dp))
+                .quietClickable(RoundedCornerShape(14.dp)) {
+                    richLinkAction(targetUri)
+                }
                 .padding(horizontal = 12.dp, vertical = 10.dp)
-                .semantics { contentDescription = "${status}文件，$name，${attachment.mimeType}" },
+                .semantics { contentDescription = "${status}文件，$name，${attachment.mimeType}，点击查看" },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(Icons.Outlined.AttachFile, contentDescription = null, tint = AccentBlue, modifier = Modifier.size(22.dp))
             Spacer(Modifier.width(8.dp))
-            Column {
+            Column(Modifier.weight(1f, fill = false)) {
                 Text(name, color = Color(0xFF163E63), fontSize = 14.sp, fontWeight = FontWeight.Medium,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(listOf(status, attachment.mimeType).filter { it.isNotBlank() }.joinToString(" · "),

@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
@@ -17,18 +19,30 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.outlined.AttachFile
+import androidx.compose.material.icons.outlined.AudioFile
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.FolderZip
+import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,6 +58,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -60,9 +75,9 @@ import androidx.compose.ui.window.DialogProperties
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.imageLoader
-import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.data.model.ArtifactCommentDraftState
 import com.antigravity.mobile.data.model.ArtifactTextSelection
+import com.antigravity.mobile.data.model.FileContentResponse
 import com.antigravity.mobile.ui.chat.ChatViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -98,6 +113,43 @@ internal fun filePreviewKind(uri: String): FilePreviewKind {
         "png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico", "avif", "heic", "heif" -> FilePreviewKind.IMAGE
         "pdf", "zip", "gz", "tar", "7z", "rar", "exe", "dll", "so", "ttf", "otf", "woff", "woff2", "doc", "docx", "ppt", "pptx", "xls", "xlsx", "mp4", "mov", "webm", "mp3", "wav" -> FilePreviewKind.UNSUPPORTED
         else -> if (fileCodeLanguage(filename).isNotBlank()) FilePreviewKind.CODE else FilePreviewKind.TEXT
+    }
+}
+
+internal fun filePreviewIcon(filename: String, kind: FilePreviewKind): Pair<ImageVector, Color> {
+    val ext = filename.substringAfterLast('.', "").lowercase()
+    return when {
+        kind == FilePreviewKind.IMAGE -> Icons.Outlined.Image to Color(0xFFE65100)
+        kind == FilePreviewKind.CODE -> Icons.Outlined.Code to Color(0xFF1565C0)
+        kind == FilePreviewKind.MARKDOWN -> Icons.AutoMirrored.Outlined.Article to Color(0xFF2E7D32)
+        ext in setOf("mp3", "wav", "m4a", "flac", "aac", "ogg") -> Icons.Outlined.AudioFile to Color(0xFFC2185B)
+        ext in setOf("mp4", "mov", "webm", "mkv", "avi") -> Icons.Outlined.VideoFile to Color(0xFF7B1FA2)
+        ext in setOf("zip", "rar", "7z", "tar", "gz") -> Icons.Outlined.FolderZip to Color(0xFFF57C00)
+        ext == "pdf" -> Icons.Outlined.Description to Color(0xFFD32F2F)
+        else -> Icons.Outlined.AttachFile to Color(0xFF455A64)
+    }
+}
+
+internal fun fileTypeBadge(filename: String, kind: FilePreviewKind): String {
+    val ext = filename.substringAfterLast('.', "").uppercase()
+    return when (kind) {
+        FilePreviewKind.MARKDOWN -> "Markdown 文档"
+        FilePreviewKind.IMAGE -> if (ext.isNotBlank()) "$ext 图像" else "图像"
+        FilePreviewKind.CODE -> {
+            val lang = fileCodeLanguage(filename)
+            if (lang.isNotBlank()) "${lang.replaceFirstChar { it.uppercase() }} 源码" else if (ext.isNotBlank()) "$ext 代码" else "代码"
+        }
+        FilePreviewKind.TEXT -> if (ext.isNotBlank()) "$ext 文本" else "文本文件"
+        FilePreviewKind.UNSUPPORTED -> when (ext.lowercase()) {
+            "pdf" -> "PDF 文档"
+            "doc", "docx" -> "Word 文档"
+            "xls", "xlsx" -> "Excel 表格"
+            "ppt", "pptx" -> "PPT 演示文稿"
+            "zip", "rar", "7z", "tar", "gz" -> "压缩包"
+            "mp4", "mov", "webm" -> "视频文件"
+            "mp3", "wav", "m4a" -> "音频文件"
+            else -> if (ext.isNotBlank()) "$ext 文件" else "二进制文件"
+        }
     }
 }
 
@@ -160,20 +212,57 @@ internal fun LinkedFilePreview(
         val container = if (fullScreen) {
             Modifier.fillMaxSize().background(Color.White).statusBarsPadding().navigationBarsPadding().padding(18.dp)
         } else {
-            Modifier.padding(horizontal = 16.dp).fillMaxWidth()
-                .height((LocalConfiguration.current.screenHeightDp * 0.85f).dp)
-                .background(Color.White, RoundedCornerShape(20.dp)).padding(18.dp)
+            Modifier.padding(horizontal = 16.dp).navigationBarsPadding().fillMaxWidth()
+                .heightIn(min = 360.dp, max = (LocalConfiguration.current.screenHeightDp * 0.86f).dp)
+                .background(Color.White, RoundedCornerShape(24.dp)).padding(18.dp)
         }
         Column(container,
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             DisableSelection {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(file?.filename ?: previewFileName(uri), color = Ink, fontWeight = FontWeight.SemiBold,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    val displayName = file?.filename ?: previewFileName(uri)
+                    val (icon, tint) = remember(displayName, kind) { filePreviewIcon(displayName, kind) }
+                    Box(
+                        Modifier.size(38.dp).background(tint.copy(alpha = 0.12f), RoundedCornerShape(10.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = displayName,
+                            color = Ink,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 15.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = fileTypeBadge(displayName, kind),
+                            color = SecondaryInk,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                        )
+                    }
+                    Spacer(Modifier.width(6.dp))
                     if (kind != FilePreviewKind.IMAGE && kind != FilePreviewKind.UNSUPPORTED) {
-                        Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                            file?.let { CopyTextButton(it.content, "复制文件原文") }
+                        file?.let {
+                            Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                                CopyTextButton(it.content, "复制文件原文")
+                            }
                         }
+                    }
+                    Box(
+                        Modifier.size(36.dp).background(Color(0xFFF1F3F5), CircleShape)
+                            .semantics { contentDescription = "关闭文件预览" }
+                            .quietClickable(CircleShape, onClick = onDismiss),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(Icons.Filled.Close, contentDescription = null, tint = Ink, modifier = Modifier.size(18.dp))
                     }
                 }
             }
@@ -197,7 +286,7 @@ internal fun LinkedFilePreview(
                         Text(error.orEmpty(), color = Color(0xFFB3261E))
                         TextButton(onClick = { attempt++ }) { Text("重试", color = AccentBlue) }
                     }
-                    file != null -> CompositionLocalProvider(LocalRichImageRequest provides imageRequest) {
+                    file != null -> CompositionLocalProvider(LocalRichImageRequest provides imageRequest, LocalRichImageLoader provides viewModel.mediaImageLoader) {
                         FileTextPreview(
                             file = file!!,
                             modifier = Modifier.fillMaxSize(),
@@ -214,7 +303,7 @@ internal fun LinkedFilePreview(
             LinkedFileActions(
                 uri = uri,
                 filename = file?.filename ?: previewFileName(uri),
-                showOpen = kind == FilePreviewKind.UNSUPPORTED,
+                showOpen = true,
                 viewModel = viewModel,
             )
             if (isPlanReview) {
@@ -232,12 +321,9 @@ internal fun LinkedFilePreview(
                         onCancelSelection = viewModel::clearPlanCommentSelection,
                     )
                 }
-            }
-            DisableSelection {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = onDismiss) { Text("关闭", color = AccentBlue) }
-                    if (isPlanReview) {
+                DisableSelection {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically) {
                         val readyCount = state.planCommentDraft.comments.size +
                             if (state.planCommentDraft.activeSelection != null && state.planCommentDraft.activeComment.isNotBlank()) 1 else 0
                         TextButton(
