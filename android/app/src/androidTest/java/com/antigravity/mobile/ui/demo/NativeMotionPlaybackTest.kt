@@ -24,6 +24,68 @@ import androidx.compose.ui.unit.dp
 
 /** Optional recording fixture: uses the Android frame clock, not Compose's virtual test clock. */
 class NativeMotionPlaybackTest {
+    @Test fun homeProjectTabsUsePlatformClockWithoutCompressingComposer() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val automation = instrumentation.uiAutomation
+        val namespace = "native_tabs_${java.util.UUID.randomUUID()}_"
+        val context = object : android.content.ContextWrapper(instrumentation.targetContext) {
+            override fun getApplicationContext(): android.content.Context = this
+            override fun getSharedPreferences(name: String, mode: Int) = super.getSharedPreferences(namespace + name, mode)
+            override fun getCacheDir() = java.io.File(super.getCacheDir(), namespace).apply { mkdirs() }
+        }
+        val app = object : android.app.Application() { fun attach() { attachBaseContext(context) } }.apply { attach() }
+        fun find(node: AccessibilityNodeInfo?, text: String): AccessibilityNodeInfo? {
+            if (node == null || !node.isVisibleToUser) return null
+            if (node.text?.toString() == text || node.contentDescription?.toString() == text) return node
+            for (i in 0 until node.childCount) find(node.getChild(i), text)?.let { return it }
+            return null
+        }
+        fun awaitNode(text: String): AccessibilityNodeInfo {
+            repeat(50) {
+                find(automation.rootInActiveWindow, text)?.let { return it }
+                Thread.sleep(100)
+            }
+            error("未显示：$text")
+        }
+        fun click(text: String) {
+            var node: AccessibilityNodeInfo? = awaitNode(text)
+            while (node != null && !node.isClickable) node = node.parent
+            assertTrue("无法点击 $text", node?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true)
+        }
+        ChatUxTest.FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.projectFixture = true
+            com.antigravity.mobile.data.service.PreferencesManager(app).apply {
+                gatewayBaseUrl = gateway.url; deviceToken = "native-tabs-test"
+            }
+            val vm = com.antigravity.mobile.ui.chat.ChatViewModel(app)
+            val store = androidx.lifecycle.ViewModelStore().apply { put("native-tabs", vm) }
+            try {
+                ActivityScenario.launch(ComponentActivity::class.java).use { scenario ->
+                    scenario.onActivity { activity -> activity.setContent { ChatDemoScreen(vm, {}) } }
+                    awaitNode("发送消息")
+                    Thread.sleep(500)
+                    repeat(3) {
+                        click("项目")
+                        Thread.sleep(650)
+                        click("聊天")
+                        Thread.sleep(650)
+                        awaitNode("发送消息")
+                    }
+                    click("项目")
+                    Thread.sleep(650)
+                    click("动效项目")
+                    click("B")
+                    awaitNode("返回项目列表")
+                    Thread.sleep(650)
+                    click("返回项目列表")
+                    awaitNode("B")
+                    Thread.sleep(650)
+                }
+            } finally { instrumentation.runOnMainSync { store.clear() } }
+        }
+    }
+
     @Test fun replyIndicatorUsesPlatformFramesThroughoutStreaming() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val automation = instrumentation.uiAutomation

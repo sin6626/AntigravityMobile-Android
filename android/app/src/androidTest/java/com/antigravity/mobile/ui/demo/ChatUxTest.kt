@@ -1703,6 +1703,36 @@ class ChatUxTest {
         saveScreenshot("round2-search.png")
     }
 
+    @Test fun returningFromProjectsNeverSqueezesComposerAndSettlesPromptly() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.projectFixture = true
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("tab-motion", vm) }
+            try {
+                compose.setContent { ChatDemoScreen(vm, {}) }
+                compose.waitUntil(10_000) { !vm.state.value.isLoadingConversations }
+                fun span(): Float = compose.onNodeWithContentDescription("发送消息").fetchSemanticsNode().boundsInRoot.right -
+                    compose.onNodeWithContentDescription("添加附件与操作").fetchSemanticsNode().boundsInRoot.left
+                val resting = span()
+                compose.onNode(hasText("项目") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
+                compose.waitForIdle()
+                compose.mainClock.autoAdvance = false
+                compose.onNode(hasText("聊天") and SemanticsMatcher.keyIsDefined(androidx.compose.ui.semantics.SemanticsProperties.Selected)).performClick()
+                repeat(18) { frame ->
+                    compose.mainClock.advanceTimeBy(16)
+                    if (compose.onAllNodesWithContentDescription("发送消息").fetchSemanticsNodes().isNotEmpty()) {
+                        assertTrue("切页第 $frame 帧输入框被压窄：${span()} / $resting", span() >= resting - 2f)
+                    }
+                }
+                compose.onNodeWithContentDescription("发送消息").assertIsDisplayed()
+                assertEquals(resting, span(), 2f)
+            } finally { compose.mainClock.autoAdvance = true; compose.runOnIdle { store.clear() } }
+        }
+    }
+
     @Test fun pageEntrancesPreserveProjectStateDraftAndKeyboardBack() {
         val app = isolatedApplication()
         FakeGateway().use { gateway ->
@@ -3070,7 +3100,7 @@ class ChatUxTest {
         }
     }
 
-    private class FakeGateway : AutoCloseable {
+    internal class FakeGateway : AutoCloseable {
         private val server = ServerSocket(0)
         val url = "http://127.0.0.1:${server.localPort}"
         val requests = CopyOnWriteArrayList<Pair<String, String>>()

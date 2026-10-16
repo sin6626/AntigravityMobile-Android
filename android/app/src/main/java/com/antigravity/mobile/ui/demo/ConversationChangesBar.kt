@@ -61,9 +61,12 @@ internal fun ConversationChangesBar(summary: ConversationDiffSummary, onClick: (
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text("当前会话变更", color = SecondaryInk, fontSize = 11.sp)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("${summary.files} 个文件", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Text("+${summary.additions}", color = Color(0xFF25835D), fontSize = 12.sp)
-                    Text("−${summary.deletions}", color = Color(0xFFBC515A), fontSize = 12.sp)
+                    Text("${summary.files} 个文件", color = Ink, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.alignByBaseline())
+                    Text("+${summary.additions}", color = Color(0xFF25835D), fontSize = 13.sp,
+                        modifier = Modifier.alignByBaseline())
+                    Text("−${summary.deletions}", color = Color(0xFFBC515A), fontSize = 13.sp,
+                        modifier = Modifier.alignByBaseline())
                 }
                 if (summary.unavailable > 0) Text("${summary.unavailable} 个文件暂不可用", color = SecondaryInk, fontSize = 11.sp)
             }

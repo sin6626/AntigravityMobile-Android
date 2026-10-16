@@ -91,6 +91,22 @@ class FileReadingLayoutTest {
         saveScreenshot("changes-bar-large-font.png")
     }
 
+    @Test fun changeCountsShareTheSameTextBaseline() {
+        compose.setContent {
+            Box(Modifier.width(360.dp).background(Color.White).padding(12.dp)) {
+                ConversationChangesBar(ConversationDiffSummary(4, 286, 70, 0)) {}
+            }
+        }
+        val baselines = listOf("4 个文件", "+286", "−70").map { text ->
+            val node = compose.onNodeWithText(text, useUnmergedTree = true)
+            val layouts = mutableListOf<TextLayoutResult>()
+            node.performSemanticsAction(androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult) { it(layouts) }
+            node.fetchSemanticsNode().boundsInRoot.top + layouts.single().firstBaseline
+        }
+        assertTrue("统计文字必须共享基线：$baselines", baselines.max() - baselines.min() < 1f)
+        saveScreenshot("changes-baseline.png")
+    }
+
     private fun saveScreenshot(name: String) {
         compose.waitForIdle()
         val bitmap = checkNotNull(InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot())

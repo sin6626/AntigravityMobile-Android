@@ -9,6 +9,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -139,6 +140,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
     var pairSuccessAtOpen by rememberSaveable { mutableStateOf(0) }
     var projectsSelected by rememberSaveable { mutableStateOf(false) }
     val pagerState = rememberPagerState(initialPage = if (projectsSelected) 1 else 0, pageCount = { 2 })
+    val pageMotion = remember { tween<Float>(200, easing = FastOutSlowInEasing) }
     var openedFromProject by rememberSaveable { mutableStateOf(false) }
     var expandedProjectKeys by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
     val projectListState = rememberLazyListState()
@@ -279,7 +281,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
     }
     LaunchedEffect(projectsSelected, state.selectedConversationId) {
         if (state.selectedConversationId == null && pagerState.settledPage != (if (projectsSelected) 1 else 0)) {
-            pagerState.animateScrollToPage(if (projectsSelected) 1 else 0)
+            pagerState.animateScrollToPage(if (projectsSelected) 1 else 0, animationSpec = pageMotion)
         }
     }
 
@@ -515,10 +517,10 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
                 EmptyTopBar(
                     onMenu = openDrawer,
                     tabPosition = (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f),
-                    onChat = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    onChat = { scope.launch { pagerState.animateScrollToPage(0, animationSpec = pageMotion) } },
                     onProjects = {
                         viewModel.refreshProjects()
-                        scope.launch { pagerState.animateScrollToPage(1) }
+                        scope.launch { pagerState.animateScrollToPage(1, animationSpec = pageMotion) }
                     },
                     onUnsupported = unsupported,
                 )
@@ -582,7 +584,7 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
                             } while (event.changes.any { it.pressed })
                             if (draggingPage) {
                                 val progress = pagerState.currentPage + pagerState.currentPageOffsetFraction
-                                scope.launch { pagerState.animateScrollToPage(if (progress > 0.38f) 1 else 0) }
+                                scope.launch { pagerState.animateScrollToPage(if (progress > 0.38f) 1 else 0, animationSpec = pageMotion) }
                             } else if (travel < viewConfiguration.touchSlop && elapsed < viewConfiguration.longPressTimeoutMillis) {
                                 focusManager.clearFocus()
                             }
@@ -626,9 +628,6 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
         val showComposer = !archivedOpen && (state.selectedConversationId != null || homeSwipeProgress < 1f || !projectsSelected)
 
         if (showComposer) {
-            val widthFactor = if (isHome) {
-                (1f - homeSwipeProgress * 0.65f).coerceIn(0.35f, 1f)
-            } else 1f
             val alphaFactor = if (isHome) {
                 (1f - homeSwipeProgress).coerceIn(0f, 1f)
             } else 1f
@@ -728,7 +727,8 @@ fun ChatDemoScreen(viewModel: ChatViewModel, onLeaveApp: () -> Unit, deferConver
                         SubagentReadOnlyBar()
                     } else Box(
                         modifier = Modifier
-                            .fillMaxWidth(widthFactor)
+                            // Page motion changes opacity/position; never reflow the input and its fixed-size actions.
+                            .fillMaxWidth()
                             .graphicsLayer {
                                 // Keep the changing native shadow outside the rectangular bounds of this layer.
                                 compositingStrategy = CompositingStrategy.ModulateAlpha
