@@ -5,6 +5,13 @@
 - **定位**：Google Antigravity AI Agent 移动端与全栈端到端协同系统（Android / iOS / Web / Go 本地网关）。
 - **当前重点任务**：Android 客户端前端 UI 二改与视觉/体验升级重构。
 
+### 2026-10-16 模拟器重启后再次断连
+
+- 当前模拟器仍使用 `http://10.0.2.2:58901`。排查时 58900 主网关 PID 15400 正常，58901 没有监听；实际应用日志显示连接 58901 失败。Windows 系统日志记录期间发生重启，旧 58901 进程未存活；当前只有主网关被重新启动，不能把两者视作同一个入口。
+- 已沿用独立数据目录、原 `auth_store.json` 和鉴权配置恢复 58901，PID 17212，绑定 127.0.0.1，关闭此实例 Cloudflare。未重启 58900、未修改配对、未发送或停止真实会话。模拟器自动恢复，真实消息/地址发现/健康接口 200，WebSocket 101，已查看当前页面截图确认内容显示。
+- 新增 `android/scripts/start-emulator-gateway.ps1`，项目任意工作目录均可调用，缺少原配对数据时拒绝建立另一身份，遇到其他程序占用端口时拒绝干预；同一网关已运行则只做健康检查。连续调用两次确认 PID 保持不变、返回健康。启动命令沿用本轮已实测恢复方式；本轮没有为了测试冷启动再中断刚恢复的真实连接。
+- 手动入口：`powershell.exe -NoProfile -ExecutionPolicy Bypass -File H:\Sin6626\antigravity-mobile\android\scripts\start-emulator-gateway.ps1`。本轮未安装 Windows 登录启动项或常驻守护，因此电脑重启后仍需启动该独立网关。诊断状态、日志和截图在 `.verification/2026-10-16-backend/`。
+
 ### 2026-10-16 真机样式美化与文件/图片打通查看全链路修复
 
 - **用户反馈**：
