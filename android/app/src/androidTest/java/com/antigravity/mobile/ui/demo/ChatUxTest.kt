@@ -1856,7 +1856,7 @@ class ChatUxTest {
                     it.config.getOrElse(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) { "" }.startsWith("已加载") } }
                 compose.onNodeWithContentDescription("保存文件").assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
                 compose.onNodeWithContentDescription("分享文件").assertWidthIsAtLeast(androidx.compose.ui.unit.Dp(48f))
-                compose.onNodeWithText("关闭").performClick()
+                compose.onNodeWithContentDescription("关闭文件预览").performClick()
                 compose.waitUntil(5_000) { !showing.value }
             } finally { compose.runOnIdle { store.clear() } }
         }
@@ -1920,6 +1920,37 @@ class ChatUxTest {
                 compose.runOnIdle { vm.openConversation("B") }
                 compose.waitUntil(5_000) { vm.state.value.selectedConversationId == "B" && !vm.state.value.isLoadingMessages }
                 compose.onNodeWithContentDescription("审阅当前会话变更：1 个文件，新增 1 行，删除 1 行").assertDoesNotExist()
+            } finally { compose.runOnIdle { store.clear() } }
+        }
+    }
+
+    @Test fun fileReadFailureRetriesInPlaceAndWrapToggleControlsLoadedCode() {
+        val app = isolatedApplication()
+        FakeGateway().use { gateway ->
+            gateway.management = true
+            gateway.failurePath = "/api/v1/files/content"
+            gateway.filePreviewName = "ChatComponents.kt"
+            gateway.filePreviewContent = "package com.antigravity.mobile.ui.demo\n\n" +
+                (1..16).joinToString("\n") { "import com.antigravity.mobile.ui.chat.ALongComponentNameForSmallScreens$it" }
+            PreferencesManager(app).apply { gatewayBaseUrl = gateway.url; deviceToken = "test-token"; lastConversationId = "A" }
+            val vm = ChatViewModel(app)
+            val store = ViewModelStore().apply { put("file-retry-wrap", vm) }
+            try {
+                compose.waitUntil(10_000) { vm.state.value.selectedConversationId == "A" && !vm.state.value.isLoadingMessages }
+                compose.setContent { LinkedFilePreview("file:///test/ChatComponents.kt", vm, onDismiss = {}) }
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("重试读取文件").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithContentDescription("重试读取文件").assertIsDisplayed()
+                compose.onNodeWithContentDescription("关闭文件预览").assertIsDisplayed().assertHeightIsAtLeast(androidx.compose.ui.unit.Dp(48f))
+                saveScreenshot("file-preview-retry.png")
+                gateway.failurePath = null
+                compose.onNodeWithContentDescription("重试读取文件").performClick()
+                compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("自动换行").fetchSemanticsNodes().isNotEmpty() }
+                compose.onNodeWithContentDescription("自动换行").assertIsOn()
+                saveScreenshot("file-preview-wrapped.png")
+                compose.onNodeWithContentDescription("自动换行").performClick()
+                compose.onNodeWithContentDescription("自动换行").assertIsOff()
+                saveScreenshot("file-preview-unwrapped.png")
+                assertTrue(gateway.requests.count { it.first.startsWith("/api/v1/files/content") } >= 2)
             } finally { compose.runOnIdle { store.clear() } }
         }
     }
@@ -2502,7 +2533,7 @@ class ChatUxTest {
                 compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("评论第 1 行").fetchSemanticsNodes().isNotEmpty() }
                 compose.onNodeWithContentDescription("评论第 1 行").performClick()
                 compose.onNodeWithContentDescription("方案评论内容").performTextInput("标题需要说明验收目标")
-                compose.onNodeWithText("关闭").performClick()
+                compose.onNodeWithContentDescription("关闭文件预览").performClick()
 
                 compose.onNodeWithText("查看与评论（1）").performClick()
                 compose.onNodeWithText("标题需要说明验收目标").assertIsDisplayed()
@@ -3048,6 +3079,8 @@ class ChatUxTest {
         @Volatile var failureCode = 500
         @Volatile var liveStream = false
         @Volatile var messageText = "original message"
+        @Volatile var filePreviewName = "plan.md"
+        @Volatile var filePreviewContent: String? = null
         @Volatile var endpointsJson = "[]"
         @Volatile var endpointAuthorization = ""
         @Volatile var dropPath: String? = null
@@ -3252,8 +3285,8 @@ class ChatUxTest {
                                     """{"status":"${if (running && !reverted) "RUNNING" else "IDLE"}","activeModel":"$activeModel","messages":${if (reverted) "[]" else "[{\"id\":\"step-0\",\"type\":\"user\",\"text\":\"$messageText\",\"stepIndex\":0,\"canRevert\":true${if (userImage) ",\"imageUrls\":[\"$url/image.png\"]" else ""}}]"},"cascadeId":"$id","canProceed":${planFixture && !planProceeded},"proceedArtifactUri":${if (planFixture && !planProceeded) "\"file:///test/plan.md\"" else "null"},"pendingInteraction":${if (interactionFixture && !interactionSubmitted) """{"type":"ask_question","trajectoryId":"trajectory-A","stepIndex":4,"toolName":"mcp__review__ask_question","title":"选择需要保留的体验","options":[{"id":"a","text":"保留动效"},{"id":"b","text":"保留滚动位置"},{"id":"c","text":"保留错误恢复"}],"isMultiSelect":true,"hasWriteIn":true,"writeInLabel":"补充说明","writeInPlaceholder":"填写其他要求"}""" else "null"},"queuedMessages":${if (queueFixture) queuedMessagesJson() else "[]"},"runningTasks":${if (taskFixture) runningTasksJson() else "[]"}}"""
                                 path.startsWith("/api/v1/files/content") -> JSONObject()
                                     .put("uri", "file:///test/plan.md")
-                                    .put("filename", "plan.md")
-                                    .put("content", "# 开发方案\n\n" + (1..60).joinToString("\n\n") { "步骤 $it" })
+                                    .put("filename", filePreviewName)
+                                    .put("content", filePreviewContent ?: ("# 开发方案\n\n" + (1..60).joinToString("\n\n") { "步骤 $it" }))
                                     .toString()
                                 path.startsWith("/api/v1/files/raw") -> "PDF-DATA"
                                 management && path.contains("GetAllCascadeTrajectories") -> {

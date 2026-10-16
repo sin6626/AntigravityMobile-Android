@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -41,6 +43,8 @@ import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.FolderZip
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.VideoFile
+import androidx.compose.material.icons.automirrored.outlined.WrapText
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -53,6 +57,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
@@ -65,9 +70,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -200,6 +207,7 @@ internal fun LinkedFilePreview(
     var file by remember(uri) { mutableStateOf<FileContentResponse?>(null) }
     var error by remember(uri) { mutableStateOf<String?>(null) }
     var attempt by remember(uri) { mutableStateOf(0) }
+    var wrapLines by rememberSaveable(uri) { mutableStateOf(true) }
     LaunchedEffect(uri, attempt) {
         if (kind != FilePreviewKind.IMAGE && kind != FilePreviewKind.UNSUPPORTED) {
             error = null
@@ -251,19 +259,24 @@ internal fun LinkedFilePreview(
                     Spacer(Modifier.width(6.dp))
                     if (kind != FilePreviewKind.IMAGE && kind != FilePreviewKind.UNSUPPORTED) {
                         file?.let {
-                            Box(Modifier.size(36.dp), contentAlignment = Alignment.Center) {
+                            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                                 CopyTextButton(it.content, "复制文件原文")
                             }
                         }
                     }
                     Box(
-                        Modifier.size(36.dp).background(Color(0xFFF1F3F5), CircleShape)
+                        Modifier.size(48.dp).background(Color(0xFFF1F3F5), CircleShape)
                             .semantics { contentDescription = "关闭文件预览" }
                             .quietClickable(CircleShape, onClick = onDismiss),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(Icons.Filled.Close, contentDescription = null, tint = Ink, modifier = Modifier.size(18.dp))
                     }
+                }
+            }
+            if (file != null && error == null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    FileWrapToggle(wrapLines) { wrapLines = it }
                 }
             }
             if (isPlanReview) {
@@ -282,15 +295,13 @@ internal fun LinkedFilePreview(
                         color = SecondaryInk,
                         lineHeight = 22.sp,
                     )
-                    error != null -> Column {
-                        Text(error.orEmpty(), color = Color(0xFFB3261E))
-                        TextButton(onClick = { attempt++ }) { Text("重试", color = AccentBlue) }
-                    }
+                    error != null -> FilePreviewFailure(error.orEmpty()) { attempt++ }
                     file != null -> CompositionLocalProvider(LocalRichImageRequest provides imageRequest, LocalRichImageLoader provides viewModel.mediaImageLoader) {
                         FileTextPreview(
                             file = file!!,
                             modifier = Modifier.fillMaxSize(),
                             listState = listState,
+                            wrapLines = wrapLines,
                             commentSelection = state.planCommentDraft.activeSelection.takeIf { isPlanReview },
                             onCommentSelection = if (isPlanReview) viewModel::selectPlanComment else null,
                         )
@@ -349,12 +360,44 @@ internal fun LinkedFilePreview(
 }
 
 @Composable
+internal fun FileWrapToggle(wrapLines: Boolean, onChange: (Boolean) -> Unit) {
+    val tint by animateColorAsState(if (wrapLines) AccentBlue else SecondaryInk, tween(160), label = "file-wrap")
+    Row(Modifier.heightIn(min = 48.dp)
+        .background(if (wrapLines) AccentBlue.copy(alpha = .08f) else Color(0xFFF4F5F7), RoundedCornerShape(12.dp))
+        .toggleable(value = wrapLines, role = Role.Switch, onValueChange = onChange)
+        .semantics { contentDescription = "自动换行"; stateDescription = if (wrapLines) "已开启" else "已关闭，可横向滚动" }
+        .padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(Icons.AutoMirrored.Outlined.WrapText, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        Text("自动换行", color = tint, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text(if (wrapLines) "开" else "关", color = tint, fontSize = 12.sp)
+    }
+}
+
+@Composable
+internal fun FilePreviewFailure(error: String, onRetry: () -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("暂时无法打开文件", color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+        Text(error, color = SecondaryInk, fontSize = 13.sp, lineHeight = 20.sp, textAlign = TextAlign.Center,
+            modifier = Modifier.weight(1f, fill = false).fillMaxWidth()
+                .verticalScroll(rememberScrollState()).semantics { contentDescription = "文件加载错误详情" })
+        Button(onClick = onRetry, modifier = Modifier.heightIn(min = 48.dp)
+            .semantics { contentDescription = "重试读取文件" }, shape = RoundedCornerShape(14.dp),
+            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = AccentBlue)) {
+            Text("重新加载", modifier = Modifier.padding(horizontal = 12.dp))
+        }
+    }
+}
+
+@Composable
 internal fun FileTextPreview(
     file: FileContentResponse,
     modifier: Modifier = Modifier,
     listState: LazyListState? = null,
     commentSelection: ArtifactTextSelection? = null,
     onCommentSelection: ((ArtifactTextSelection) -> Unit)? = null,
+    wrapLines: Boolean = true,
 ) {
     val kind = filePreviewKind(file.filename)
     val defaultListState = rememberLazyListState()
@@ -366,36 +409,40 @@ internal fun FileTextPreview(
         Box(modifier, contentAlignment = Alignment.Center) { CircularProgressIndicator(color = AccentBlue) }
         return
     }
-    SelectionContainer(modifier) {
-        LazyColumn(
-            modifier = Modifier.semantics { contentDescription = "文件内容" },
-            state = listState ?: defaultListState,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            when {
-                kind == FilePreviewKind.MARKDOWN -> itemsIndexed(blocks.orEmpty()) { _, block ->
-                    val target = remember(file.content, block) { planTextSelection(file.content, block) }
-                    if (onCommentSelection != null && target != null) {
-                        val selected = commentSelection?.startLine == target.startLine && commentSelection.endLine == target.endLine
-                        val background by animateColorAsState(
-                            if (selected) AccentBlue.copy(alpha = .10f) else Color.Transparent,
-                            tween(160),
-                            label = "plan-comment-selection",
-                        )
-                        val shape = RoundedCornerShape(12.dp)
-                        Box(
-                            Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                                .background(background, shape)
-                                .border(1.dp, if (selected) AccentBlue.copy(alpha = .55f) else Color.Transparent, shape)
-                                .semantics { contentDescription = planLineLabel(target) }
-                                .quietClickable(shape = shape) { onCommentSelection(target) }
-                                .padding(10.dp),
-                        ) { MarkdownBlock(block) }
-                    } else MarkdownBlock(block)
+    CompositionLocalProvider(LocalCodeSoftWrap provides wrapLines) {
+        SelectionContainer(modifier) {
+            LazyColumn(
+                modifier = Modifier.semantics { contentDescription = "文件内容" },
+                state = listState ?: defaultListState,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when {
+                    kind == FilePreviewKind.MARKDOWN -> itemsIndexed(blocks.orEmpty()) { _, block ->
+                        val target = remember(file.content, block) { planTextSelection(file.content, block) }
+                        if (onCommentSelection != null && target != null) {
+                            val selected = commentSelection?.startLine == target.startLine && commentSelection.endLine == target.endLine
+                            val background by animateColorAsState(
+                                if (selected) AccentBlue.copy(alpha = .10f) else Color.Transparent,
+                                tween(160),
+                                label = "plan-comment-selection",
+                            )
+                            val shape = RoundedCornerShape(12.dp)
+                            Box(
+                                Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    .background(background, shape)
+                                    .border(1.dp, if (selected) AccentBlue.copy(alpha = .55f) else Color.Transparent, shape)
+                                    .semantics { contentDescription = planLineLabel(target) }
+                                    .quietClickable(shape = shape) { onCommentSelection(target) }
+                                    .padding(10.dp),
+                            ) { MarkdownBlock(block) }
+                        } else MarkdownBlock(block)
+                    }
+                    kind == FilePreviewKind.CODE -> item { CodeBlock(file.content, fileCodeLanguage(file.filename)) }
+                    file.content.any { it == '\u0000' } -> item { Text("此文件不是可预览的文本", color = SecondaryInk) }
+                    else -> item { Text(file.content, color = Ink, fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 21.sp,
+                        softWrap = wrapLines, modifier = Modifier.fillMaxWidth()
+                            .then(if (wrapLines) Modifier else Modifier.horizontalScroll(rememberScrollState()))) }
                 }
-                kind == FilePreviewKind.CODE -> item { CodeBlock(file.content, fileCodeLanguage(file.filename)) }
-                file.content.any { it == '\u0000' } -> item { Text("此文件不是可预览的文本", color = SecondaryInk) }
-                else -> item { Text(file.content, color = Ink, fontFamily = FontFamily.Monospace, fontSize = 14.sp, lineHeight = 21.sp) }
             }
         }
     }

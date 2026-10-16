@@ -499,6 +499,7 @@ private fun MessageAttachments(message: GatewayMessageItem) {
 
 internal val LocalRichLinkAction = staticCompositionLocalOf<(String) -> Unit> { {} }
 internal val LocalStreamingMarkdown = staticCompositionLocalOf { false }
+internal val LocalCodeSoftWrap = staticCompositionLocalOf { false }
 
 internal fun parseMarkdownBlocks(source: String): List<Node> =
     generateSequence(markdownCache.getOrParse(source).firstChild) { it.next }.toList()
@@ -792,7 +793,7 @@ private fun MarkdownChildren(node: Node) {
 }
 
 @Composable
-internal fun CodeBlock(code: String, language: String) {
+internal fun CodeBlock(code: String, language: String, softWrap: Boolean = LocalCodeSoftWrap.current) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF3F3F3), RoundedCornerShape(10.dp)).padding(12.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically) {
@@ -800,8 +801,8 @@ internal fun CodeBlock(code: String, language: String) {
             DisableSelection { CopyTextButton(code, "复制代码") }
         }
         Text(rememberHighlightedCode(code.trimEnd(), language), color = Ink, fontSize = 14.sp, lineHeight = 21.sp,
-            fontFamily = FontFamily.Monospace, softWrap = false,
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()))
+            fontFamily = FontFamily.Monospace, softWrap = softWrap,
+            modifier = Modifier.fillMaxWidth().then(if (softWrap) Modifier else Modifier.horizontalScroll(rememberScrollState())))
     }
 }
 
