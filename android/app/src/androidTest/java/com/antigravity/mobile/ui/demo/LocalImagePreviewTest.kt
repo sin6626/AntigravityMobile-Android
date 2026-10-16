@@ -7,6 +7,8 @@ import android.graphics.Bitmap
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.toPixelMap
@@ -44,12 +46,19 @@ class LocalImagePreviewTest {
         val message = mutableStateOf(local)
         try {
             compose.setContent {
-                Box(Modifier.fillMaxSize()) {
+                Box(Modifier.fillMaxSize().background(Color.White)) {
                     ConversationContent(vm, listOf(message.value), null, false, false, false, false, {}, allowRevert = false)
                 }
             }
             compose.waitUntil(10_000) { compose.onAllNodesWithContentDescription("聊天图片，点击放大").fetchSemanticsNodes().size == 4 }
             compose.onAllNodesWithContentDescription("聊天图片，点击放大").assertCountEquals(4)
+            val firstImage = compose.onAllNodesWithContentDescription("聊天图片，点击放大")[0].fetchSemanticsNode().boundsInRoot
+            val lastImage = compose.onAllNodesWithContentDescription("聊天图片，点击放大")[3].fetchSemanticsNode().boundsInRoot
+            val textBounds = compose.onNodeWithText("这是什么").fetchSemanticsNode().boundsInRoot
+            org.junit.Assert.assertTrue("图片必须在文字气泡上方", lastImage.bottom < textBounds.top)
+            val screen = compose.onRoot().captureToImage().toPixelMap()
+            val outside = screen[(firstImage.left - 4).toInt(), firstImage.center.y.toInt()]
+            org.junit.Assert.assertTrue("图片周围不能再有蓝色气泡底", outside.red > .98f && outside.green > .98f)
             compose.onAllNodesWithContentDescription("聊天图片，点击放大")[0].performClick()
             compose.onNodeWithContentDescription("聊天图片 1/4").assertIsDisplayed()
             compose.runOnIdle {

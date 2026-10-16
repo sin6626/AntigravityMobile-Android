@@ -423,15 +423,16 @@ internal fun buildConversationRenderItems(
 private fun MessageRow(message: GatewayMessageItem, viewModel: ChatViewModel, markdownNode: Node? = null, showImages: Boolean = true, allowRevert: Boolean = true) {
     val text = message.effectiveText.trim()
     if (message.isUser) {
-        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-            Column(
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            MessageImages(message, viewModel)
+            if (text.isNotBlank() || message.attachments.orEmpty().any { !it.mimeType.startsWith("image/") }) Column(
                 modifier = Modifier.background(Color(0xFFE5F2FF), RoundedCornerShape(23.dp))
                     .padding(horizontal = 17.dp, vertical = 13.dp),
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 MessageAttachments(message)
-                MessageImages(message, viewModel)
                 if (text.isNotBlank()) Text(text, color = Color(0xFF163E63),
                     fontSize = 17.sp, lineHeight = 26.sp)
             }
